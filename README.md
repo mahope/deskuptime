@@ -81,6 +81,45 @@ Coming soon — sign up for updates at [the landing page](https://hermes-passiv.
 The engine is **universal** — same logic powers the CLI, the desktop app, and any future
 integration (API, CI/CD, Homebrew). No platform lock-in.
 
+## Use in GitHub Actions
+
+Run uptime checks in your CI — the job fails if a site is down, and a status
+table lands in the job summary. No account, no API key:
+
+```yaml
+name: Monitor
+on:
+  schedule:
+    - cron: '*/30 * * * *'   # every 30 minutes
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: mahope/deskuptime@v0
+        with:
+          urls: |
+            https://yoursite.com
+            https://api.yoursite.com/health
+      - name: Alert on failure
+        if: failure()
+        run: echo "A monitored site is down!" # wire to Slack/email/webhook here
+```
+
+Inputs:
+
+| Input | Default | Description |
+|-------|---------|-------------|
+| `urls` | (required) | Space- or newline-separated URLs |
+| `fail-on-down` | `true` | Fail the step (exit 2) if any URL is unreachable |
+| `fail-on-ssl-expiry-days` | `0` | Also fail if SSL expires within N days (`0` = off) |
+| `summary` | `true` | Write a Markdown table to the job summary |
+
+Outputs: `json` (full results array) and `down-count`.
+
+Exit codes: `0` all up · `2` one or more down · `3` SSL expiring/invalid.
+
 ## Development
 
 ```bash

@@ -1,0 +1,119 @@
+name: 'DeskUptime Check'
+description: >
+  Uptime + SSL + content-change checks for one or more URLs.
+  Fails the job if any URL is down (exit 2), with JSON output
+  and optional GitHub Step Summary report.
+branding:
+  icon: 'activity'
+  color: 'green'
+
+inputs:
+  urls:
+    description: 'Space- or newline-separated list of URLs to check'
+    required: true
+  fail-on-down:
+    description: 'Fail the workflow step if any URL is unreachable'
+    required: false
+    default: 'true'
+  fail-on-ssl-expiry-days:
+    description: 'Also fail if a HTTPS URL has an SSL certificate expiring within N days (0 = disabled)'
+    required: false
+    default: '0'
+  summary:
+    description: 'Write a Markdown status table to $GITHUB_STEP_SUMMARY'
+    required: false
+    default: 'true'
+
+outputs:
+  json:
+    description: 'Raw check results as a JSON array'
+    value: ${{ steps.check.outputs.json }}
+  down-count:
+    description: 'Number of unreachable URLs'
+    value: ${{ steps.check.outputs.down }}
+
+runs:
+  using: 'composite'
+  steps:
+    - id: check
+      shell: bash
+      env:
+        DU_URLS: ${{ inputs.urls }}
+        DU_FAIL_ON_DOWN: ${{ inputs.fail-on-down }}
+        DU_SSL_DAYS: ${{ inputs.fail-on-ssl-expiry-days }}
+        DU_SUMMARY: ${{ inputs.summary }}
+      run: |
+        set -euo pipefail
+
+        # Resolve the CLI entry inside this action's own directory
+        ACTION_PATH="$(cd "${GITHUB_ACTION_PATH:-.}" && pwd)"
+        CLI="$ACTION_PATH/src/cli.js"
+
+        if [ ! -f "$CLI" ]; then
+          echo "::error::deskuptime cli.js not found at $CLI"
+          exit 1
+        fi
+
+        # Normalize input to a space-separated URL list
+        URLS=$(echo "$DU_URLS" | tr '\n' ' ')
+        echo "Checking URLs: $URLS"
+
+        # Run check in --json mode; capture exit code without failing early
+        set +e
+        OUT=$(node "$CLI" check $URLS --json)
+        CODE=$?
+        set -e
+
+        echo "$OUT"
+        printf '%s' "$OUT" > deskuptime-results.json
+
+        # Parse results with node (no jq dependency on runner)
+        DOWN_COUNT=$(node -e '
+          const r = JSON.parse(require("fs").readFileSync("deskuptime-results.json","utf8"));
+          console.log(r.filter(x => !x.reachable).length);
+        ')
+        SSL_FAIL_COUNT=$(node -e '
+          const days = parseInt(process.env.DU_SSL_DAYS || "0", 10);
+          const r = JSON.parse(require("fs").readFileSync("deskuptime-results.json","utf8"));
+          let n = 0;
+          for (const x of r) {
+            if (days > 0 && x.sslDaysRemaining !== null && x.sslDaysRemaining < days) n++;
+            else if (days > 0 && x.reachable && x.url.startsWith("https") && x.sslError) n++;
+          }
+          console.log(n);
+        ')
+
+        echo "down=$DOWN_COUNT" >> "$GITHUB_OUTPUT"
+        echo "json<<EOF_JSON" >> "$GITHUB_OUTPUT"
+        echo "$OUT" >> "$GITHUB_OUTPUT"
+        echo "EOF_JSON" >> "$GITHUB_OUTPUT"
+
+        # Step summary table
+        if [ "$DU_SUMMARY" = "true" ] && [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+          {
+            echo "## 🖥️ DeskUptime report"
+            echo ""
+            echo "| URL | Status | HTTP | Response | SSL days |"
+            echo "|-----|--------|------|----------|----------|"
+            node -e '
+              const r = JSON.parse(require("fs").readFileSync("deskuptime-results.json","utf8"));
+              for (const x of r) {
+                const s = x.reachable ? "✅ UP" : "❌ DOWN";
+                const ssl = x.sslDaysRemaining === null ? "—" : String(x.sslDaysRemaining);
+                console.log(`| ${x.url} | ${s} | ${x.statusCode ?? "—"} | ${x.responseTimeMs ?? "—"}ms | ${ssl} |`);
+              }
+            '
+            echo ""
+          } >> "$GITHUB_STEP_SUMMARY"
+        fi
+
+        # Exit policy
+        if [ "$DOWN_COUNT" -gt 0 ] && [ "$DU_FAIL_ON_DOWN" = "true" ]; then
+          echo "::error::$DOWN_COUNT URL(s) are DOWN"
+          exit 2
+        fi
+        if [ "$SSL_FAIL_COUNT" -gt 0 ]; then
+          echo "::error::$SSL_FAIL_COUNT URL(s) have SSL certificates expiring within $DU_SSL_DAYS days or invalid"
+          exit 3
+        fi
+        exit 0

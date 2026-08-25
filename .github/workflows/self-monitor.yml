@@ -1,0 +1,20 @@
+name: Self-monitor
+on:
+  schedule:
+    - cron: '0 */6 * * *'   # every 6 hours
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check own landing page
+        id: du
+        uses: ./
+        with:
+          urls: |
+            https://hermes-passiv.pages.dev/deskuptime/
+            https://github.com/mahope/deskuptime
+      - name: Report
+        run: echo "down-count = ${{ steps.du.outputs.down-count }}"
