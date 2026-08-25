@@ -120,6 +120,20 @@ Outputs: `json` (full results array) and `down-count`.
 
 Exit codes: `0` all up · `2` one or more down · `3` SSL expiring/invalid.
 
+## Install
+
+**Homebrew (macOS/Linux):**
+
+```bash
+brew install mahope/tap/deskuptime
+```
+
+**npm (when published):**
+
+```bash
+npx deskuptime check <url>
+```
+
 ## Development
 
 ```bash
