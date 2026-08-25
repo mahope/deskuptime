@@ -11,7 +11,7 @@
  */
 
 import { checkUrls, summarize } from './engine.js';
-import { startWatch } from './watch.js';
+import { startWatch, runOnce, printStatus } from './watch.js';
 import { readFileSync, writeFileSync, existsSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
@@ -32,6 +32,8 @@ function showHelp() {
 USAGE:
   deskuptime check <urls...>    Check one or more URLs
   deskuptime watch <url> [--interval 300]  Monitor in background (free: up to 3 URLs)
+  deskuptime watch --once <url>       Run a single check pass and exit
+  deskuptime watch --status           Show status of monitored URLs
   deskuptime --version          Show version
   deskuptime --help             This help
 
@@ -142,6 +144,16 @@ if (command === 'watch') {
   const intervalArg = raw.indexOf('--interval');
   const interval = intervalArg !== -1 ? parseInt(raw[intervalArg + 1], 10) : 300;
   const urls = raw.filter((a, i) => !a.startsWith('--') && !(intervalArg !== -1 && i === intervalArg + 1));
+
+  if (raw.includes('--status') && urls.length === 0) {
+    printStatus();
+    process.exit(0);
+  }
+
+  if (raw.includes('--once')) {
+    await runOnce(urls, { interval });
+    process.exit(0);
+  }
 
   if (urls.length === 0 && !existsSync(join(process.env.HOME || '', '.deskuptime', 'state.json'))) {
     console.error('❌ Error: at least one URL required');

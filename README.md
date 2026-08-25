@@ -32,6 +32,12 @@ npx deskuptime check https://yoursite.com --json | jq '.[0].sslDaysRemaining'
 # Monitor URLs in the background — alerts on UP/DOWN/SSL/content changes (free, up to 3 URLs)
 npx deskuptime watch https://yoursite.com --interval 300
 
+# Run a single monitoring pass (great for cron) and exit
+npx deskuptime watch https://yoursite.com --once
+
+# Show current status of monitored URLs without checking
+npx deskuptime watch --status
+
 # Show help
 npx deskuptime --help
 ```

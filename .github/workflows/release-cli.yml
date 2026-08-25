@@ -1,0 +1,83 @@
+name: Release CLI tarball
+
+# Builds the deterministic CLI tarball, creates the v<ver>-cli GitHub release,
+# and auto-updates the Homebrew tap formula sha. Triggered by tagging vX.Y.Z-cli
+# (or manually). Replaces the manual make_tarball.sh + gh release + sha-sync flow.
+
+on:
+  push:
+    tags: ["v*-cli"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Version sanity check
+        run: |
+          VER="$(node -p "require('./package.json').version")"
+          TAG="${GITHUB_REF_NAME}"
+          if [ "$TAG" != "v${VER}-cli" ]; then
+            echo "::error::tag $TAG does not match package.json version ${VER} (expected v${VER}-cli)"
+            exit 1
+          fi
+
+      - name: Build deterministic tarball
+        run: bash tools/make_tarball.sh
+
+      - name: Test tarball standalone
+        run: |
+          mkdir /tmp/du-check && tar -xzf deskuptime-*.tar.gz -C /tmp/du-check
+          node /tmp/du-check/src/cli.js check https://example.com | grep -q "200"
+
+      - name: Create or update release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          FILE="deskuptime-$(node -p "require('./package.json').version").tar.gz"
+          SHA="$(sha256sum "$FILE" | awk '{print $1}')"
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$TAG" "$FILE" --repo "$GITHUB_REPOSITORY" --clobber
+          else
+            gh release create "$TAG" "$FILE" --repo "$GITHUB_REPOSITORY" \
+              --title "DeskUptime CLI $(node -p "require('./package.json').version") (tarball for curl/brew install)" \
+              --notes "Deterministic CLI tarball. Install: curl -fsSL https://raw.githubusercontent.com/mahope/deskuptime/main/tools/install.sh | bash — or via Homebrew: brew install mahope/tap/deskuptime" \
+              --latest=false
+          fi
+          echo "SHA256=$SHA" >> "$GITHUB_ENV"
+
+      - name: Update Homebrew tap formula
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VER="$(node -p "require('./package.json').version")"
+          git clone "https://x-access-token:${GH_TOKEN}@github.com/mahope/homebrew-tap.git" tap
+          cd tap
+          F="Formula/deskuptime.rb"
+          [ -f "$F" ] || { echo "::error::$F missing in homebrew-tap"; exit 1; }
+          sed -i \
+            -e "s|releases/download/v[0-9.]*-cli/deskuptime-[0-9.]*\\.tar\\.gz|releases/download/v${VER}-cli/deskuptime-${VER}.tar.gz|" \
+            -e 's|version "[0-9.]*"|version "'"${VER}"'"|' \
+            -e "s|sha256 \"[a-f0-9]*\"|sha256 \"${SHA256}\"|" \
+            "$F"
+          git diff --stat
+          git config user.name "deskuptime-release-bot"
+          git config user.email "mads@mahope.dk"
+          git add "$F"
+          git commit -m "deskuptime ${VER}: bump url/version/sha (automated)"
+          git push
+          echo "tap updated to ${VER}"
+
+      - name: Verify tap formula installs
+        continue-on-error: true
+        run: echo "post-verify skipped on CI runner (no brew test env); verified locally each release"

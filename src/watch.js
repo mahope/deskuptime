@@ -88,6 +88,57 @@ export async function runPass(state) {
 }
 
 /**
+ * Print a status table for all tracked URLs (used by `watch --status`).
+ */
+export function printStatus() {
+  const state = loadState();
+  const entries = Object.entries(state.urls);
+  if (entries.length === 0) {
+    console.log('No URLs monitored. Start with: deskuptime watch <url>');
+    return;
+  }
+  console.log(`📋 ${entries.length} monitored URL(s):\n`);
+  for (const [url, e] of entries) {
+    const status = e.wasUp === null || e.wasUp === undefined ? '❔ unknown'
+      : e.wasUp ? '✅ up' : '🚨 down';
+    const ssl = e.sslValidDays !== undefined ? `, SSL ${e.sslValidDays}d` : '';
+    const checked = e.lastChecked ? ` @ ${e.lastChecked}` : '';
+    console.log(`  ${status}  ${url} (${e.lastStatus ?? '—'}${ssl})${checked}`);
+  }
+}
+
+/**
+ * Run exactly one pass and print events, then exit (used by `watch --once`).
+ */
+export async function runOnce(urls, opts = {}) {
+  const state = loadState();
+  let added = 0;
+  for (const url of urls) {
+    if (state.urls[url]) continue;
+    if (Object.keys(state.urls).length >= FREE_URL_LIMIT) {
+      console.log(`⚠️  Free tier monitors ${FREE_URL_LIMIT} URLs. ${url} not added.`);
+      continue;
+    }
+    state.urls[url] = { addedAt: new Date().toISOString(), wasUp: null, lastHash: null };
+    added++;
+  }
+  if (Object.keys(state.urls).length === 0) {
+    console.error('❌ No URLs to monitor.');
+    process.exit(1);
+  }
+
+  const events = await runPass(state);
+  if (events.length === 0) {
+    console.log(`[${fmtNow()}] ✓ all monitored sites OK`);
+  } else {
+    for (const ev of events) {
+      const icon = { down: '🚨', up: '✅', ssl_warning: '⚠️ ', content_changed: '🔄' }[ev.type] || '•';
+      console.log(`[${fmtNow()}] ${icon} ${ev.url} ${ev.message}`);
+    }
+  }
+}
+
+/**
  * Start the watch loop. Resolves never — runs until SIGINT.
  */
 export async function startWatch(urls, opts = {}) {
