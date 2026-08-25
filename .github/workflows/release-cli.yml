@@ -58,7 +58,7 @@ jobs:
 
       - name: Update Homebrew tap formula
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.TAP_TOKEN }}
         run: |
           VER="$(node -p "require('./package.json').version")"
           git clone "https://x-access-token:${GH_TOKEN}@github.com/mahope/homebrew-tap.git" tap
