@@ -30,6 +30,13 @@ Desktop website monitor (uptime + SSL + content changes). CLI gratis, Pro $19 vi
 - [x] Landing page + README opdateret: watch er gratis, Pro = desktop app, notifikationer, >3 URLs
 - [x] Deployet + verificeret på hermes-passiv.pages.dev
 
+### Trin 4.6 ✅ — v0.1.3: watch --once, --status + release automation (26/8, iter 427)
+- [x] `deskuptime watch --once <url>` — enkelt pass, exit; godt til cron
+- [x] `deskuptime watch --status` — status fra state.json, ingen netværkskald
+- [x] `.github/workflows/release-cli.yml` — bygger tarball ved tag, opretter release, auto-opdaterer Homebrew-tap sha
+- [x] Homebrew-formel fixet: `Dir["src/*.js"]` flader ud → `libexec.install "src"` bevarer mappestrukturen
+- [x] v0.1.3-cli tag udgivet, tarball deployet, tap opdateret, virker med `brew install mahope/tap/deskuptime`
+
 ### Trin 4 — Tauri desktop app (kan bygges parallelt)
 - [ ] `cargo tauri init` i deskuptime/
 - [ ] Window med: URL list, status, logs
@@ -63,6 +70,6 @@ Mens LS key ikke er her:
 3. ✅ Landing page bygget + deployet
 4. ✅ LS license module bygget
 5. ⬜ Tauri desktop app
-6. ⬜ GitHub release workflow
+6. ✅ Release workflow + Homebrew tap (auto-publish CLI tarball)
 7. ⬜ SEO/content til landing page
 8. ⬜ Blog post
