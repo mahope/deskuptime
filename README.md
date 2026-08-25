@@ -26,6 +26,9 @@ npx deskuptime check https://yoursite.com
 # Check multiple URLs
 npx deskuptime check https://site1.com https://site2.com
 
+# Machine-readable output for scripts/CI (exit code 2 if any site is down)
+npx deskuptime check https://yoursite.com --json | jq '.[0].sslDaysRemaining'
+
 # Monitor URLs in the background — alerts on UP/DOWN/SSL/content changes (free, up to 3 URLs)
 npx deskuptime watch https://yoursite.com --interval 300
 
