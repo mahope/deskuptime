@@ -1,0 +1,25 @@
+{
+  "name": "deskuptime",
+  "version": "0.1.0",
+  "description": "Desktop website monitor — uptime, SSL, & content change detection. Free CLI, Pro via license key.",
+  "main": "src/engine.js",
+  "bin": {
+    "deskuptime": "src/cli.js"
+  },
+  "type": "module",
+  "scripts": {
+    "test": "node src/cli.js --help",
+    "check": "node src/cli.js check https://example.com"
+  },
+  "keywords": ["uptime", "monitor", "ssl", "website", "desktop"],
+  "license": "MIT",
+  "dependencies": {
+    "chalk": "^5.0.0",
+    "node-fetch": "^3.0.0"
+  },
+  "files": [
+    "src/",
+    "LICENSE",
+    "README.md"
+  ]
+}
