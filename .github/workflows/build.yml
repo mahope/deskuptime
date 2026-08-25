@@ -35,6 +35,9 @@ jobs:
         with:
           workspaces: desktop/src-tauri -> target
 
+      - name: Derive version
+        run: echo "APP_VERSION=$(node -p 'require(\"./package.json\").version')" >> "$GITHUB_ENV"
+
       - name: Build with Tauri CLI
         working-directory: desktop
         shell: bash
@@ -47,7 +50,7 @@ jobs:
         shell: bash
         run: |
           DIR="desktop/src-tauri/target/${{ matrix.target }}/release/bundle"
-          find "$DIR" -name '*.app' -maxdepth 3 -exec zip -r "DeskUptime-${{ github.ref_name }}-macOS-${{ matrix.target }}.zip" {} \;
+          find "$DIR" -name '*.app' -maxdepth 3 -exec zip -r "DeskUptime-macOS-${{ matrix.target }}.zip" {} \;
           cp "$DIR"/dmg/*.dmg . 2>/dev/null || true
 
       - name: Collect bundles (Windows)
