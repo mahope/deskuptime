@@ -16,7 +16,7 @@ mkdir -p "$BIN_DIR" "$PREFIX/lib/deskuptime"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
-URL="https://github.com/mahope/deskuptime/releases/download/v${VERSION}/deskuptime-${VERSION}.tar.gz"
+URL="https://github.com/mahope/deskuptime/releases/download/v${VERSION}-cli/deskuptime-${VERSION}.tar.gz"
 echo "Downloading deskuptime ${VERSION}..."
 curl -fsSL "$URL" | tar -xz -C "$TMP"
 
