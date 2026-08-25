@@ -32,11 +32,14 @@ jobs:
           echo "RELEASE_TAG=v${VER}-cli" >> "$GITHUB_ENV"
 
       - name: Build deterministic tarball
-        run: bash tools/make_tarball.sh
+        run: |
+          rm -f deskuptime-*.tar.gz
+          bash tools/make_tarball.sh
 
       - name: Test tarball standalone
         run: |
-          mkdir /tmp/du-check && tar -xzf deskuptime-*.tar.gz -C /tmp/du-check
+          FILE="deskuptime-$(node -p "require('./package.json').version").tar.gz"
+          mkdir /tmp/du-check && tar -xzf "$FILE" -C /tmp/du-check
           node /tmp/du-check/src/cli.js check https://example.com | grep -q "200"
 
       - name: Create or update release
