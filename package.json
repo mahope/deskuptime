@@ -1,7 +1,7 @@
 {
   "name": "deskuptime",
-  "version": "0.1.0",
-  "description": "Desktop website monitor — uptime, SSL, & content change detection. Free CLI, Pro via license key.",
+  "version": "0.1.1",
+  "description": "Website uptime monitor CLI — uptime, SSL expiry & content change alerts from your terminal or CI. Zero dependencies, works on any URL/CMS.",
   "main": "src/engine.js",
   "bin": {
     "deskuptime": "src/cli.js"
@@ -11,11 +11,19 @@
     "test": "node --test test/test.js",
     "check": "node src/cli.js check https://example.com"
   },
-  "keywords": ["uptime", "monitor", "ssl", "website", "desktop"],
+  "keywords": [
+    "uptime", "monitoring", "ssl", "website-monitor", "cli",
+    "devops", "status-page", "health-check", "ci", "github-action"
+  ],
   "license": "MIT",
-  "dependencies": {
-    "chalk": "^5.0.0",
-    "node-fetch": "^3.0.0"
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mahope/deskuptime.git"
+  },
+  "homepage": "https://github.com/mahope/deskuptime#readme",
+  "bugs": "https://github.com/mahope/deskuptime/issues",
+  "engines": {
+    "node": ">=18"
   },
   "files": [
     "src/",
