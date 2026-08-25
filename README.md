@@ -128,6 +128,14 @@ Exit codes: `0` all up · `2` one or more down · `3` SSL expiring/invalid.
 brew install mahope/tap/deskuptime
 ```
 
+**curl (macOS/Linux, no package manager needed):**
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/mahope/deskuptime/main/tools/install.sh | bash
+```
+
+Installs the `deskuptime` CLI to `~/.local/bin`.
+
 **npm (when published):**
 
 ```bash
