@@ -25,11 +25,11 @@ jobs:
       - name: Version sanity check
         run: |
           VER="$(node -p "require('./package.json').version")"
-          TAG="${GITHUB_REF_NAME}"
-          if [ "$TAG" != "v${VER}-cli" ]; then
-            echo "::error::tag $TAG does not match package.json version ${VER} (expected v${VER}-cli)"
+          if [ "${GITHUB_EVENT_NAME}" = "push" ] && [ "${GITHUB_REF_NAME}" != "v${VER}-cli" ]; then
+            echo "::error::tag ${GITHUB_REF_NAME} does not match package.json version ${VER} (expected v${VER}-cli)"
             exit 1
           fi
+          echo "RELEASE_TAG=v${VER}-cli" >> "$GITHUB_ENV"
 
       - name: Build deterministic tarball
         run: bash tools/make_tarball.sh
@@ -43,7 +43,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          TAG="${GITHUB_REF_NAME}"
+          TAG="${RELEASE_TAG}"
           FILE="deskuptime-$(node -p "require('./package.json').version").tar.gz"
           SHA="$(sha256sum "$FILE" | awk '{print $1}')"
           if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
