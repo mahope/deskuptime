@@ -28,7 +28,7 @@ Desktop website monitor (uptime + SSL + content changes). CLI gratis, Pro $19 vi
 - [x] UP/DOWN-detektion, SSL-advarsel ≤14 dage, content-change alerts
 - [x] Testet live: example.com (UP) + localhost:9999 (DOWN begivenhed)
 - [x] Landing page + README opdateret: watch er gratis, Pro = desktop app, notifikationer, >3 URLs
-- [x] Deployet + verificeret på auditedwp.pages.dev
+- [x] Deployet + verificeret på hermes-passiv.pages.dev
 
 ### Trin 4 — Tauri desktop app (kan bygges parallelt)
 - [ ] `cargo tauri init` i deskuptime/

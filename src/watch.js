@@ -51,14 +51,17 @@ export async function runPass(state) {
 
   await Promise.all(urls.map(async (url) => {
     const entry = state.urls[url];
+    const firstPass = entry.wasUp === null || entry.wasUp === undefined;
     const prevHash = entry.lastHash || null;
     const result = await checkUrl(url, { contentHash: prevHash });
 
-    // Status transition
-    if (result.reachable && !entry.wasUp) {
-      events.push({ url, type: 'up', message: `is UP (${result.statusCode}) — ${result.responseTimeMs}ms` });
-    } else if (!result.reachable && entry.wasUp !== false) {
-      events.push({ url, type: 'down', message: `is DOWN${result.error ? ' — ' + result.error : ''}` });
+    // Status transition (first pass only establishes baseline — no alarm)
+    if (!firstPass) {
+      if (result.reachable && !entry.wasUp) {
+        events.push({ url, type: 'up', message: `is UP (${result.statusCode}) — ${result.responseTimeMs}ms` });
+      } else if (!result.reachable && entry.wasUp) {
+        events.push({ url, type: 'down', message: `is DOWN${result.error ? ' — ' + result.error : ''}` });
+      }
     }
 
     // SSL expiry warning

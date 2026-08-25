@@ -8,7 +8,7 @@
   },
   "type": "module",
   "scripts": {
-    "test": "node src/cli.js --help",
+    "test": "node --test test/test.js",
     "check": "node src/cli.js check https://example.com"
   },
   "keywords": ["uptime", "monitor", "ssl", "website", "desktop"],

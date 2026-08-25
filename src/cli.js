@@ -44,7 +44,8 @@ FEATURES:
   • Uptime check (HTTP status code + response time)
   • SSL certificate validation + expiry countdown
   • Content change detection (SHA-256 hash)
-  $(pkg.bin?.deskuptime ? '• Installed as: deskuptime' : '• Run via: npx deskuptime')
+  • JSON output with --json for scripting/CI
+  • Zero dependencies — Node 18+, any OS
 
 PRO FEATURES (license key):
   • Desktop app with system tray + native notifications
@@ -90,9 +91,27 @@ if (command === 'check') {
     process.exit(1);
   }
 
-  console.log(`🔍 Checking ${validUrls.length} URL(s)...\n`);
-
+  const json = args.includes('--json');
   const results = await checkUrls(validUrls);
+
+  if (json) {
+    // Machine-readable output: stdout is pure JSON for piping into jq/CI
+    const out = results.map(r => ({
+      url: r.url,
+      reachable: r.reachable,
+      statusCode: r.statusCode,
+      responseTimeMs: r.responseTimeMs,
+      sslDaysRemaining: r.ssl?.validDays ?? null,
+      sslError: r.ssl?.error ?? null,
+      contentLength: r.content?.contentLength ?? null,
+      contentHash: r.content?.hash ?? null,
+      error: r.error,
+    }));
+    console.log(JSON.stringify(out, null, 2));
+    process.exit(out.some(r => !r.reachable) ? 2 : 0);
+  }
+
+  console.log(`🔍 Checking ${validUrls.length} URL(s)...\n`);
 
   for (const result of results) {
     const summary = summarize(result);
@@ -114,7 +133,7 @@ if (command === 'check') {
     console.log('');
   }
 
-  process.exit(0);
+  process.exit(results.some(r => !r.reachable) ? 2 : 0);
 }
 
 // ── Watch (background monitoring) ──
