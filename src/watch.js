@@ -5,16 +5,20 @@
  * prints status changes to the terminal, and (Pro) sends system notifications.
  *
  * Free tier: up to 3 URLs, 60s minimum interval.
+ * Pro tier (activated license): unlimited URLs, intervals down to 30s,
+ * desktop notifications via osascript (macOS) where available.
  */
 
 import { checkUrl } from './engine.js';
+import { activateLicense } from './license.js';
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'fs';
 import { join } from 'path';
-import { homedir } from 'os';
+import { homedir, hostname } from 'os';
 import { createHash } from 'crypto';
 
 const FREE_URL_LIMIT = 3;
 const FREE_MIN_INTERVAL = 60;
+const PRO_MIN_INTERVAL = 30;
 
 const STATE_DIR = join(homedir(), '.deskuptime');
 const STATE_FILE = join(STATE_DIR, 'state.json');
@@ -31,6 +35,10 @@ export function loadState() {
 export function saveState(state) {
   mkdirSync(STATE_DIR, { recursive: true });
   writeFileSync(STATE_FILE, JSON.stringify(state, null, 2));
+}
+
+export function isPro(state) {
+  return Boolean(state?.license?.key && state?.license?.instance);
 }
 
 function hashContent(str) {
@@ -88,53 +96,19 @@ export async function runPass(state) {
 }
 
 /**
- * Print a status table for all tracked URLs (used by `watch --status`).
+ * Send a desktop notification when possible (Pro only).
+ * macOS: osascript. Other platforms: silently skipped for now.
  */
-export function printStatus() {
-  const state = loadState();
-  const entries = Object.entries(state.urls);
-  if (entries.length === 0) {
-    console.log('No URLs monitored. Start with: deskuptime watch <url>');
-    return;
-  }
-  console.log(`📋 ${entries.length} monitored URL(s):\n`);
-  for (const [url, e] of entries) {
-    const status = e.wasUp === null || e.wasUp === undefined ? '❔ unknown'
-      : e.wasUp ? '✅ up' : '🚨 down';
-    const ssl = e.sslValidDays !== undefined ? `, SSL ${e.sslValidDays}d` : '';
-    const checked = e.lastChecked ? ` @ ${e.lastChecked}` : '';
-    console.log(`  ${status}  ${url} (${e.lastStatus ?? '—'}${ssl})${checked}`);
-  }
-}
-
-/**
- * Run exactly one pass and print events, then exit (used by `watch --once`).
- */
-export async function runOnce(urls, opts = {}) {
-  const state = loadState();
-  let added = 0;
-  for (const url of urls) {
-    if (state.urls[url]) continue;
-    if (Object.keys(state.urls).length >= FREE_URL_LIMIT) {
-      console.log(`⚠️  Free tier monitors ${FREE_URL_LIMIT} URLs. ${url} not added.`);
-      continue;
-    }
-    state.urls[url] = { addedAt: new Date().toISOString(), wasUp: null, lastHash: null };
-    added++;
-  }
-  if (Object.keys(state.urls).length === 0) {
-    console.error('❌ No URLs to monitor.');
-    process.exit(1);
-  }
-
-  const events = await runPass(state);
-  if (events.length === 0) {
-    console.log(`[${fmtNow()}] ✓ all monitored sites OK`);
-  } else {
-    for (const ev of events) {
-      const icon = { down: '🚨', up: '✅', ssl_warning: '⚠️ ', content_changed: '🔄' }[ev.type] || '•';
-      console.log(`[${fmtNow()}] ${icon} ${ev.url} ${ev.message}`);
-    }
+async function notify(title, message) {
+  if (process.platform !== 'darwin') return;
+  try {
+    const { execFile } = await import('child_process');
+    const esc = (s) => String(s).replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+    await new Promise((resolve) => {
+      execFile('osascript', ['-e', `display notification "${esc(message)}" with title "${esc(title)}"`], () => resolve());
+    });
+  } catch {
+    // notifications are best-effort
   }
 }
 
@@ -142,14 +116,34 @@ export async function runOnce(urls, opts = {}) {
  * Start the watch loop. Resolves never — runs until SIGINT.
  */
 export async function startWatch(urls, opts = {}) {
-  const interval = Math.max(opts.interval || 300, FREE_MIN_INTERVAL);
   const state = loadState();
+  const pro = isPro(state);
+
+  // Optional license activation: deskuptime watch <url> --activate KEY
+  if (opts.activateKey && !pro) {
+    console.log('🔑 Activating license...');
+    const res = await activateLicense(opts.activateKey, `deskuptime-cli-${hostname()}`);
+    if (res.valid) {
+      state.license = { key: opts.activateKey, instance: res.instance || hostname(), email: res.meta?.email || null };
+      saveState(state);
+      pro = true;
+      console.log(`✅ Pro activated${res.meta?.email ? ' (' + res.meta.email + ')' : ''}.`);
+    } else {
+      console.error(`❌ Activation failed: ${res.error}`);
+    }
+  }
+
+  const minInterval = pro ? PRO_MIN_INTERVAL : FREE_MIN_INTERVAL;
+  const interval = Math.max(opts.interval || 300, minInterval);
+  const urlLimit = pro ? Infinity : FREE_URL_LIMIT;
 
   let added = 0;
   for (const url of urls) {
     if (state.urls[url]) continue;
-    if (Object.keys(state.urls).length >= FREE_URL_LIMIT) {
-      console.log(`⚠️  Free tier monitors ${FREE_URL_LIMIT} URLs. ${url} not added.`);
+    if (Object.keys(state.urls).length >= urlLimit) {
+      console.log(pro
+        ? `⚠️  Skipping duplicate/extra URL: ${url}`
+        : `⚠️  Free tier monitors ${FREE_URL_LIMIT} URLs. Run "deskuptime activate <key>" for Pro (unlimited). ${url} not added.`);
       continue;
     }
     state.urls[url] = { addedAt: new Date().toISOString(), wasUp: null, lastHash: null };
@@ -161,7 +155,7 @@ export async function startWatch(urls, opts = {}) {
   }
   saveState(state);
 
-  console.log(`\n👀 Monitoring ${Object.keys(state.urls).length} URL(s), every ${interval}s. Ctrl+C to stop.\n`);
+  console.log(`\n👀 Monitoring ${Object.keys(state.urls).length} URL(s), every ${interval}s.${pro ? ' [Pro]' : ' [free tier]'}. Ctrl+C to stop.\n`);
 
   process.on('SIGINT', () => {
     console.log('\n👋 Watch stopped. State saved in ~/.deskuptime/ — run again to resume.');
@@ -177,7 +171,7 @@ export async function startWatch(urls, opts = {}) {
       for (const ev of events) {
         const icon = { down: '🚨', up: '✅', ssl_warning: '⚠️ ', content_changed: '🔄' }[ev.type] || '•';
         console.log(`[${fmtNow()}] ${icon} ${ev.url} ${ev.message}`);
-        // Pro hook: system notification goes here when license module is active
+        if (pro) await notify('DeskUptime', `${ev.url} ${ev.message}`);
       }
     }
     await new Promise(r => setTimeout(r, interval * 1000));

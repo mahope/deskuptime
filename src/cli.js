@@ -11,7 +11,7 @@
  */
 
 import { checkUrls, summarize } from './engine.js';
-import { startWatch, runOnce, printStatus } from './watch.js';
+import { startWatch, loadState, saveState } from './watch.js';
 import { readFileSync, writeFileSync, existsSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
@@ -32,8 +32,8 @@ function showHelp() {
 USAGE:
   deskuptime check <urls...>    Check one or more URLs
   deskuptime watch <url> [--interval 300]  Monitor in background (free: up to 3 URLs)
-  deskuptime watch --once <url>       Run a single check pass and exit
-  deskuptime watch --status           Show status of monitored URLs
+  deskuptime activate <key>     Unlock Pro with your license key
+  deskuptime status             Show license + monitored URLs
   deskuptime --version          Show version
   deskuptime --help             This help
 
@@ -138,22 +138,42 @@ if (command === 'check') {
   process.exit(results.some(r => !r.reachable) ? 2 : 0);
 }
 
+// ── Activate (Pro license) ──
+if (command === 'activate') {
+  const key = args[1];
+  if (!key) {
+    console.error('Usage: deskuptime activate <license-key>');
+    console.error('Buy a license at https://auditedwp.pages.dev/deskuptime/');
+    process.exit(1);
+  }
+  const { hostname } = await import('os');
+  console.log('🔑 Activating license...');
+  const { activateLicense } = await import('./license.js');
+  const res = await activateLicense(key, `deskuptime-cli-${hostname()}`);
+  if (!res.valid) {
+    console.error(`❌ Activation failed: ${res.error}`);
+    process.exit(1);
+  }
+  const state = loadState();
+  state.license = { key, instance: res.instance || hostname(), email: res.meta?.email || null };
+  saveState(state);
+  console.log(`✅ Pro activated${res.meta?.email ? ' (' + res.meta.email + ')' : ''}.`);
+  console.log('   Unlimited monitored URLs, intervals down to 30s, desktop notifications.');
+  process.exit(0);
+}
+
 // ── Watch (background monitoring) ──
 if (command === 'watch') {
   const raw = args.slice(1);
   const intervalArg = raw.indexOf('--interval');
-  const interval = intervalArg !== -1 ? parseInt(raw[intervalArg + 1], 10) : 300;
-  const urls = raw.filter((a, i) => !a.startsWith('--') && !(intervalArg !== -1 && i === intervalArg + 1));
-
-  if (raw.includes('--status') && urls.length === 0) {
-    printStatus();
-    process.exit(0);
-  }
-
-  if (raw.includes('--once')) {
-    await runOnce(urls, { interval });
-    process.exit(0);
-  }
+  let interval = intervalArg !== -1 ? parseInt(raw[intervalArg + 1], 10) : 300;
+  const activateArg = raw.indexOf('--activate');
+  const activateKey = activateArg !== -1 ? raw[activateArg + 1] : null;
+  const urls = raw.filter((a, i) =>
+    !a.startsWith('--') &&
+    !(intervalArg !== -1 && i === intervalArg + 1) &&
+    !(activateArg !== -1 && i === activateArg + 1)
+  );
 
   if (urls.length === 0 && !existsSync(join(process.env.HOME || '', '.deskuptime', 'state.json'))) {
     console.error('❌ Error: at least one URL required');
@@ -162,7 +182,25 @@ if (command === 'watch') {
     process.exit(1);
   }
 
-  await startWatch(urls, { interval });
+  await startWatch(urls, { interval, activateKey });
+}
+
+// ── Status ──
+if (command === 'status') {
+  const state = loadState();
+  const urls = Object.keys(state.urls);
+  if (state.license?.key) {
+    console.log(`Pro license: active${state.license.email ? ' (' + state.license.email + ')' : ''}`);
+  } else {
+    console.log('Free tier. Activate Pro: deskuptime activate <license-key>');
+  }
+  console.log(`Monitored URLs (${urls.length}):`);
+  for (const u of urls) {
+    const e = state.urls[u];
+    const up = e.wasUp === true ? '✅' : e.wasUp === false ? '❌' : '·';
+    console.log(`  ${up} ${u}${e.lastStatus ? ' (' + e.lastStatus + ')' : ''}${e.sslValidDays != null ? ' — SSL ' + e.sslValidDays + 'd' : ''}`);
+  }
+  process.exit(0);
 }
 
 // ── Unknown command ──

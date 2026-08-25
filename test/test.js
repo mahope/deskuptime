@@ -80,3 +80,16 @@ test('watch state: corrupt state file recovers to empty state', () => {
   assert.deepEqual(state, { urls: {} });
   rmSync(dir, { recursive: true, force: true });
 });
+
+// ── License / status commands ──
+test('cli: status runs and reports tier', async () => {
+  const { stdout } = await run('node', [CLI, 'status']);
+  assert.match(stdout, /(Free tier|Pro license)/);
+});
+
+test('cli: activate without key exits non-zero with usage', async () => {
+  await assert.rejects(
+    () => run('node', [CLI, 'activate']),
+    (err) => err.code !== 0
+  );
+});

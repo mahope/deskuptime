@@ -4,8 +4,6 @@
  * Validates LS license keys against the public LS License API.
  * No API key needed for validation — LS validates license keys
  * via a public POST endpoint.
- *
- * Ready to use when LS API key arrives. For now, stubbed.
  */
 
 const LS_LICENSE_API = 'https://api.lemonsqueezy.com/v1/licenses/activate';
@@ -14,7 +12,7 @@ const LS_LICENSE_API = 'https://api.lemonsqueezy.com/v1/licenses/activate';
  * Validate an LS license key + activate it for this machine
  * @param {string} licenseKey - LS license key from purchase
  * @param {string} instanceName - unique machine identifier
- * @returns {Promise<object>} { valid, activated, error?, meta? }
+ * @returns {Promise<object>} { valid, activated, error?, meta?, instance? }
  */
 export async function activateLicense(licenseKey, instanceName) {
   if (!licenseKey || !instanceName) {
@@ -105,20 +103,4 @@ export async function deactivateLicense(licenseKey, instanceName) {
   } catch (err) {
     return { deactivated: false, error: `Network error: ${err.message}` };
   }
-}
-
-/**
- * Stub: returns valid=true for development/testing
- * Used while LS key hasn't arrived
- */
-export async function devStubActivate() {
-  return {
-    valid: true,
-    activated: true,
-    stub: true,
-    meta: {
-      product: 'Deskuptime Pro (stub)',
-      variant: 'Developer mode',
-    },
-  };
 }
