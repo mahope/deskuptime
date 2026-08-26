@@ -144,7 +144,7 @@ if (command === 'activate') {
   const key = args[1];
   if (!key) {
     console.error('Usage: deskuptime activate <license-key>');
-    console.error('Buy a license at https://auditedwp.pages.dev/deskuptime/');
+    console.error('Buy a license at https://hermes-passiv.pages.dev/deskuptime/');
     process.exit(1);
   }
   const { hostname } = await import('os');

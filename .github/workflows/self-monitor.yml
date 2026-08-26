@@ -14,7 +14,7 @@ jobs:
         uses: ./
         with:
           urls: |
-            https://auditedwp.pages.dev/deskuptime/
+            https://hermes-passiv.pages.dev/deskuptime/
             https://github.com/mahope/deskuptime
       - name: Report
         run: echo "down-count = ${{ steps.du.outputs.down-count }}"

@@ -139,7 +139,7 @@ export async function sendWebhook(webhookUrl, event) {
  */
 export async function startWatch(urls, opts = {}) {
   const state = loadState();
-  const pro = isPro(state);
+  let pro = isPro(state);
 
   // Optional license activation: deskuptime watch <url> --activate KEY
   if (opts.activateKey && !pro) {
