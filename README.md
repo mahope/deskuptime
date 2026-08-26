@@ -57,7 +57,7 @@ It prints a line on every status change: site down 🚨, back up ✅, SSL expiri
 A one-time $19 purchase via [Lemon Squeezy](https://lemonsqueezy.com). License key unlocks
 the desktop app, native notifications and unlimited URLs. 3 activations per license.
 
-Buy Pro at [deskuptime — $19 one-time](https://auditedwp.pages.dev/deskuptime/#pro) (license sales opening now).
+Buy Pro at [deskuptime — $19 one-time](https://hermes-passiv.pages.dev/deskuptime/#pro).
 
 ## How it works
 
@@ -157,6 +157,10 @@ npm test
 ```
 
 ## License
+
+Product page & desktop app downloads: **https://hermes-passiv.pages.dev/deskuptime/**
+(Pro license: $19 one-time — [buy here](https://hermes-passiv.pages.dev/deskuptime/#pro)).
+
 
 MIT — the core engine is open source. Pro features require a license key.
 
