@@ -4,6 +4,12 @@ use std::sync::Mutex;
 use tauri::{Manager, State};
 
 mod engine;
+mod monitor;
+
+/// Public wrapper so the background monitor can persist URL state
+pub fn save_urls_pub(app: &tauri::AppHandle, urls: &[MonitoredUrl]) {
+    save_urls(app, urls);
+}
 
 /// A monitored URL with its last check result
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -136,6 +142,19 @@ async fn check_all_urls(urls: Vec<String>) -> Vec<engine::CheckResult> {
     engine::check_urls(&urls).await
 }
 
+/// Get the background monitor interval (seconds)
+#[tauri::command]
+fn get_monitor_interval(app: tauri::AppHandle) -> u64 {
+    monitor::load_settings(&app).interval_secs.max(60)
+}
+
+/// Set the background monitor interval (seconds, min 60)
+#[tauri::command]
+fn set_monitor_interval(secs: u64, app: tauri::AppHandle) {
+    let s = monitor::MonitorSettings { interval_secs: secs.max(60) };
+    monitor::save_settings(&app, &s);
+}
+
 #[tauri::command]
 fn get_license_state(app: tauri::AppHandle) -> LicenseState {
     load_license(&app)
@@ -237,6 +256,8 @@ pub fn run() {
             update_url_result,
             check_url,
             check_all_urls,
+            get_monitor_interval,
+            set_monitor_interval,
             get_license_state,
             get_free_limit,
             activate_license,
@@ -248,6 +269,7 @@ pub fn run() {
                 license: Mutex::new(load_license(app.handle())),
             };
             app.manage(state);
+            monitor::spawn_monitor(app.handle().clone());
             use tauri::tray::TrayIconBuilder;
             use tauri::menu::{MenuBuilder, MenuItemBuilder};
 

@@ -30,6 +30,24 @@
       </div>
     </div>
 
+    <!-- Monitor controls -->
+    <div id="monitorBar" class="mb-4 flex items-center justify-between gap-3 flex-wrap">
+      <div class="flex items-center gap-2">
+        <span class="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+        <span class="text-xs text-gray-500 dark:text-gray-400">Background monitoring active</span>
+        <span id="monitorBadge" class="hidden text-xs text-amber-600 dark:text-amber-400 font-medium"></span>
+      </div>
+      <label class="text-xs text-gray-500 dark:text-gray-400">
+        Check every
+        <select id="intervalSelect" class="ml-1 px-2 py-1 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 text-xs">
+          <option value="60">1 min</option>
+          <option value="300" selected>5 min</option>
+          <option value="600">10 min</option>
+          <option value="1800">30 min</option>
+        </select>
+      </label>
+    </div>
+
     <!-- Add URL form -->
     <div id="addForm" class="hidden mb-4 p-4 bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 shadow-sm">
       <div class="flex gap-2">
@@ -86,6 +104,46 @@
 
   <script>
     const { invoke } = window.__TAURI__?.core || {};
+    const { listen } = window.__TAURI__?.event || {};
+
+    // Live updates from the background monitor: re-render when a round finishes,
+    // and flash cards whose status flipped.
+    if (listen) {
+      listen('monitor-results', (ev) => {
+        const payload = ev.payload || {};
+        if (Array.isArray(payload.urls) && payload.urls.length > 0) {
+          urls = payload.urls.map(u => ({
+            url: u.url,
+            lastResult: u.last_result ? {
+              reachable: u.last_result.reachable,
+              statusCode: u.last_result.status_code,
+              responseTime: u.last_result.response_time,
+              ssl: u.last_result.ssl != null,
+              sslDays: u.last_result.ssl_days,
+              sslExpiring: u.last_result.ssl_expiring,
+              lastChecked: u.last_result.last_checked,
+            } : null,
+          }));
+          render();
+        }
+      });
+      listen('status-changed', () => {
+        const el = document.getElementById('monitorBadge');
+        if (el) {
+          el.textContent = 'Status change detected — see notification';
+          el.classList.remove('hidden');
+          setTimeout(() => el.classList.add('hidden'), 8000);
+        }
+      });
+    }
+
+    // Monitor interval selector
+    async function loadInterval() {
+      if (!invoke) return;
+      try {
+        document.getElementById('intervalSelect').value = String(await invoke('get_monitor_interval'));
+      } catch (e) { console.error(e); }
+    }
 
     // State
     let urls = [];
@@ -321,10 +379,17 @@
     if (window.__TAURI__) {
       loadUrls();
       loadLicense();
+      loadInterval();
     } else {
       // Running outside Tauri (e.g., in browser for dev)
       document.querySelector('.text-center.py-12 p:last-child').textContent = 'Runs inside the DeskUptime desktop app';
     }
+
+    document.getElementById('intervalSelect').addEventListener('change', async (e) => {
+      if (!invoke) return;
+      try { await invoke('set_monitor_interval', { secs: parseInt(e.target.value, 10) }); }
+      catch (err) { console.error(err); }
+    });
   </script>
 </body>
 </html>
