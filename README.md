@@ -57,7 +57,7 @@ It prints a line on every status change: site down 🚨, back up ✅, SSL expiri
 A one-time $19 purchase via [Lemon Squeezy](https://lemonsqueezy.com). License key unlocks
 the desktop app, native notifications and unlimited URLs. 3 activations per license.
 
-Coming soon — sign up for updates at [the landing page](https://auditedwp.pages.dev/deskuptime/).
+Buy Pro at [deskuptime — $19 one-time](https://auditedwp.pages.dev/deskuptime/#pro) (license sales opening now).
 
 ## How it works
 
