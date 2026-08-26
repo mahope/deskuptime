@@ -3,7 +3,7 @@
 **Desktop website monitor.** Check uptime, SSL certificates, and content changes from your terminal or desktop — no monthly SaaS fees.
 
 ```
-npx deskuptime check https://example.com
+npx github:mahope/deskuptime check https://example.com
 ```
 
 ✅ Status: 200 OK | Response: 85ms | 🔒 SSL: 63 days remaining
@@ -21,25 +21,25 @@ npx deskuptime check https://example.com
 
 ```bash
 # Check a single URL
-npx deskuptime check https://yoursite.com
+npx github:mahope/deskuptime check https://yoursite.com
 
 # Check multiple URLs
-npx deskuptime check https://site1.com https://site2.com
+npx github:mahope/deskuptime check https://site1.com https://site2.com
 
 # Machine-readable output for scripts/CI (exit code 2 if any site is down)
-npx deskuptime check https://yoursite.com --json | jq '.[0].sslDaysRemaining'
+npx github:mahope/deskuptime check https://yoursite.com --json | jq '.[0].sslDaysRemaining'
 
 # Monitor URLs in the background — alerts on UP/DOWN/SSL/content changes (free, up to 3 URLs)
-npx deskuptime watch https://yoursite.com --interval 300
+npx github:mahope/deskuptime watch https://yoursite.com --interval 300
 
 # Run a single monitoring pass (great for cron) and exit
-npx deskuptime watch https://yoursite.com --once
+npx github:mahope/deskuptime watch https://yoursite.com --once
 
 # Show current status of monitored URLs without checking
-npx deskuptime watch --status
+npx github:mahope/deskuptime watch --status
 
 # Show help
-npx deskuptime --help
+npx github:mahope/deskuptime --help
 ```
 
 Watch mode stores state in `~/.deskuptime/state.json` and resumes where it left off.
@@ -57,7 +57,7 @@ It prints a line on every status change: site down 🚨, back up ✅, SSL expiri
 A one-time $19 purchase via [Lemon Squeezy](https://lemonsqueezy.com). License key unlocks
 the desktop app, native notifications and unlimited URLs. 3 activations per license.
 
-Coming soon — sign up for updates at [the landing page](https://hermes-passiv.pages.dev/deskuptime/).
+Coming soon — sign up for updates at [the landing page](https://auditedwp.pages.dev/deskuptime/).
 
 ## How it works
 
@@ -145,7 +145,7 @@ Installs the `deskuptime` CLI to `~/.local/bin`.
 **npm (when published):**
 
 ```bash
-npx deskuptime check <url>
+npx github:mahope/deskuptime check <url>
 ```
 
 ## Development
