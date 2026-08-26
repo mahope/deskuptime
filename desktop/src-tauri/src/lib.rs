@@ -243,6 +243,11 @@ pub fn run() {
             deactivate_license,
         ])
         .setup(|app| {
+            let state = AppState {
+                urls: Mutex::new(load_urls(app.handle())),
+                license: Mutex::new(load_license(app.handle())),
+            };
+            app.manage(state);
             use tauri::tray::TrayIconBuilder;
             use tauri::menu::{MenuBuilder, MenuItemBuilder};
 

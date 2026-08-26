@@ -59,7 +59,11 @@
           <p id="freeLimitText" class="text-sm font-medium text-gray-900 dark:text-gray-100">DeskUptime Free</p>
           <p class="text-xs text-gray-500 dark:text-gray-400">Monitor up to 3 URLs. Upgrade for unlimited monitoring.</p>
         </div>
-        <button id="btnShowLicense" class="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 text-sm font-medium transition-colors">Activate License</button>
+        <div class="flex items-center gap-2">
+          <a id="btnBuy" href="https://auditedwp.pages.dev/deskuptime/#pro" target="_blank" rel="noopener noreferrer"
+             class="px-4 py-2 border border-emerald-600 text-emerald-600 dark:text-emerald-400 rounded-lg hover:bg-emerald-50 dark:hover:bg-emerald-900/30 text-sm font-medium transition-colors">Buy Pro — $19</a>
+          <button id="btnShowLicense" class="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 text-sm font-medium transition-colors">Activate License</button>
+        </div>
       </div>
       <div id="licenseForm" class="hidden">
         <label for="licenseInput" class="block text-xs text-gray-500 dark:text-gray-400 mb-1">License key (from your purchase email)</label>
@@ -269,9 +273,22 @@
         try {
           await invoke('add_url', { url: input });
         } catch(e) {
-          // Free-tier limit or duplicate — show the message to the user
+          // Free-tier limit or duplicate — show inline message with an upgrade path
           urlInput.value = input;
-          alert(String(e));
+          const msg = String(e);
+          let banner = document.getElementById('limitBanner');
+          if (!banner) {
+            banner = document.createElement('div');
+            banner.id = 'limitBanner';
+            banner.className = 'mt-3 p-3 bg-amber-50 dark:bg-amber-900/30 border border-amber-300 dark:border-amber-700 rounded-lg text-sm text-amber-900 dark:text-amber-200';
+            addForm.parentNode.insertBefore(banner, addForm.nextSibling);
+          }
+          if (msg.includes('Upgrade to Pro')) {
+            banner.innerHTML = msg.replace(/Upgrade to Pro[^"]*/, '') +
+              ' <a href="https://auditedwp.pages.dev/deskuptime/#pro" target="_blank" rel="noopener noreferrer" class="underline font-semibold">Buy Pro for $19 →</a>';
+          } else {
+            banner.textContent = msg;
+          }
           return;
         }
       }
