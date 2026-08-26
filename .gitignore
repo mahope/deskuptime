@@ -3,3 +3,4 @@ node_modules/
 # Build artifacts
 desktop/src-tauri/target/
 target/
+dist/

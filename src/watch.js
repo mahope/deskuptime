@@ -113,6 +113,28 @@ async function notify(title, message) {
 }
 
 /**
+ * POST an event to a user-supplied webhook URL (Pro only). Best-effort.
+ */
+export async function sendWebhook(webhookUrl, event) {
+  try {
+    const res = await fetch(webhookUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        product: 'deskuptime',
+        type: event.type,
+        url: event.url,
+        message: event.message,
+        timestamp: new Date().toISOString(),
+      }),
+    });
+    if (!res.ok) console.error(`⚠️  Webhook responded ${res.status}`);
+  } catch (err) {
+    console.error(`⚠️  Webhook delivery failed: ${err.message}`);
+  }
+}
+
+/**
  * Start the watch loop. Resolves never — runs until SIGINT.
  */
 export async function startWatch(urls, opts = {}) {
@@ -155,7 +177,7 @@ export async function startWatch(urls, opts = {}) {
   }
   saveState(state);
 
-  console.log(`\n👀 Monitoring ${Object.keys(state.urls).length} URL(s), every ${interval}s.${pro ? ' [Pro]' : ' [free tier]'}. Ctrl+C to stop.\n`);
+  console.log(`\n👀 Monitoring ${Object.keys(state.urls).length} URL(s), every ${interval}s.${pro ? ' [Pro]' : ' [free tier]'}.${webhookUrl ? ' Webhook alerts on.' : ''} Ctrl+C to stop.\n`);
 
   process.on('SIGINT', () => {
     console.log('\n👋 Watch stopped. State saved in ~/.deskuptime/ — run again to resume.');
@@ -171,7 +193,10 @@ export async function startWatch(urls, opts = {}) {
       for (const ev of events) {
         const icon = { down: '🚨', up: '✅', ssl_warning: '⚠️ ', content_changed: '🔄' }[ev.type] || '•';
         console.log(`[${fmtNow()}] ${icon} ${ev.url} ${ev.message}`);
-        if (pro) await notify('DeskUptime', `${ev.url} ${ev.message}`);
+        if (pro) {
+          await notify('DeskUptime', `${ev.url} ${ev.message}`);
+          if (webhookUrl) await sendWebhook(webhookUrl, ev);
+        }
       }
     }
     await new Promise(r => setTimeout(r, interval * 1000));

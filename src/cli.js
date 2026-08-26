@@ -31,7 +31,7 @@ function showHelp() {
 
 USAGE:
   deskuptime check <urls...>    Check one or more URLs
-  deskuptime watch <url> [--interval 300]  Monitor in background (free: up to 3 URLs)
+  deskuptime watch <url> [--interval 300] [--webhook URL]  Monitor in background (free: up to 3 URLs)
   deskuptime activate <key>     Unlock Pro with your license key
   deskuptime status             Show license + monitored URLs
   deskuptime --version          Show version
@@ -50,6 +50,7 @@ FEATURES:
   • Zero dependencies — Node 18+, any OS
 
 PRO FEATURES (license key):
+  • Webhook alerts: deskuptime watch <url> --webhook https://hooks.example.com/xyz
   • Desktop app with system tray + native notifications
   • More than 3 monitored URLs
   • Email/push alerts on status changes
@@ -169,10 +170,13 @@ if (command === 'watch') {
   let interval = intervalArg !== -1 ? parseInt(raw[intervalArg + 1], 10) : 300;
   const activateArg = raw.indexOf('--activate');
   const activateKey = activateArg !== -1 ? raw[activateArg + 1] : null;
+  const hookArg = raw.indexOf('--webhook');
+  const webhookUrl = hookArg !== -1 ? raw[hookArg + 1] : null;
   const urls = raw.filter((a, i) =>
     !a.startsWith('--') &&
     !(intervalArg !== -1 && i === intervalArg + 1) &&
-    !(activateArg !== -1 && i === activateArg + 1)
+    !(activateArg !== -1 && i === activateArg + 1) &&
+    !(hookArg !== -1 && i === hookArg + 1)
   );
 
   if (urls.length === 0 && !existsSync(join(process.env.HOME || '', '.deskuptime', 'state.json'))) {
@@ -182,7 +186,7 @@ if (command === 'watch') {
     process.exit(1);
   }
 
-  await startWatch(urls, { interval, activateKey });
+  await startWatch(urls, { interval, activateKey, webhookUrl });
 }
 
 // ── Status ──
