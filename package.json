@@ -1,6 +1,6 @@
 {
   "name": "deskuptime",
-  "version": "0.1.4",
+  "version": "0.2.5",
   "description": "Website uptime monitor CLI — uptime, SSL expiry & content change alerts from your terminal or CI. Zero dependencies, works on any URL/CMS.",
   "main": "src/engine.js",
   "bin": {
