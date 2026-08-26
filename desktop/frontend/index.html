@@ -51,6 +51,33 @@
     <div class="mt-6 text-center text-xs text-gray-400 dark:text-gray-600">
       DeskUptime v0.1 — All checks run locally on your machine.
     </div>
+
+    <!-- License section -->
+    <div id="licenseSection" class="mt-6 p-4 bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 shadow-sm">
+      <div id="licenseFree" class="flex items-center justify-between gap-3 flex-wrap">
+        <div>
+          <p id="freeLimitText" class="text-sm font-medium text-gray-900 dark:text-gray-100">DeskUptime Free</p>
+          <p class="text-xs text-gray-500 dark:text-gray-400">Monitor up to 3 URLs. Upgrade for unlimited monitoring.</p>
+        </div>
+        <button id="btnShowLicense" class="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 text-sm font-medium transition-colors">Activate License</button>
+      </div>
+      <div id="licenseForm" class="hidden">
+        <label for="licenseInput" class="block text-xs text-gray-500 dark:text-gray-400 mb-1">License key (from your purchase email)</label>
+        <div class="flex gap-2">
+          <input type="text" id="licenseInput" placeholder="XXXXXX-XXXXXX-XXXXXX-XXXXXX-XXXXXX" class="flex-1 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 text-sm outline-none focus:ring-2 focus:ring-emerald-500">
+          <button id="btnActivate" class="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 text-sm font-medium">Activate</button>
+          <button id="btnCancelLicense" class="px-3 py-2 text-gray-500 hover:text-gray-700 text-sm">Cancel</button>
+        </div>
+        <p id="licenseError" class="hidden mt-2 text-xs text-red-600"></p>
+      </div>
+      <div id="licenseActive" class="hidden flex items-center justify-between gap-3 flex-wrap">
+        <div>
+          <p class="text-sm font-medium text-emerald-600">✓ Pro activated</p>
+          <p id="licenseEmail" class="text-xs text-gray-500 dark:text-gray-400"></p>
+        </div>
+        <button id="btnDeactivate" class="px-4 py-2 border border-gray-300 dark:border-gray-600 text-gray-600 dark:text-gray-300 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 text-sm">Deactivate</button>
+      </div>
+    </div>
   </div>
 
   <script>
@@ -59,6 +86,8 @@
     // State
     let urls = [];
     let checking = new Set();
+    let licensed = false;
+    let freeLimit = 3;
 
     // DOM refs
     const urlList = document.getElementById('urlList');
@@ -68,6 +97,71 @@
     const btnAddConfirm = document.getElementById('btnAddConfirm');
     const btnAddCancel = document.getElementById('btnAddCancel');
     const btnCheckAll = document.getElementById('btnCheckAll');
+
+    // License UI refs
+    const licenseFree = document.getElementById('licenseFree');
+    const licenseForm = document.getElementById('licenseForm');
+    const licenseActive = document.getElementById('licenseActive');
+    const licenseInput = document.getElementById('licenseInput');
+    const licenseError = document.getElementById('licenseError');
+    const licenseEmail = document.getElementById('licenseEmail');
+
+    function renderLicenseUI() {
+      licenseFree.classList.toggle('hidden', licensed);
+      licenseForm.classList.add('hidden');
+      licenseActive.classList.toggle('hidden', !licensed);
+      if (licensed && !licenseActive.className.includes('flex')) {
+        // re-apply flex layout (classList toggle removed 'hidden' only)
+        licenseActive.className = 'flex items-center justify-between gap-3 flex-wrap';
+      } else if (!licensed) {
+        licenseActive.className = 'hidden';
+      }
+      licenseFree.className = licensed
+        ? 'hidden'
+        : 'flex items-center justify-between gap-3 flex-wrap';
+      if (licensed) licenseEmail.textContent = 'Licensed to ' + (window._licEmail || 'your account');
+    }
+
+    async function loadLicense() {
+      if (!invoke) return;
+      try {
+        freeLimit = await invoke('get_free_limit') || 3;
+        document.querySelector('#freeLimitText').textContent =
+          `DeskUptime Free (up to ${freeLimit} URLs)`;
+        const lic = await invoke('get_license_state');
+        licensed = !!lic.licenseKey || !!lic.license_key;
+        window._licEmail = lic.email || null;
+        renderLicenseUI();
+      } catch (e) { console.error(e); }
+    }
+
+    document.getElementById('btnShowLicense').addEventListener('click', () => {
+      licenseForm.classList.remove('hidden');
+      licenseInput.focus();
+    });
+    document.getElementById('btnCancelLicense').addEventListener('click', () => {
+      licenseForm.classList.add('hidden');
+      licenseError.classList.add('hidden');
+    });
+    document.getElementById('btnActivate').addEventListener('click', async () => {
+      const key = licenseInput.value.trim();
+      if (!key) return;
+      licenseError.classList.add('hidden');
+      try {
+        const lic = await invoke('activate_license', { licenseKey: key });
+        licensed = true;
+        window._licEmail = lic.email || null;
+        renderLicenseUI();
+      } catch (e) {
+        licenseError.textContent = String(e);
+        licenseError.classList.remove('hidden');
+      }
+    });
+    document.getElementById('btnDeactivate').addEventListener('click', async () => {
+      try { await invoke('deactivate_license'); } catch (e) { console.error(e); }
+      licensed = false;
+      renderLicenseUI();
+    });
 
     // Load URLs on startup
     async function loadUrls() {
@@ -174,7 +268,12 @@
       if (invoke) {
         try {
           await invoke('add_url', { url: input });
-        } catch(e) { console.error(e); }
+        } catch(e) {
+          // Free-tier limit or duplicate — show the message to the user
+          urlInput.value = input;
+          alert(String(e));
+          return;
+        }
       }
       urls.push({ url: input, lastResult: null });
       urlInput.value = '';
@@ -204,6 +303,7 @@
     // Init
     if (window.__TAURI__) {
       loadUrls();
+      loadLicense();
     } else {
       // Running outside Tauri (e.g., in browser for dev)
       document.querySelector('.text-center.py-12 p:last-child').textContent = 'Runs inside the DeskUptime desktop app';
