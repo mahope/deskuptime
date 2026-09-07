@@ -1,6 +1,6 @@
 {
-  "name": "deskuptime",
-  "version": "0.2.7",
+  "name": "@mahope/deskuptime",
+  "version": "0.2.8",
   "description": "Website uptime monitor CLI — uptime, SSL expiry & content change alerts from your terminal or CI. Zero dependencies, works on any URL/CMS.",
   "main": "src/engine.js",
   "bin": {
@@ -28,7 +28,7 @@
     "type": "git",
     "url": "git+https://github.com/mahope/deskuptime.git"
   },
-  "homepage": "https://github.com/mahope/deskuptime#readme",
+  "homepage": "https://github.com/mahope/deskuptime",
   "bugs": "https://github.com/mahope/deskuptime/issues",
   "engines": {
     "node": ">=18"
@@ -37,5 +37,8 @@
     "src/",
     "LICENSE",
     "README.md"
-  ]
+  ],
+  "publishConfig": {
+    "access": "public"
+  }
 }

@@ -5,6 +5,7 @@
  *
  * Usage:
  *   deskuptime check <url> [url2 url3 ...]
+ *   deskuptime headers <url>          Redirect chain + security headers
  *   deskuptime watch <url>            (stub for Pro)
  *   deskuptime --version
  *   deskuptime --help
@@ -31,6 +32,7 @@ function showHelp() {
 
 USAGE:
   deskuptime check <urls...>    Check one or more URLs
+  deskuptime headers <url>      Redirect chain, HTTPS enforcement + security headers
   deskuptime watch <url> [--interval 300] [--webhook URL]  Monitor in background (free: up to 3 URLs)
   deskuptime activate <key>     Unlock Pro with your license key
   deskuptime status             Show license + monitored URLs
@@ -111,8 +113,8 @@ if (command === 'check') {
       error: r.error,
     }));
     console.log(JSON.stringify(out, null, 2));
-    process.exit(out.some(r => !r.reachable) ? 2 : 0);
-  }
+    process.exitCode = out.some(r => !r.reachable) ? 2 : 0;
+  } else {
 
   console.log(`🔍 Checking ${validUrls.length} URL(s)...\n`);
 
@@ -136,7 +138,44 @@ if (command === 'check') {
     console.log('');
   }
 
-  process.exit(results.some(r => !r.reachable) ? 2 : 0);
+  process.exitCode = results.some(r => !r.reachable) ? 2 : 0;
+  }
+}
+
+// ── Headers (redirect chain + security headers) ──
+if (command === 'headers') {
+  const url = args[1];
+  if (!url) {
+    console.error('❌ Error: a URL is required');
+    console.error('Usage: deskuptime headers <url> [--json]');
+    process.exit(1);
+  }
+  const { checkHeaders } = await import('./checkers/headers.js');
+  const r = await checkHeaders(url);
+
+  if (args.includes('--json')) {
+    console.log(JSON.stringify(r, null, 2));
+  } else {
+  console.log(`🧭 ${url}`);
+  for (const s of r.steps) {
+    console.log(`   ${s.status} → ${s.location}`);
+  }
+  console.log(`   Final: ${r.finalUrl} (${r.statusCode || 'n/a'})${r.redirected ? ' — redirected' : ''}`);
+  if (r.startedHttp) {
+    console.log(`   HTTPS forced: ${r.forcesHttps ? '✅ yes' : '❌ no — site served over plain HTTP'}`);
+  }
+  if (r.poweredBy) {
+    console.log(`   ⚠️  X-Powered-By exposed: ${r.poweredBy}`);
+  }
+  const missing = Object.entries(r.security).filter(([, v]) => !v).map(([k]) => k);
+  const present = Object.entries(r.security).filter(([, v]) => v);
+  for (const [k, v] of present) {
+    console.log(`   ✅ ${k}: ${v.length > 60 ? v.slice(0, 57) + '...' : v}`);
+  }
+  for (const k of missing) {
+    console.log(`   ⬜ missing: ${k}`);
+  }
+  }
 }
 
 // ── Activate (Pro license) ──
@@ -208,6 +247,11 @@ if (command === 'status') {
 }
 
 // ── Unknown command ──
-console.error(`Unknown command: "${command}"`);
-console.error('Run "deskuptime --help" for usage.');
-process.exit(1);
+// check/headers fall through here after setting process.exitCode instead of calling
+// process.exit(): exiting while an undici fetch handle is still closing trips a libuv
+// assertion on Windows (src/win/async.c), so the event loop must drain naturally.
+if (command !== 'check' && command !== 'headers') {
+  console.error(`Unknown command: "${command}"`);
+  console.error('Run "deskuptime --help" for usage.');
+  process.exit(1);
+}

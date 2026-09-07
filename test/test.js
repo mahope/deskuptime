@@ -12,9 +12,10 @@ import { createHash } from 'node:crypto';
 import { mkdtempSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const run = promisify(execFile);
-const CLI = join(new URL('..', import.meta.url).pathname, 'src', 'cli.js');
+const CLI = fileURLToPath(new URL('../src/cli.js', import.meta.url));
 
 // ── Unit: hash-based change detection ──
 function sha(s) { return createHash('sha256').update(s).digest('hex'); }
@@ -29,12 +30,12 @@ test('hash: changed content produces different hash', () => {
 
 // ── CLI behaviour ──
 test('cli: --version prints version', async () => {
-  const { stdout } = await run('node', [CLI, '--version']);
+  const { stdout } = await run(process.execPath, [CLI, '--version']);
   assert.match(stdout.trim(), /^deskuptime v\d+\.\d+\.\d+$/);
 });
 
 test('cli: --help lists commands and does not leak template bugs', async () => {
-  const { stdout } = await run('node', [CLI, '--help']);
+  const { stdout } = await run(process.execPath, [CLI, '--help']);
   assert.match(stdout, /check <urls/);
   assert.match(stdout, /watch <url>/);
   // regression: literal $(...) must never appear in rendered help
@@ -43,18 +44,18 @@ test('cli: --help lists commands and does not leak template bugs', async () => {
 
 test('cli: check without URLs exits non-zero', async () => {
   await assert.rejects(
-    () => run('node', [CLI, 'check']),
+    () => run(process.execPath, [CLI, 'check']),
     (err) => err.code !== 0
   );
 });
 
 test('cli: check skips invalid URLs, errors when none valid', async () => {
-  await assert.rejects(() => run('node', [CLI, 'check', 'not-a-url']));
+  await assert.rejects(() => run(process.execPath, [CLI, 'check', 'not-a-url']));
 });
 
 // ── Live check against example.com (network required) ──
 test('cli: check https://example.com returns UP + SSL', { timeout: 30000 }, async () => {
-  const { stdout } = await run('node', [CLI, 'check', 'https://example.com']);
+  const { stdout } = await run(process.execPath, [CLI, 'check', 'https://example.com']);
   assert.match(stdout, /✅ https:\/\/example\.com/);
   assert.match(stdout, /Status:\s+200/);
   assert.match(stdout, /SSL/);
@@ -62,7 +63,7 @@ test('cli: check https://example.com returns UP + SSL', { timeout: 30000 }, asyn
 
 // ── JSON mode (if implemented): machine-readable output ──
 test('cli: check --json outputs valid JSON array', { timeout: 30000 }, async () => {
-  const { stdout } = await run('node', [CLI, 'check', 'https://example.com', '--json']);
+  const { stdout } = await run(process.execPath, [CLI, 'check', 'https://example.com', '--json']);
   const data = JSON.parse(stdout);
   assert.ok(Array.isArray(data));
   assert.equal(data[0].url, 'https://example.com');
@@ -83,13 +84,29 @@ test('watch state: corrupt state file recovers to empty state', () => {
 
 // ── License / status commands ──
 test('cli: status runs and reports tier', async () => {
-  const { stdout } = await run('node', [CLI, 'status']);
+  const { stdout } = await run(process.execPath, [CLI, 'status']);
   assert.match(stdout, /(Free tier|Pro license)/);
 });
 
 test('cli: activate without key exits non-zero with usage', async () => {
   await assert.rejects(
-    () => run('node', [CLI, 'activate']),
+    () => run(process.execPath, [CLI, 'activate']),
+    (err) => err.code !== 0
+  );
+});
+
+// ── headers command ──
+test('cli: headers http://example.com follows redirect and outputs JSON', { timeout: 30000 }, async () => {
+  const { stdout } = await run(process.execPath, [CLI, 'headers', 'http://example.com', '--json']);
+  const r = JSON.parse(stdout);
+  assert.equal(typeof r.redirected, 'boolean');
+  assert.equal(r.statusCode, 200);
+  assert.ok('strict-transport-security' in r.security);
+});
+
+test('cli: headers without URL exits non-zero', async () => {
+  await assert.rejects(
+    () => run(process.execPath, [CLI, 'headers']),
     (err) => err.code !== 0
   );
 });

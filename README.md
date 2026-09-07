@@ -3,7 +3,7 @@
 **Desktop website monitor.** Check uptime, SSL certificates, and content changes from your terminal or desktop — no monthly SaaS fees.
 
 ```
-npx github:mahope/deskuptime check https://example.com
+npx @mahope/deskuptime check https://example.com
 ```
 
 ✅ Status: 200 OK | Response: 85ms | 🔒 SSL: 63 days remaining
@@ -21,25 +21,25 @@ npx github:mahope/deskuptime check https://example.com
 
 ```bash
 # Check a single URL
-npx github:mahope/deskuptime check https://yoursite.com
+npx @mahope/deskuptime check https://yoursite.com
 
 # Check multiple URLs
-npx github:mahope/deskuptime check https://site1.com https://site2.com
+npx @mahope/deskuptime check https://site1.com https://site2.com
 
 # Machine-readable output for scripts/CI (exit code 2 if any site is down)
-npx github:mahope/deskuptime check https://yoursite.com --json | jq '.[0].sslDaysRemaining'
+npx @mahope/deskuptime check https://yoursite.com --json | jq '.[0].sslDaysRemaining'
 
 # Monitor URLs in the background — alerts on UP/DOWN/SSL/content changes (free, up to 3 URLs)
-npx github:mahope/deskuptime watch https://yoursite.com --interval 300
+npx @mahope/deskuptime watch https://yoursite.com --interval 300
 
 # Run a single monitoring pass (great for cron) and exit
-npx github:mahope/deskuptime watch https://yoursite.com --once
+npx @mahope/deskuptime watch https://yoursite.com --once
 
 # Show current status of monitored URLs without checking
-npx github:mahope/deskuptime watch --status
+npx @mahope/deskuptime watch --status
 
 # Show help
-npx github:mahope/deskuptime --help
+npx @mahope/deskuptime --help
 ```
 
 Watch mode stores state in `~/.deskuptime/state.json` and resumes where it left off.
@@ -57,7 +57,7 @@ It prints a line on every status change: site down 🚨, back up ✅, SSL expiri
 A one-time $19 purchase via [Lemon Squeezy](https://lemonsqueezy.com). License key unlocks
 the desktop app, native notifications and unlimited URLs. 3 activations per license.
 
-Buy Pro at [deskuptime — $19 one-time](https://auditedwp.pages.dev/deskuptime/#pro).
+Buy Pro at [deskuptime — $19 one-time](https://github.com/mahope/deskuptime).
 
 ## How it works
 
@@ -145,7 +145,7 @@ Installs the `deskuptime` CLI to `~/.local/bin`.
 **npm (when published):**
 
 ```bash
-npx github:mahope/deskuptime check <url>
+npx @mahope/deskuptime check <url>
 ```
 
 ## Development
@@ -158,8 +158,8 @@ npm test
 
 ## License
 
-Product page & desktop app downloads: **https://auditedwp.pages.dev/deskuptime/**
-(Pro license: $19 one-time — [buy here](https://auditedwp.pages.dev/deskuptime/#pro)).
+Product page & desktop app downloads: **https://github.com/mahope/deskuptime**
+(Pro license: $19 one-time — [buy here](https://github.com/mahope/deskuptime)).
 
 
 MIT — the core engine is open source. Pro features require a license key.
