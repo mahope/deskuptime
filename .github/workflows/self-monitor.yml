@@ -1,7 +1,10 @@
 name: Self-monitor
+# Dogfooding: DeskUptime watches every Mahope product site.
+# A failing run means a site is down or its certificate expires within 14 days;
+# GitHub e-mails the repo owner on the first failure and on recovery.
 on:
   schedule:
-    - cron: '0 */6 * * *'   # every 6 hours
+    - cron: '17 */3 * * *'   # every 3 hours
   workflow_dispatch:
 
 jobs:
@@ -9,12 +12,23 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Check own landing page
+      - name: Check all product sites
         id: du
         uses: ./
         with:
+          fail-on-ssl-expiry-days: '14'
           urls: |
-            https://hermes-passiv.pages.dev/deskuptime/
+            https://deskuptime.com/
+            https://deskuptime.com/da/
+            https://eucomplypro.com/
+            https://eucomplypro.com/scan/
+            https://cleancopy.tools/
+            https://transmute.run/
+            https://bugbottle.dev/
+            https://mahope.tools/
+            https://mahope.tools/api/health
+            https://eucomply-scan.mahope-eeb.workers.dev/stats
+            https://deskuptime-quickcheck.mahope-eeb.workers.dev/check?url=https://mahoje.dk
             https://github.com/mahope/deskuptime
       - name: Report
         run: echo "down-count = ${{ steps.du.outputs.down-count }}"
