@@ -57,7 +57,7 @@ It prints a line on every status change: site down 🚨, back up ✅, SSL expiri
 A one-time $19 purchase via [Lemon Squeezy](https://lemonsqueezy.com). License key unlocks
 the desktop app, native notifications and unlimited URLs. 3 activations per license.
 
-Buy Pro at [deskuptime — $19 one-time](https://github.com/mahope/deskuptime).
+Buy Pro at [deskuptime.com](https://deskuptime.com/).
 
 ## How it works
 
@@ -142,7 +142,7 @@ curl -fsSL https://raw.githubusercontent.com/mahope/deskuptime/main/tools/instal
 
 Installs the `deskuptime` CLI to `~/.local/bin`.
 
-**npm (when published):**
+**npm:**
 
 ```bash
 npx @mahope/deskuptime check <url>
@@ -156,14 +156,14 @@ cd deskuptime
 npm test
 ```
 
+## Links
+
+Product page, desktop app downloads and Pro license: **https://deskuptime.com/**
+
 ## License
-
-Product page & desktop app downloads: **https://github.com/mahope/deskuptime**
-(Pro license: $19 one-time — [buy here](https://github.com/mahope/deskuptime)).
-
 
 MIT — the core engine is open source. Pro features require a license key.
 
----
+## Author
 
-Built by [Mahope](https://github.com/mahope).
+Built by Mads Holst Jensen — developer and technical partner for small businesses, Odense, Denmark. https://mahoje.dk
