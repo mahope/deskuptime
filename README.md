@@ -160,6 +160,11 @@ npm test
 
 Product page, desktop app downloads and Pro license: **https://deskuptime.com/**
 
+## Releasing
+
+`npm run release -- patch` (or `minor`/`major`) bumps the version, commits and pushes the tag.
+CI publishes to npm and creates the GitHub release.
+
 ## License
 
 MIT — the core engine is open source. Pro features require a license key.

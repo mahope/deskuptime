@@ -9,7 +9,8 @@
   "type": "module",
   "scripts": {
     "test": "node --test test/test.js",
-    "check": "node src/cli.js check https://example.com"
+    "check": "node src/cli.js check https://example.com",
+    "release": "node tools/release.mjs"
   },
   "keywords": [
     "uptime",
