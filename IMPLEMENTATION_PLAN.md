@@ -241,6 +241,7 @@ Den første gate-definition er registreret her:
 - Dette repo har ingen egen live-deploy. Den eksterne batch-deployer deployer ikke automatisk ved merge.
 - Efter hver merge/push til `main` skal der tilføjes `VERIFICÉR DEPLOY: <ændring> <commit-sha> <tidspunkt>`.
 - Livestatus skal verificeres ved læsning af faktisk indhold; HTTP 200 alene beviser ikke ny kode.
+- VERIFICÉR DEPLOY: researchplan `812f469` 2026-09-24T23:44:36Z
 
 ## Iterationslog
 
