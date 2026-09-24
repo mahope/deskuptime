@@ -78,7 +78,7 @@
           <p class="text-xs text-gray-500 dark:text-gray-400">Monitor up to 3 URLs. Upgrade for unlimited monitoring.</p>
         </div>
         <div class="flex items-center gap-2">
-          <a id="btnBuy" href="https://hermes-passiv.pages.dev/deskuptime/#pro" target="_blank" rel="noopener noreferrer"
+          <a id="btnBuy" href="https://buy.stripe.com/7sY9AS9eX3Iu418fJ5bMQ01" target="_blank" rel="noopener noreferrer"
              class="px-4 py-2 border border-emerald-600 text-emerald-600 dark:text-emerald-400 rounded-lg hover:bg-emerald-50 dark:hover:bg-emerald-900/30 text-sm font-medium transition-colors">Buy Pro — $19</a>
           <button id="btnShowLicense" class="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 text-sm font-medium transition-colors">Activate License</button>
         </div>
@@ -86,7 +86,7 @@
       <div id="licenseForm" class="hidden">
         <label for="licenseInput" class="block text-xs text-gray-500 dark:text-gray-400 mb-1">License key (from your purchase email)</label>
         <div class="flex gap-2">
-          <input type="text" id="licenseInput" placeholder="XXXXXX-XXXXXX-XXXXXX-XXXXXX-XXXXXX" class="flex-1 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 text-sm outline-none focus:ring-2 focus:ring-emerald-500">
+          <input type="text" id="licenseInput" placeholder="32-character key, e.g. 0123456789abcdef0123456789abcdef" class="flex-1 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 text-sm outline-none focus:ring-2 focus:ring-emerald-500">
           <button id="btnActivate" class="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 text-sm font-medium">Activate</button>
           <button id="btnCancelLicense" class="px-3 py-2 text-gray-500 hover:text-gray-700 text-sm">Cancel</button>
         </div>
@@ -127,6 +127,8 @@
           render();
         }
       });
+      // Periodic license re-validation in the backend (revoked key, offline grace expired)
+      listen('license-changed', () => loadLicense());
       listen('status-changed', () => {
         const el = document.getElementById('monitorBadge');
         if (el) {
@@ -181,7 +183,9 @@
       licenseFree.className = licensed
         ? 'hidden'
         : 'flex items-center justify-between gap-3 flex-wrap';
-      if (licensed) licenseEmail.textContent = 'Licensed to ' + (window._licEmail || 'your account');
+      if (licensed) licenseEmail.textContent = window._licVerified
+        ? 'Last verified ' + window._licVerified.slice(0, 10)
+        : 'Licensed on this machine';
     }
 
     async function loadLicense() {
@@ -191,8 +195,8 @@
         document.querySelector('#freeLimitText').textContent =
           `DeskUptime Free (up to ${freeLimit} URLs)`;
         const lic = await invoke('get_license_state');
-        licensed = !!lic.licenseKey || !!lic.license_key;
-        window._licEmail = lic.email || null;
+        licensed = lic.active === true;
+        window._licVerified = lic.validated_at || null;
         renderLicenseUI();
       } catch (e) { console.error(e); }
     }
@@ -211,8 +215,8 @@
       licenseError.classList.add('hidden');
       try {
         const lic = await invoke('activate_license', { licenseKey: key });
-        licensed = true;
-        window._licEmail = lic.email || null;
+        licensed = lic.active === true;
+        window._licVerified = lic.validated_at || null;
         renderLicenseUI();
       } catch (e) {
         licenseError.textContent = String(e);
@@ -343,7 +347,7 @@
           }
           if (msg.includes('Upgrade to Pro')) {
             banner.innerHTML = msg.replace(/Upgrade to Pro[^"]*/, '') +
-              ' <a href="https://hermes-passiv.pages.dev/deskuptime/#pro" target="_blank" rel="noopener noreferrer" class="underline font-semibold">Buy Pro for $19 →</a>';
+              ' <a href="https://buy.stripe.com/7sY9AS9eX3Iu418fJ5bMQ01" target="_blank" rel="noopener noreferrer" class="underline font-semibold">Buy Pro for $19 →</a>';
           } else {
             banner.textContent = msg;
           }

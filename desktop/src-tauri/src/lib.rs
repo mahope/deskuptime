@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::Mutex;
-use tauri::{Manager, State};
+use tauri::{Emitter, Manager, State};
 
 mod engine;
 mod monitor;
@@ -35,10 +35,21 @@ pub struct CheckResultSummary {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct LicenseState {
     pub license_key: Option<String>,
+    /// Device id the key was activated with (sent as `device_id` to the license server)
     pub instance_id: Option<String>,
+    /// Plan reported by the license server
     pub product: Option<String>,
     pub email: Option<String>,
     pub activated_at: Option<String>,
+    /// Last time the license server confirmed the key (RFC 3339)
+    #[serde(default)]
+    pub validated_at: Option<String>,
+    /// Set when the server definitively rejected the key (revoked/expired/unknown)
+    #[serde(default)]
+    pub invalid_reason: Option<String>,
+    /// Computed when handed to the frontend: is Pro currently unlocked
+    #[serde(default)]
+    pub active: bool,
 }
 
 /// Application state
@@ -49,6 +60,14 @@ pub struct AppState {
 
 /// Free tier: max monitored URLs without a Pro license
 const FREE_URL_LIMIT: usize = 3;
+
+/// Mahope license server (licenses are sold via Stripe)
+const LICENSE_API_BASE: &str = "https://mahope.tools/api/license";
+const PRODUCT_KEY: &str = "deskuptime-pro";
+/// Keep a cached Pro status this long when the license server is unreachable
+const OFFLINE_GRACE_SECS: i64 = 7 * 24 * 60 * 60;
+/// How often the running app re-validates the license
+const LICENSE_RECHECK_SECS: u64 = 12 * 60 * 60;
 
 // ─── Persistence helpers ─────────────────────────────────────────────
 
@@ -157,7 +176,9 @@ fn set_monitor_interval(secs: u64, app: tauri::AppHandle) {
 
 #[tauri::command]
 fn get_license_state(app: tauri::AppHandle) -> LicenseState {
-    load_license(&app)
+    let mut lic = load_license(&app);
+    lic.active = license_active(&lic);
+    lic
 }
 
 #[tauri::command]
@@ -165,45 +186,45 @@ fn get_free_limit() -> usize {
     FREE_URL_LIMIT
 }
 
-/// Activate a Lemon Squeezy license key for this machine
+/// Activate a license key for this machine against the Mahope license server
 #[tauri::command]
 async fn activate_license(
     license_key: String,
     app: tauri::AppHandle,
     state: State<'_, AppState>,
 ) -> Result<LicenseState, String> {
-    let machine = hostname();
+    let key = license_key.trim().to_lowercase();
+    if key.len() != 32 || !key.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err("Invalid license key format (expected 32 hex characters)".to_string());
+    }
+    let device = device_id();
 
-    let client = reqwest::Client::new();
-    let resp = client
-        .post("https://api.lemonsqueezy.com/v1/licenses/activate")
-        .form(&[
-            ("license_key", license_key.as_str()),
-            ("instance_name", machine.as_str()),
-        ])
-        .send()
-        .await
-        .map_err(|e| format!("Network error: {}", e))?;
-
-    let status = resp.status();
-    let data: serde_json::Value =
-        resp.json().await.map_err(|e| format!("Bad response: {}", e))?;
-
-    if !status.is_success() || data["activated"].as_bool() != Some(true) {
-        let msg = data["error"]
-            .as_str()
-            .unwrap_or("License activation failed");
-        return Err(msg.to_string());
+    let data = match post_license(
+        "activate",
+        serde_json::json!({ "license_key": key, "device_id": device, "product": PRODUCT_KEY }),
+    )
+    .await
+    {
+        LicenseReply::Ok(data) => data,
+        LicenseReply::Rejected(msg) | LicenseReply::Transient(msg) => return Err(msg),
+    };
+    if data["activated"].as_bool() != Some(true) {
+        return Err("License activation failed".to_string());
     }
 
-    let lic = LicenseState {
-        license_key: Some(license_key),
-        instance_id: data["instance"]["id"].as_str().map(String::from),
-        product: data["meta"]["product_name"].as_str().map(String::from),
-        email: data["meta"]["customer_email"].as_str().map(String::from),
-        activated_at: Some(chrono::Utc::now().to_rfc3339()),
+    let now = chrono::Utc::now().to_rfc3339();
+    let mut lic = LicenseState {
+        license_key: Some(key),
+        instance_id: Some(device),
+        product: data["plan"].as_str().map(String::from),
+        email: None,
+        activated_at: Some(now.clone()),
+        validated_at: Some(now),
+        invalid_reason: None,
+        active: false,
     };
     save_license(&app, &lic);
+    lic.active = license_active(&lic);
     *state.license.lock().unwrap() = lic.clone();
     Ok(lic)
 }
@@ -215,31 +236,153 @@ fn deactivate_license(app: tauri::AppHandle, state: State<AppState>) -> Result<(
     let _ = std::fs::remove_file(data_dir(&app).join("license.json"));
     *state.license.lock().unwrap() = LicenseState::default();
     // Best-effort remote deactivation so the seat is freed (spawned async, fire-and-forget)
-    if let (Some(key), Some(instance)) = (&lic.license_key, &lic.instance_id) {
-        let key = key.clone();
-        let instance = instance.clone();
+    if let Some(key) = lic.license_key {
+        let device = lic.instance_id.unwrap_or_else(device_id);
         tauri::async_runtime::spawn(async move {
-            let client = reqwest::Client::new();
-            let _ = client
-                .post("https://api.lemonsqueezy.com/v1/licenses/deactivate")
-                .form(&[("license_key", key.as_str()), ("instance_id", instance.as_str())])
-                .send()
-                .await;
+            let _ = post_license(
+                "deactivate",
+                serde_json::json!({ "license_key": key, "device_id": device }),
+            )
+            .await;
         });
     }
     Ok(())
 }
 
+// ─── License server ──────────────────────────────────────────────────
+
+enum LicenseReply {
+    /// 200 with `ok: true`
+    Ok(serde_json::Value),
+    /// Definitive answer: bad format, unknown, revoked/expired, device limit
+    Rejected(String),
+    /// Network error or 5xx: no verdict, keep the cached status
+    Transient(String),
+}
+
+async fn post_license(endpoint: &str, body: serde_json::Value) -> LicenseReply {
+    let client = match reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(20))
+        .build()
+    {
+        Ok(c) => c,
+        Err(e) => return LicenseReply::Transient(format!("Network error: {}", e)),
+    };
+    let resp = match client
+        .post(format!("{}/{}", LICENSE_API_BASE, endpoint))
+        .json(&body)
+        .send()
+        .await
+    {
+        Ok(r) => r,
+        Err(e) => return LicenseReply::Transient(format!("Network error: {}", e)),
+    };
+    let status = resp.status();
+    let data: serde_json::Value = resp.json().await.unwrap_or(serde_json::Value::Null);
+    if status.is_success() && data["ok"].as_bool() == Some(true) {
+        return LicenseReply::Ok(data);
+    }
+    let msg = data["error"]
+        .as_str()
+        .or_else(|| data["message"].as_str())
+        .map(String::from)
+        .unwrap_or_else(|| match status.as_u16() {
+            400 => "Invalid license key format".to_string(),
+            403 => "License key is expired, revoked or for another product".to_string(),
+            404 => "Unknown license key".to_string(),
+            409 => "Device limit reached - deactivate another machine first".to_string(),
+            code => format!("License server error (HTTP {})", code),
+        });
+    if status.is_server_error() {
+        LicenseReply::Transient(msg)
+    } else {
+        LicenseReply::Rejected(msg)
+    }
+}
+
+/// Re-validate the stored key. Transient failures leave the cached state untouched,
+/// so Pro stays unlocked for OFFLINE_GRACE_SECS after the last successful check.
+async fn refresh_license(app: &tauri::AppHandle) {
+    let mut lic = load_license(app);
+    let Some(key) = lic.license_key.clone() else {
+        return;
+    };
+    let device = lic.instance_id.clone().unwrap_or_else(device_id);
+    match post_license(
+        "validate",
+        serde_json::json!({ "license_key": key, "device_id": device, "product": PRODUCT_KEY }),
+    )
+    .await
+    {
+        LicenseReply::Ok(data) if data["valid"].as_bool() == Some(true) => {
+            lic.validated_at = Some(chrono::Utc::now().to_rfc3339());
+            lic.invalid_reason = None;
+            if let Some(plan) = data["plan"].as_str() {
+                lic.product = Some(plan.to_string());
+            }
+        }
+        LicenseReply::Ok(data) => {
+            lic.invalid_reason = Some(
+                data["reason"]
+                    .as_str()
+                    .unwrap_or("License is no longer valid")
+                    .to_string(),
+            );
+        }
+        LicenseReply::Rejected(msg) => lic.invalid_reason = Some(msg),
+        LicenseReply::Transient(_) => return,
+    }
+    save_license(app, &lic);
+    lic.active = license_active(&lic);
+    if let Some(state) = app.try_state::<AppState>() {
+        *state.license.lock().unwrap() = lic.clone();
+    }
+    let _ = app.emit("license-changed", &lic);
+}
+
 // ─── Helpers ─────────────────────────────────────────────────────────
 
 fn hostname() -> String {
+    #[cfg(not(windows))]
+    {
+        if let Ok(out) = std::process::Command::new("hostname").output() {
+            let name = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            if !name.is_empty() {
+                return name;
+            }
+        }
+    }
     std::env::var("COMPUTERNAME")
         .or_else(|_| std::env::var("HOSTNAME"))
         .unwrap_or_else(|_| "desktop".to_string())
 }
 
+/// Stable per-machine id, same scheme as the CLI (`deskuptime-<hostname>`), so the
+/// CLI and the desktop app on one machine share a single activation seat.
+fn device_id() -> String {
+    format!("deskuptime-{}", hostname().trim().to_lowercase())
+        .chars()
+        .take(128)
+        .collect()
+}
+
+/// Pro is unlocked when the server confirmed the key within the offline grace
+/// period and has not definitively rejected it since.
+fn license_active(lic: &LicenseState) -> bool {
+    if lic.license_key.is_none() || lic.invalid_reason.is_some() {
+        return false;
+    }
+    lic.validated_at
+        .as_deref()
+        .and_then(|t| chrono::DateTime::parse_from_rfc3339(t).ok())
+        .map(|t| {
+            (chrono::Utc::now() - t.with_timezone(&chrono::Utc)).num_seconds() < OFFLINE_GRACE_SECS
+        })
+        .unwrap_or(false)
+}
+
 fn is_licensed(app: &tauri::AppHandle) -> bool {
-    load_license(app).license_key.is_some()
+    license_active(&load_license(app))
 }
 
 // ─── App entry ───────────────────────────────────────────────────────
@@ -270,6 +413,13 @@ pub fn run() {
             };
             app.manage(state);
             monitor::spawn_monitor(app.handle().clone());
+            let license_handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                loop {
+                    refresh_license(&license_handle).await;
+                    tokio::time::sleep(std::time::Duration::from_secs(LICENSE_RECHECK_SECS)).await;
+                }
+            });
             use tauri::tray::TrayIconBuilder;
             use tauri::menu::{MenuBuilder, MenuItemBuilder};
 

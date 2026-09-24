@@ -35,6 +35,7 @@ USAGE:
   deskuptime headers <url>      Redirect chain, HTTPS enforcement + security headers
   deskuptime watch <url> [--interval 300] [--webhook URL]  Monitor in background (free: up to 3 URLs)
   deskuptime activate <key>     Unlock Pro with your license key
+  deskuptime deactivate         Free this machine's Pro seat (3 machines per license)
   deskuptime status             Show license + monitored URLs
   deskuptime --version          Show version
   deskuptime --help             This help
@@ -182,24 +183,44 @@ if (command === 'headers') {
 if (command === 'activate') {
   const key = args[1];
   if (!key) {
+    const { BUY_URL } = await import('./license.js');
     console.error('Usage: deskuptime activate <license-key>');
-    console.error('Buy a license at https://hermes-passiv.pages.dev/deskuptime/');
+    console.error(`Buy a license at ${BUY_URL}`);
     process.exit(1);
   }
-  const { hostname } = await import('os');
   console.log('🔑 Activating license...');
   const { activateLicense } = await import('./license.js');
-  const res = await activateLicense(key, `deskuptime-cli-${hostname()}`);
+  const res = await activateLicense(key);
+  // No process.exit() after fetch — see the note at "Unknown command" below.
   if (!res.valid) {
     console.error(`❌ Activation failed: ${res.error}`);
-    process.exit(1);
+    process.exitCode = 1;
+  } else {
+    const state = loadState();
+    state.license = { key: res.key, instance: res.deviceId, plan: res.meta.plan, validatedAt: new Date().toISOString() };
+    saveState(state);
+    console.log(`✅ Pro activated${res.meta.devicesInUse != null ? ' (' + res.meta.devicesInUse + ' of 3 machines in use)' : ''}.`);
+    console.log('   Unlimited monitored URLs, intervals down to 30s, desktop notifications.');
   }
+}
+
+// ── Deactivate (free this machine's seat) ──
+if (command === 'deactivate') {
   const state = loadState();
-  state.license = { key, instance: res.instance || hostname(), email: res.meta?.email || null };
-  saveState(state);
-  console.log(`✅ Pro activated${res.meta?.email ? ' (' + res.meta.email + ')' : ''}.`);
-  console.log('   Unlimited monitored URLs, intervals down to 30s, desktop notifications.');
-  process.exit(0);
+  if (!state.license?.key) {
+    console.log('No Pro license is active on this machine.');
+    process.exit(0);
+  }
+  const { deactivateLicense } = await import('./license.js');
+  const res = await deactivateLicense(state.license.key, state.license.instance);
+  if (!res.deactivated) {
+    console.error(`❌ Deactivation failed: ${res.error}`);
+    process.exitCode = 1;
+  } else {
+    delete state.license;
+    saveState(state);
+    console.log('✅ License deactivated on this machine. The seat can now be used elsewhere.');
+  }
 }
 
 // ── Watch (background monitoring) ──
@@ -233,7 +254,8 @@ if (command === 'status') {
   const state = loadState();
   const urls = Object.keys(state.urls);
   if (state.license?.key) {
-    console.log(`Pro license: active${state.license.email ? ' (' + state.license.email + ')' : ''}`);
+    const verified = state.license.validatedAt ? `, last verified ${state.license.validatedAt.slice(0, 10)}` : '';
+    console.log(`Pro license: active${verified}`);
   } else {
     console.log('Free tier. Activate Pro: deskuptime activate <license-key>');
   }
@@ -247,10 +269,10 @@ if (command === 'status') {
 }
 
 // ── Unknown command ──
-// check/headers fall through here after setting process.exitCode instead of calling
+// check/headers/activate/deactivate fall through here after setting process.exitCode instead of calling
 // process.exit(): exiting while an undici fetch handle is still closing trips a libuv
 // assertion on Windows (src/win/async.c), so the event loop must drain naturally.
-if (command !== 'check' && command !== 'headers') {
+if (!['check', 'headers', 'activate', 'deactivate'].includes(command)) {
   console.error(`Unknown command: "${command}"`);
   console.error('Run "deskuptime --help" for usage.');
   process.exit(1);

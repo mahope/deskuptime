@@ -10,15 +10,16 @@
  */
 
 import { checkUrl } from './engine.js';
-import { activateLicense } from './license.js';
+import { activateLicense, refreshLicense } from './license.js';
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'fs';
 import { join } from 'path';
-import { homedir, hostname } from 'os';
+import { homedir } from 'os';
 import { createHash } from 'crypto';
 
 const FREE_URL_LIMIT = 3;
 const FREE_MIN_INTERVAL = 60;
 const PRO_MIN_INTERVAL = 30;
+const LICENSE_RECHECK_MS = 24 * 60 * 60 * 1000;
 
 const STATE_DIR = join(homedir(), '.deskuptime');
 const STATE_FILE = join(STATE_DIR, 'state.json');
@@ -138,18 +139,31 @@ export async function sendWebhook(webhookUrl, event) {
  * Start the watch loop. Resolves never — runs until SIGINT.
  */
 export async function startWatch(urls, opts = {}) {
+  const { webhookUrl } = opts;
   const state = loadState();
-  let pro = isPro(state);
+  let pro = false;
+
+  // Re-validate a stored license. Server outages keep a cached Pro status for 7 days.
+  async function recheckLicense() {
+    if (!isPro(state)) return false;
+    const r = await refreshLicense(state.license);
+    state.license = r.license;
+    saveState(state);
+    if (!r.pro) console.error(`⚠️  Pro license not active: ${r.reason}`);
+    return r.pro;
+  }
+  pro = await recheckLicense();
+  let lastLicenseCheck = Date.now();
 
   // Optional license activation: deskuptime watch <url> --activate KEY
   if (opts.activateKey && !pro) {
     console.log('🔑 Activating license...');
-    const res = await activateLicense(opts.activateKey, `deskuptime-cli-${hostname()}`);
+    const res = await activateLicense(opts.activateKey);
     if (res.valid) {
-      state.license = { key: opts.activateKey, instance: res.instance || hostname(), email: res.meta?.email || null };
+      state.license = { key: res.key, instance: res.deviceId, plan: res.meta.plan, validatedAt: new Date().toISOString() };
       saveState(state);
       pro = true;
-      console.log(`✅ Pro activated${res.meta?.email ? ' (' + res.meta.email + ')' : ''}.`);
+      console.log('✅ Pro activated.');
     } else {
       console.error(`❌ Activation failed: ${res.error}`);
     }
@@ -186,6 +200,10 @@ export async function startWatch(urls, opts = {}) {
 
   // eslint-disable-next-line no-constant-condition
   while (true) {
+    if (Date.now() - lastLicenseCheck >= LICENSE_RECHECK_MS) {
+      lastLicenseCheck = Date.now();
+      pro = await recheckLicense();
+    }
     const events = await runPass(state);
     if (events.length === 0) {
       console.log(`[${fmtNow()}] ✓ all monitored sites OK`);

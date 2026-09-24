@@ -1,7 +1,7 @@
 # BUILD — DeskUptime: Korteste vej til første betalende kunde
 
 ## Produkt
-Desktop website monitor (uptime + SSL + content changes). CLI gratis, Pro $19 via LS license key.
+Desktop website monitor (uptime + SSL + content changes). CLI gratis, Pro $19 engang (3 maskiner) via Stripe og Mahopes licensserver.
 
 ## Trappe til betaling
 
@@ -15,13 +15,12 @@ Desktop website monitor (uptime + SSL + content changes). CLI gratis, Pro $19 vi
 - [x] Navlink fra hovedsite
 - [x] Deployet og verificeret live
 
-### Trin 3 🟡 — LS license flow (klar til key)
-- [x] src/license.js — validate, activate, deactivate via LS License API
-- [ ] Når LS key kommer: opret produkt "Deskuptime Pro" på LS
-- [ ] Opret variant "$19 one-time" med license key generation
-- [ ] Kør ls-setup.sh med API key → checkout URL
-- [ ] Opdater landing page med checkout link + license unlock flow
-- [ ] Copy checkout URL to clipboard + go
+### Trin 3 ✅ — Licensflow via Stripe (24/9)
+- [x] Køb via Stripe Payment Link: https://buy.stripe.com/7sY9AS9eX3Iu418fJ5bMQ01
+- [x] src/license.js — activate/validate/deactivate mod https://mahope.tools/api/license/* (product `deskuptime-pro`)
+- [x] Desktop-appen (Rust) bruger samme licens-API; fælles device_id `deskuptime-<hostname>`
+- [x] Blød fejl: netværksfejl/5xx beholder cachet Pro-status i 7 dage
+- [ ] Opdater landing page (deskuptime.com) med betalingslinket
 
 ### Trin 4.5 ✅ — Watch mode i CLI (28/8, iteration 401)
 - [x] src/watch.js — baggrundsloop, state i ~/.deskuptime/state.json, resume
@@ -53,22 +52,18 @@ Desktop website monitor (uptime + SSL + content changes). CLI gratis, Pro $19 vi
 - [ ] Blog post: "Why I built a desktop uptime checker — and killed my $144/year SaaS bill"
 - [ ] Product Hunt launch prep
 
-## Når LS key kommer (estimateret — 5 min arbejde)
+## Betaling og licens
 
-```bash
-LEMONSQUEEZY_API_KEY=ls_xxx ./scripts/ls-setup.sh
-# ↑ opretter produkt, variant, checkout link, automatisk
-```
+Salget kører via Stripe-kontoen Mahope.dk og Mahopes egen licensserver. Klienten har
+ingen nøgler; den kender kun betalingslinket og det offentlige licens-API. Kontrakten
+står i `business/planer/2026-09-24-stripe-kontrakt.md` i workspace-repoet.
 
-Da LS har API: alt kan scriptes. Én kørsel → produkt eksisterer → checkout link → plaster på landing page → klar til at sælge.
+## Status
 
-## Ventetid er arbejdstid
-
-Mens LS key ikke er her:
 1. ✅ Engine bygget
 2. ✅ CLI bygget + testet
 3. ✅ Landing page bygget + deployet
-4. ✅ LS license module bygget
+4. ✅ Licensmodul (Stripe + mahope.tools) bygget
 5. ⬜ Tauri desktop app
 6. ✅ Release workflow + Homebrew tap (auto-publish CLI tarball)
 7. ⬜ SEO/content til landing page

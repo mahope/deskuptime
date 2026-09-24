@@ -54,10 +54,20 @@ It prints a line on every status change: site down 🚨, back up ✅, SSL expiri
 
 ## Pro license
 
-A one-time $19 purchase via [Lemon Squeezy](https://lemonsqueezy.com). License key unlocks
-the desktop app, native notifications and unlimited URLs. 3 activations per license.
+A one-time $19 purchase. The license key unlocks the desktop app, native notifications
+and unlimited URLs on up to 3 machines.
 
-Buy Pro at [deskuptime.com](https://deskuptime.com/).
+**[Buy DeskUptime Pro](https://buy.stripe.com/7sY9AS9eX3Iu418fJ5bMQ01)** — the key is shown right after checkout and sent by email.
+
+```bash
+deskuptime activate <license-key>   # unlock Pro on this machine
+deskuptime deactivate               # free this machine's seat for another one
+```
+
+The CLI and the desktop app on the same machine share one seat. The license is re-checked
+periodically; if the license server is unreachable, Pro keeps working for 7 days.
+
+Like the free tools? [Support open source development](https://donate.stripe.com/7sYeVcbn50wieFM8gDbMQ0c).
 
 ## How it works
 
@@ -158,7 +168,8 @@ npm test
 
 ## Links
 
-Product page, desktop app downloads and Pro license: **https://deskuptime.com/**
+Product page and desktop app downloads: **https://deskuptime.com/**
+Buy Pro: **https://buy.stripe.com/7sY9AS9eX3Iu418fJ5bMQ01**
 
 ## Releasing
 

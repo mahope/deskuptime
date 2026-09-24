@@ -110,3 +110,26 @@ test('cli: headers without URL exits non-zero', async () => {
     (err) => err.code !== 0
   );
 });
+
+// ── watch: regression — startWatch crashed with ReferenceError (webhookUrl) ──
+test('cli: watch starts monitoring without crashing', { timeout: 30000 }, async () => {
+  const { spawn } = await import('node:child_process');
+  const home = mkdtempSync(join(tmpdir(), 'du-home-'));
+  const child = spawn(process.execPath, [CLI, 'watch', 'https://example.com'], {
+    env: { ...process.env, HOME: home, USERPROFILE: home },
+  });
+  let out = '';
+  child.stdout.on('data', (d) => { out += d; });
+  child.stderr.on('data', (d) => { out += d; });
+  const exitCode = await new Promise((resolve) => {
+    const timer = setTimeout(() => { child.kill(); resolve(null); }, 8000);
+    child.on('exit', (code) => { clearTimeout(timer); resolve(code); });
+    child.stdout.on('data', () => {
+      if (out.includes('Monitoring')) { clearTimeout(timer); child.kill(); resolve(null); }
+    });
+  });
+  rmSync(home, { recursive: true, force: true });
+  assert.ok(!out.includes('ReferenceError'), out);
+  assert.match(out, /Monitoring 1 URL/);
+  assert.equal(exitCode, null);
+});

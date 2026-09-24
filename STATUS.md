@@ -25,7 +25,7 @@ Konklusion: WordPress er en indpakning, ikke produktet. Bygget universelt fra be
 | GitHub stars / views 14d | **0 / 0** | gh api traffic |
 
 ## Blokering (1 linje)
-LS API key i Bitwarden (vault `unauthenticated`), domæne deskuptime.com ikke købt.
+~~Betalingsnøgle~~ løst 24/9: salg via Stripe-betalingslink + mahope.tools-licens-API. Domæne deskuptime.com ikke købt.
 
 ## Hvad kørte jeg i denne iteration
 
@@ -37,11 +37,10 @@ LS API key i Bitwarden (vault `unauthenticated`), domæne deskuptime.com ikke k�
 
 ## Næste skridt (prioriteret)
 
-1. LS key i Bitwarden → opret checkout via BUILD.md (~10 min).
-2. Sæt checkout URL i Config Worker → Buy Now-knap aktiveres live.
+1. ✅ (24/9) Betaling via Stripe: https://buy.stripe.com/7sY9AS9eX3Iu418fJ5bMQ01
+2. Sæt betalingslinket på produktsiden → Buy Now-knap aktiveres live.
 3. Køb deskuptime.com via Cloudflare Registrar.
 4. Når alt betaling virker: udgiv på ProductHunt / submit til AlternativTo.
 
 ## Venter på Mads
-- Lås Bitwarden op → LS key (bygger klar, 10 min når den kommer).
 - Køb deskuptime.com ($~10/yr, forhåndsgodkendt).
