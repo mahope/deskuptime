@@ -8,6 +8,7 @@ import { tmpdir } from 'node:os';
 import { join, dirname, win32 } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { checkUrl, checkUrls } from '../src/engine.js';
+import { checkReachability } from '../src/checkers/ping.js';
 import { getStateFile, loadState, runPass, saveState, isPro } from '../src/watch.js';
 
 const run = promisify(execFile);
@@ -163,6 +164,131 @@ test('cli: status matrix agrees across JSON, human output and exit code', async 
       return true;
     }
   );
+});
+
+test('check: a route that answers 404 to HEAD but 200 to GET is UP', async (t) => {
+  const methods = [];
+  const server = createServer((req, res) => {
+    methods.push(req.method);
+    if (req.method === 'HEAD') {
+      res.writeHead(404);
+      res.end();
+      return;
+    }
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end('{"ok":true}');
+  });
+  const port = await listen(server);
+  t.after(() => close(server));
+  const url = `http://127.0.0.1:${port}/stats`;
+
+  const reachability = await checkReachability(url, { timeoutMs: 2000 });
+  assert.equal(reachability.healthy, true);
+  assert.equal(reachability.statusCode, 200);
+  // checkUrl adds its own content GET, so the fallback is the second request.
+  assert.deepEqual(methods, ['HEAD', 'GET']);
+
+  methods.length = 0;
+  const result = await checkUrl(url, { timeoutMs: 2000 });
+  assert.equal(result.reachable, true);
+  assert.equal(result.healthy, true);
+  assert.equal(result.statusCode, 200);
+  assert.equal(result.error, undefined);
+  assert.equal(methods[0], 'HEAD');
+  assert.ok(methods.includes('GET'));
+
+  methods.length = 0;
+  const { stdout } = await run(process.execPath, [CLI, 'check', url, '--json', '--timeout', REQUEST_TIMEOUT]);
+  assert.equal(JSON.parse(stdout)[0].statusCode, 200);
+  assert.ok(methods.includes('GET'));
+});
+
+test('check: HEAD 405 and HEAD 501 also fall back to GET', async (t) => {
+  for (const headStatus of [405, 501]) {
+    const methods = [];
+    const server = createServer((req, res) => {
+      methods.push(req.method);
+      if (req.method === 'HEAD') {
+        res.writeHead(headStatus);
+        res.end();
+        return;
+      }
+      res.writeHead(200, { 'content-type': 'text/plain' });
+      res.end('ok');
+    });
+    const port = await listen(server);
+
+    const result = await checkReachability(`http://127.0.0.1:${port}/x`, { timeoutMs: 2000 });
+    assert.equal(result.healthy, true, `HEAD ${headStatus} should fall back to GET`);
+    assert.deepEqual(methods, ['HEAD', 'GET']);
+
+    await close(server);
+  }
+});
+
+test('check: a route that is 404 for both HEAD and GET is still DOWN', async (t) => {
+  const methods = [];
+  const server = createServer((req, res) => {
+    methods.push(req.method);
+    res.writeHead(404);
+    res.end('not found');
+  });
+  const port = await listen(server);
+  t.after(() => close(server));
+
+  const result = await checkReachability(`http://127.0.0.1:${port}/missing`, { timeoutMs: 2000 });
+  assert.equal(result.reachable, true);
+  assert.equal(result.healthy, false);
+  assert.equal(result.statusCode, 404);
+  assert.equal(result.error, 'HTTP 404');
+  assert.deepEqual(methods, ['HEAD', 'GET']);
+});
+
+test('check: a healthy HEAD response is not retried with GET', async (t) => {
+  const methods = [];
+  const server = createServer((req, res) => {
+    methods.push(req.method);
+    res.writeHead(200);
+    res.end();
+  });
+  const port = await listen(server);
+  t.after(() => close(server));
+
+  const result = await checkReachability(`http://127.0.0.1:${port}/`, { timeoutMs: 2000 });
+  assert.equal(result.healthy, true);
+  assert.deepEqual(methods, ['HEAD']);
+});
+
+test('check: the GET fallback shares the --timeout budget with the HEAD request', async (t) => {
+  let methods = 0;
+  const sockets = new Set();
+  const server = createServer((req, res) => {
+    methods++;
+    if (req.method === 'HEAD') {
+      res.writeHead(404);
+      res.end();
+      return;
+    }
+    // Never answer the GET, so only the shared budget can end the check.
+  });
+  server.on('connection', socket => {
+    sockets.add(socket);
+    socket.on('close', () => sockets.delete(socket));
+  });
+  const port = await listen(server);
+  t.after(async () => {
+    for (const socket of sockets) socket.destroy();
+    await close(server);
+  });
+
+  const start = Date.now();
+  const result = await checkReachability(`http://127.0.0.1:${port}/hang-after-head`, { timeoutMs: 500 });
+  const elapsed = Date.now() - start;
+
+  assert.equal(result.reachable, false);
+  assert.equal(result.errorType, 'timeout');
+  assert.equal(methods, 2);
+  assert.ok(elapsed < 1500, `expected one shared 500ms budget, took ${elapsed}ms`);
 });
 
 test('cli: one invalid URL rejects the whole check before any request', async (t) => {
