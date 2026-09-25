@@ -248,6 +248,7 @@ Den første gate-definition er registreret her:
 - Efter hver merge/push til `main` skal der tilføjes `VERIFICÉR DEPLOY: <ændring> <commit-sha> <tidspunkt>`.
 - Livestatus skal verificeres ved læsning af faktisk indhold; HTTP 200 alene beviser ikke ny kode.
 - VERIFICÉR DEPLOY: researchplan `812f469` 2026-09-24T23:44:36Z
+- VERIFICÉR DEPLOY: desktop-sikkerhedsbridge, lokale frontend-assets og IPC-rettelser `f0d4fa7` 2026-09-25T05:12:31Z
 
 ## Iterationslog
 
