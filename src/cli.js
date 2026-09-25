@@ -58,11 +58,12 @@ FEATURES:
   • JSON output with --json for scripting/CI
   • Zero dependencies — Node 24+, any OS
 
-PRO FEATURES (license key):
+PRO FEATURES (license key, $19 one-time):
+  • Unlimited monitored URLs and a 30s interval (free: 3 URLs, 60s minimum)
   • Webhook alerts: deskuptime watch <url> --webhook https://hooks.example.com/xyz
-  • Desktop app with system tray + native notifications
-  • More than 3 monitored URLs
-  • Email/push alerts on status changes
+  • Desktop app with tray, background monitoring and notifications (Windows/Linux/macOS)
+
+  Full free/Pro matrix and webhook payload: docs/pro-alerts.md
 `.trim());
 }
 

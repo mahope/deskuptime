@@ -22,6 +22,16 @@ const FREE_MIN_INTERVAL = 60;
 const PRO_MIN_INTERVAL = 30;
 const LICENSE_RECHECK_MS = 24 * 60 * 60 * 1000;
 const STATE_LOCK_MAX_AGE_MS = 5 * 60 * 1000;
+const WEBHOOK_TIMEOUT_MS = 10_000;
+export const PRO_BUY_URL = 'https://buy.stripe.com/7sY9AS9eX3Iu418fJ5bMQ01';
+
+/**
+ * One upgrade path, used wherever a free user hits a Pro-only limit.
+ * Kept in sync with docs/pro-alerts.md.
+ */
+function upgradeHint(feature) {
+  return `Pro unlocks ${feature}: ${PRO_BUY_URL} — then "deskuptime activate <key>".`;
+}
 
 export function getStateFile({ env = process.env, platform = process.platform } = {}) {
   const home = platform === 'win32'
@@ -196,7 +206,7 @@ function addMonitoredUrls(state, urls, pro) {
     if (Object.keys(state.urls).length >= limit) {
       console.log(pro
         ? `⚠️  Skipping duplicate/extra URL: ${url}`
-        : `⚠️  Free tier monitors ${FREE_URL_LIMIT} URLs. Run "deskuptime activate <key>" for Pro (unlimited). ${url} not added.`);
+        : `⚠️  Free tier monitors ${FREE_URL_LIMIT} URLs. ${url} not added. ${upgradeHint('unlimited URLs and a 30s interval')}`);
       continue;
     }
     state.urls[url] = {
@@ -319,9 +329,11 @@ async function notify(title, message) {
 }
 
 /**
- * POST an event to a user-supplied webhook URL (Pro only). Best-effort.
+ * POST an event to a user-supplied webhook URL (Pro only).
+ * Best-effort, no retry, no queue — see docs/pro-alerts.md §2.
+ * Bounded by a hard timeout so a hanging endpoint cannot stall the watch loop.
  */
-export async function sendWebhook(webhookUrl, event) {
+export async function sendWebhook(webhookUrl, event, { timeoutMs = WEBHOOK_TIMEOUT_MS } = {}) {
   try {
     const res = await fetch(webhookUrl, {
       method: 'POST',
@@ -333,10 +345,14 @@ export async function sendWebhook(webhookUrl, event) {
         message: event.message,
         timestamp: new Date().toISOString(),
       }),
+      signal: AbortSignal.timeout(timeoutMs),
     });
     if (!res.ok) console.error(`⚠️  Webhook responded ${res.status}`);
+    return res.ok;
   } catch (err) {
-    console.error(`⚠️  Webhook delivery failed: ${err.message}`);
+    const timedOut = err.name === 'TimeoutError' || err.name === 'AbortError';
+    console.error(`⚠️  Webhook delivery failed: ${timedOut ? `no response within ${timeoutMs}ms` : err.message}`);
+    return false;
   }
 }
 
@@ -382,7 +398,14 @@ export async function startWatch(urls, opts = {}) {
   mergePersistedState(state, opts);
   saveState(state, opts);
 
-  console.log(`\n👀 Monitoring ${Object.keys(state.urls).length} URL(s), every ${interval}s.${pro ? ' [Pro]' : ' [free tier]'}.${webhookUrl ? ' Webhook alerts on.' : ''} Ctrl+C to stop.\n`);
+  console.log(`\n👀 Monitoring ${Object.keys(state.urls).length} URL(s), every ${interval}s.${pro ? ' [Pro]' : ' [free tier]'}.${pro && webhookUrl ? ' Webhook alerts on.' : ''} Ctrl+C to stop.\n`);
+
+  if (webhookUrl && !pro) {
+    console.error(`⚠️  --webhook needs an active Pro license, so no webhook was sent yet. ${upgradeHint('webhook alerts')}`);
+    console.error('    Terminal alerts keep working. Monitoring starts now; the webhook activates with the license.\n');
+  } else if (pro && !webhookUrl && process.platform !== 'darwin') {
+    console.error('ℹ️  Local desktop notifications are macOS-only in the CLI. Use --webhook for alerts on this platform.\n');
+  }
 
   process.on('SIGINT', () => {
     console.log('\n👋 Watch stopped. State saved in ~/.deskuptime/ — run again to resume.');

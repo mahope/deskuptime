@@ -58,20 +58,35 @@ has `reachable: true` but `healthy: false`. Redirects are followed and the final
 is evaluated. A multi-URL check validates every URL before sending any request; one
 invalid URL fails the complete check with exit code `1`.
 
-## Pro features (license key — $19 one-time)
+## Free vs Pro
 
-- **Desktop app** with system tray + native notifications
-- **More than 3 monitored URLs**
-- **Email/Slack/webhook alerts** on status changes
+DeskUptime is free and complete for the core job: checking your sites. Pro removes the
+limits and adds alerts that reach you when you are not at the terminal.
+
+| | Free CLI (MIT) | Pro ($19 one-time) |
+|---|---|---|
+| `check` / `headers` on any number of URLs | ✅ | ✅ |
+| SSL expiry, content-change detection | ✅ | ✅ |
+| GitHub Action with JSON + job summary | ✅ | ✅ |
+| `watch` background monitoring | 3 URLs, min. 60s interval | Unlimited URLs, min. 30s interval |
+| Terminal alerts on up/down/SSL/content change | ✅ | ✅ |
+| Webhook alerts | — | ✅ |
+| Local desktop notification | — | ✅ macOS (Windows/Linux via desktop app) |
+| Desktop app: tray, background monitoring | — | ✅ |
+
+There is no email or Slack/Teams integration — and there is no "coming soon" upsell in
+this README. The channels that exist today are the ones above. The full matrix, the
+webhook payload and the offline behaviour are specified in
+[`docs/pro-alerts.md`](docs/pro-alerts.md).
 
 ## Pro license
 
-A one-time $19 purchase. The license key unlocks the desktop app, native notifications
-and unlimited URLs on up to 3 machines.
+A one-time $19 purchase unlocks unlimited URLs, webhook alerts and the desktop app on
+up to 3 machines. The desktop app is a separate, closed-source download
+([`desktop-v0.2.7`](https://github.com/mahope/deskuptime/releases/tag/desktop-v0.2.7),
+macOS + Windows); unlock it with your license key.
 
-The CLI in this repository is open source (MIT). DeskUptime Desktop Pro is a paid, closed-source app: download it from https://deskuptime.com/ and unlock it with your license key.
-
-**[Buy DeskUptime Pro](https://buy.stripe.com/7sY9AS9eX3Iu418fJ5bMQ01)** — the key is shown right after checkout and sent by email.
+**[Buy DeskUptime Pro](https://buy.stripe.com/7sY9AS9eX3Iu418fJ5bMQ01)** — one-time $19, key shown right after checkout and sent by email.
 
 ```bash
 deskuptime activate <license-key>   # unlock Pro on this machine
@@ -79,7 +94,8 @@ deskuptime deactivate               # free this machine's seat for another one
 ```
 
 The CLI and the desktop app on the same machine share one seat. The license is re-checked
-periodically; if the license server is unreachable, Pro keeps working for 7 days.
+daily; if the license server is unreachable, Pro keeps working from a cached status for
+7 days, so an outage never locks you out.
 
 Like the free tools? [Support open source development](https://donate.stripe.com/7sYeVcbn50wieFM8gDbMQ0c).
 
@@ -137,7 +153,7 @@ jobs:
             https://api.yoursite.com/health
       - name: Alert on failure
         if: failure()
-        run: echo "A monitored site is down!" # wire to Slack/email/webhook here
+        run: echo "A monitored site is down!" # POST to your own webhook here
 ```
 
 Inputs:
@@ -187,8 +203,10 @@ npm test
 
 ## Links
 
-Product page and desktop app downloads: **https://deskuptime.com/**
-Buy Pro: **https://buy.stripe.com/7sY9AS9eX3Iu418fJ5bMQ01**
+- Product page: **https://deskuptime.com/**
+- This repository: the free CLI — `npm i -g @mahope/deskuptime` or `npx @mahope/deskuptime`
+- Desktop app download: **https://github.com/mahope/deskuptime/releases/tag/desktop-v0.2.7**
+- Buy Pro: **https://buy.stripe.com/7sY9AS9eX3Iu418fJ5bMQ01**
 
 ## Releasing
 
