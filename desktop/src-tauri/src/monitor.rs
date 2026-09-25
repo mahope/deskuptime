@@ -5,6 +5,7 @@
 use crate::engine;
 use crate::{AppState, MonitoredUrl};
 use serde_json::json;
+use url::Url;
 use std::sync::Mutex;
 use std::time::Duration;
 use tauri::{Emitter, Manager};
@@ -107,9 +108,16 @@ async fn run_round(app: &tauri::AppHandle, state: &AppState) -> Result<bool, Str
     Ok(any_change)
 }
 
+fn notification_host(url: &str) -> String {
+    Url::parse(url)
+        .ok()
+        .and_then(|parsed| parsed.host_str().map(str::to_string))
+        .unwrap_or_else(|| "site".to_string())
+}
+
 fn notify_status_change(app: &tauri::AppHandle, url: &str, up: bool) {
     use tauri_plugin_notification::NotificationExt;
-    let host = url.split("://").nth(1).unwrap_or(url).trim_end_matches('/');
+    let host = notification_host(url);
     let title = if up {
         "Site is back UP ✓"
     } else {
@@ -154,6 +162,15 @@ mod tests {
             content: None,
             error: None,
         }
+    }
+
+    #[test]
+    fn notification_omits_paths_and_query_strings() {
+        assert_eq!(
+            notification_host("https://example.com/private?token=secret"),
+            "example.com"
+        );
+        assert_eq!(notification_host("not a URL"), "site");
     }
 
     #[test]

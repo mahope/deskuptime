@@ -3,7 +3,7 @@
 STATUS: I GANG
 Iteration: 2 — 2026-09-25
 Arbejdsgren: `ceo/desktop-security`
-Næste handling: committér den grønne P0-1 desktop-sikkerhedsændring, merge til `main`, og fortsæt med platform-smoke før P0-1 afsluttes.
+Næste handling: committér review-rettelserne, merge til `main`, og fortsæt med Windows-/interaktiv smoke før P0-1 afsluttes.
 
 ## Mission
 
@@ -74,7 +74,7 @@ Den første gate-definition er registreret her:
 5. Der er ingen remote script-kilde eller bred `script-src` i produktions-CSP.
 6. IPC-regressionstest dækker reachable, down, status, timing, SSL-null og fejl.
 
-**Status 2026-09-25:** Implementeret på `ceo/desktop-security`: Tauri bridge og lokal CSS uden remote executable assets, stram CSP, minimal event capability, canonical URL-validering i Rust, snake_case IPC, sikker DOM-rendering og redigeret licens-DTO. `npm test` er grøn med 32/32; `cargo check --locked` og `cargo test --locked` er grønne med 9 tests. `cargo tauri build --debug` byggede macOS-appen og DMG'en. Windows- og interaktiv smoke-test mangler stadig før P0-1 kan afsluttes.
+**Status 2026-09-25:** Implementeret på `ceo/desktop-security`: Tauri bridge og lokal CSS uden remote executable assets, stram CSP, minimal event capability, canonical URL-validering i Rust, snake_case IPC, sikker DOM-rendering og redigeret licens-DTO. `npm test` er grøn med 32/32; `cargo check --locked` og `cargo test --locked` er grønne med 10 tests. `cargo tauri build --debug` byggede macOS-appen og DMG'en. Fresh review fandt ingen P1; stale event-resultater, URL-state-race og query-streng i notifikationer blev rettet. Licensrefresh-race, atomisk `0600`-lagring og bekræftet deactivation udskydes til P0-7. Windows- og interaktiv smoke-test mangler stadig før P0-1 kan afsluttes.
 
 **Mulige filer:** `desktop/frontend/index.html`, `desktop/frontend/app.js`, `desktop/frontend/styles.css`, `desktop/src-tauri/tauri.conf.json`, `desktop/src-tauri/capabilities/default.json`, `desktop/src-tauri/src/lib.rs`, `desktop/src-tauri/src/monitor.rs`, `test/desktop.test.js`.
 
@@ -223,12 +223,14 @@ Den første gate-definition er registreret her:
 - `2026-09-25`: `npm run lint`: mangler script.
 - `2026-09-25`: `npm run build`: mangler script.
 - `2026-09-25`: `cargo check --locked`: grøn; kun to eksisterende `dead_code`-warnings i `desktop/src-tauri/src/engine/mod.rs`.
-- `2026-09-25`: `cargo test --locked`: grøn, 9 tests.
-- `2026-09-25`: `cargo tauri build --debug`: grøn på macOS; producerede lokal app og DMG.
+- `2026-09-25`: `cargo test --locked`: grøn, 10 tests.
+- `2026-09-25`: `cargo tauri build --debug`: grøn på macOS; producerede lokal app og DMG efter review-rettelser.
+- `2026-09-25`: Fresh code review: ingen P1; tre P2 rettet (stale event-resultater, URL-state-race, forældet notifikations-URL).
+- `2026-09-25`: Licensrefresh-race, atomisk `0600`-lagring og deactivation-bekræftelse er bekræftede P0-7-follow-ups, ikke P0-1.
 - `2026-09-25`: `cargo fmt -- --check`: rapportérer eksisterende formateringsafvigelser på tværs af eksisterende Rust-filer; ikke ændret i denne iteration.
 - `2026-09-25`: `npm audit --omit=dev`: ikke mulig uden lockfile; ikke klassificeret som grøn.
-- `2026-09-25`: Trivy/OSV fandt `glib 0.18.5`, fixed i `0.20.0`; kræver kompatibel Tauri/GTK-opdatering.
-- Ingen større dependency-opgradering er udført i denne research-iteration.
+- `2026-09-25`: Trivy/OSV fandt `glib 0.18.5`, fixed i `0.20.0`; kræver kompatibel Tauri/GTK-opgradering.
+- Ingen større dependency-opgradering er udført i denne iteration.
 
 ## ❓ Til Mads
 

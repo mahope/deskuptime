@@ -257,8 +257,9 @@ fn load_license(app: &tauri::AppHandle) -> LicenseState {
 #[tauri::command]
 fn get_urls(app: tauri::AppHandle, state: State<AppState>) -> Vec<MonitoredUrl> {
     // Reload from disk so external edits survive restarts too
+    let mut urls = state.urls.lock().unwrap();
     let loaded = load_urls(&app);
-    *state.urls.lock().unwrap() = loaded.clone();
+    *urls = loaded.clone();
     loaded
 }
 

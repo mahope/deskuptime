@@ -300,7 +300,10 @@ async function checkUrl(targetUrl) {
     const summary = toCheckResultSummary(result);
     try {
       const persisted = await invoke('update_url_result', { url: targetUrl, result: summary });
-      entry.last_result = normalizeMonitoredUrl({ last_result: persisted }).last_result;
+      const currentEntry = urls.find(item => item.url === targetUrl);
+      if (currentEntry) {
+        currentEntry.last_result = normalizeMonitoredUrl({ last_result: persisted }).last_result;
+      }
     } catch {
       setMessage('The check completed, but its result could not be saved.', true);
     }
@@ -438,7 +441,7 @@ async function init() {
   bindEvents();
   await listen('monitor-results', event => {
     const payload = event.payload;
-    if (Array.isArray(payload?.urls) && payload.urls.length > 0) {
+    if (Array.isArray(payload?.urls)) {
       urls = payload.urls.map(normalizeMonitoredUrl);
       render();
     }
