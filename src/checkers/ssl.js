@@ -5,6 +5,7 @@
 
 import https from 'https';
 import tls from 'tls';
+import net from 'net';
 import { URL } from 'url';
 
 export function checkSSL(url) {
@@ -14,8 +15,11 @@ export function checkSSL(url) {
       const hostname = parsed.hostname;
       const port = parseInt(parsed.port, 10) || 443;
 
+      // SNI must not be an IP literal (RFC 6066). Node 24+ throws instead of
+      // ignoring it, so monitoring a server by IP failed the whole check and
+      // reported "SSL handshake error" instead of the certificate expiry.
       const socket = tls.connect(port, hostname, {
-        servername: hostname,
+        ...(net.isIP(hostname) ? {} : { servername: hostname }),
         rejectUnauthorized: false,
         timeout: 10000,
       });

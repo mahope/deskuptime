@@ -6,16 +6,75 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { execFile } from 'node:child_process';
+import { execFile, spawn, execFileSync } from 'node:child_process';
 import { promisify } from 'node:util';
 import { createHash } from 'node:crypto';
 import { mkdtempSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
+import { createServer } from 'node:http';
+import { createServer as createTlsServer } from 'node:https';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { checkSSL } from '../src/checkers/ssl.js';
 
 const run = promisify(execFile);
 const CLI = fileURLToPath(new URL('../src/cli.js', import.meta.url));
+const REQUEST_TIMEOUT = '5000';
+
+// Every network test below runs against a local server. A live example.com
+// dependency fails on a flaky connection, behind a proxy or when the site is
+// slow, and it never proved anything about our own code.
+async function listen(server) {
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  return server.address().port;
+}
+
+async function close(server) {
+  server.closeAllConnections();
+  await new Promise(resolve => server.close(resolve));
+}
+
+async function fixtureServer(t) {
+  const server = createServer((req, res) => {
+    const { pathname } = new URL(req.url, 'http://localhost');
+    if (pathname === '/redirect') {
+      res.writeHead(302, { location: '/final' });
+      res.end();
+      return;
+    }
+    res.writeHead(200, {
+      'content-type': 'text/html',
+      'strict-transport-security': 'max-age=63072000',
+    });
+    res.end('<html><body>fixture</body></html>');
+  });
+  const port = await listen(server);
+  t.after(() => close(server));
+  return `http://127.0.0.1:${port}`;
+}
+
+// A self-signed cert for the SSL test, generated per run so nothing expires in
+// the repo. NODE_EXTRA_CA_CERTS then makes fetch trust exactly this cert.
+function selfSignedCert(dir) {
+  const key = join(dir, 'key.pem');
+  const cert = join(dir, 'cert.pem');
+  execFileSync('openssl', [
+    'req', '-x509', '-newkey', 'rsa:2048', '-nodes',
+    '-keyout', key, '-out', cert, '-days', '2',
+    '-subj', '/CN=127.0.0.1',
+    '-addext', 'subjectAltName=IP:127.0.0.1',
+  ], { stdio: 'ignore' });
+  return { key: readFileSync(key), cert: readFileSync(cert), certPath: cert };
+}
+
+function opensslAvailable() {
+  try {
+    execFileSync('openssl', ['version'], { stdio: 'ignore' });
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 // ── Unit: hash-based change detection ──
 function sha(s) { return createHash('sha256').update(s).digest('hex'); }
@@ -61,20 +120,72 @@ test('cli: check rejects invalid URLs before running', async () => {
   );
 });
 
-// ── Live check against example.com (network required) ──
-test('cli: check https://example.com returns UP + SSL', { timeout: 30000 }, async () => {
-  const { stdout } = await run(process.execPath, [CLI, 'check', 'https://example.com']);
-  assert.match(stdout, /✅ https:\/\/example\.com/);
+// ── check against a local HTTP fixture (no live network) ──
+test('cli: check against a local server returns UP + status', { timeout: 30000 }, async (t) => {
+  const baseUrl = await fixtureServer(t);
+  const { stdout } = await run(process.execPath, [CLI, 'check', `${baseUrl}/final`]);
+  assert.match(stdout, new RegExp(`✅ ${baseUrl}/final`));
   assert.match(stdout, /Status:\s+200/);
-  assert.match(stdout, /SSL/);
+  assert.match(stdout, /SSL:\s+N\/A/);
+});
+
+test('cli: check against a local TLS server reports real certificate days', { timeout: 30000 }, async (t) => {
+  if (!opensslAvailable()) {
+    t.skip('openssl is unavailable, cannot create a TLS fixture');
+    return;
+  }
+  const dir = mkdtempSync(join(tmpdir(), 'du-cert-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const { key, cert, certPath } = selfSignedCert(dir);
+  const server = createTlsServer({ key, cert }, (_req, res) => {
+    res.writeHead(200, { 'content-type': 'text/html' });
+    res.end('<html><body>tls fixture</body></html>');
+  });
+  const port = await listen(server);
+  t.after(() => close(server));
+  const url = `https://127.0.0.1:${port}/`;
+  const env = { ...process.env, NODE_EXTRA_CA_CERTS: certPath };
+
+  const { stdout } = await run(process.execPath, [CLI, 'check', url, '--timeout', REQUEST_TIMEOUT], { env });
+  assert.match(stdout, new RegExp(`✅ ${url}`));
+  assert.match(stdout, /Status:\s+200/);
+  assert.match(stdout, /SSL:\s+2d/);
+
+  const { stdout: json } = await run(process.execPath, [CLI, 'check', url, '--json', '--timeout', REQUEST_TIMEOUT], { env });
+  const [result] = JSON.parse(json);
+  assert.equal(result.healthy, true);
+  assert.equal(result.statusCode, 200);
+  assert.equal(result.sslError, null);
+  assert.ok(result.sslDaysRemaining >= 1 && result.sslDaysRemaining <= 2, `got ${result.sslDaysRemaining}`);
+});
+
+test('ssl: an IP-literal host is checked instead of failing the handshake', { timeout: 30000 }, async (t) => {
+  if (!opensslAvailable()) {
+    t.skip('openssl is unavailable, cannot create a TLS fixture');
+    return;
+  }
+  const dir = mkdtempSync(join(tmpdir(), 'du-cert-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const { key, cert } = selfSignedCert(dir);
+  const server = createTlsServer({ key, cert }, (_req, res) => res.end('ok'));
+  const port = await listen(server);
+  t.after(() => close(server));
+
+  // Node 24+ throws when SNI is an IP literal, so passing one broke every
+  // SSL check for a server monitored by IP and hid the expiry countdown.
+  const result = await checkSSL(`https://127.0.0.1:${port}/`);
+  assert.equal(result.error, undefined);
+  assert.equal(result.isExpired, false);
+  assert.ok(result.validDays >= 1 && result.validDays <= 2, `got ${result.validDays}`);
 });
 
 // ── JSON mode (if implemented): machine-readable output ──
-test('cli: check --json outputs valid JSON array', { timeout: 30000 }, async () => {
-  const { stdout } = await run(process.execPath, [CLI, 'check', 'https://example.com', '--json']);
+test('cli: check --json outputs valid JSON array', { timeout: 30000 }, async (t) => {
+  const baseUrl = await fixtureServer(t);
+  const { stdout } = await run(process.execPath, [CLI, 'check', `${baseUrl}/final`, '--json', '--timeout', REQUEST_TIMEOUT]);
   const data = JSON.parse(stdout);
   assert.ok(Array.isArray(data));
-  assert.equal(data[0].url, 'https://example.com');
+  assert.equal(data[0].url, `${baseUrl}/final`);
   assert.equal(data[0].reachable, true);
   assert.equal(data[0].healthy, true);
   assert.equal(data[0].statusCode, 200);
@@ -105,12 +216,15 @@ test('cli: activate without key exits non-zero with usage', async () => {
 });
 
 // ── headers command ──
-test('cli: headers http://example.com follows redirect and outputs JSON', { timeout: 30000 }, async () => {
-  const { stdout } = await run(process.execPath, [CLI, 'headers', 'http://example.com', '--json']);
+test('cli: headers follows a local redirect and outputs JSON', { timeout: 30000 }, async (t) => {
+  const baseUrl = await fixtureServer(t);
+  const { stdout } = await run(process.execPath, [CLI, 'headers', `${baseUrl}/redirect`, '--json', '--timeout', REQUEST_TIMEOUT]);
   const r = JSON.parse(stdout);
   assert.equal(typeof r.redirected, 'boolean');
+  assert.equal(r.redirected, true);
   assert.equal(r.statusCode, 200);
-  assert.ok('strict-transport-security' in r.security);
+  assert.equal(r.steps.length, 1);
+  assert.match(String(r.security['strict-transport-security']), /max-age=63072000/);
 });
 
 test('cli: headers without URL exits non-zero', async () => {
@@ -121,24 +235,29 @@ test('cli: headers without URL exits non-zero', async () => {
 });
 
 // ── watch: regression — startWatch crashed with ReferenceError (webhookUrl) ──
-test('cli: watch starts monitoring without crashing', { timeout: 30000 }, async () => {
-  const { spawn } = await import('node:child_process');
+test('cli: watch starts monitoring without crashing', { timeout: 30000 }, async (t) => {
+  const baseUrl = await fixtureServer(t);
   const home = mkdtempSync(join(tmpdir(), 'du-home-'));
-  const child = spawn(process.execPath, [CLI, 'watch', 'https://example.com'], {
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  const child = spawn(process.execPath, [CLI, 'watch', `${baseUrl}/final`], {
     env: { ...process.env, HOME: home, USERPROFILE: home },
   });
   let out = '';
   child.stdout.on('data', (d) => { out += d; });
   child.stderr.on('data', (d) => { out += d; });
-  const exitCode = await new Promise((resolve) => {
-    const timer = setTimeout(() => { child.kill(); resolve(null); }, 8000);
-    child.on('exit', (code) => { clearTimeout(timer); resolve(code); });
+
+  // Distinguish "we killed it after it started monitoring" from "it exited on
+  // its own" — resolving null in both cases made the old assertion vacuous.
+  const outcome = await new Promise((resolve) => {
+    const timer = setTimeout(() => { child.kill(); resolve({ started: false, code: null }); }, 8000);
+    child.on('exit', (code, signal) => { clearTimeout(timer); resolve({ started: out.includes('Monitoring'), code, signal }); });
     child.stdout.on('data', () => {
-      if (out.includes('Monitoring')) { clearTimeout(timer); child.kill(); resolve(null); }
+      if (out.includes('Monitoring')) { clearTimeout(timer); child.kill(); resolve({ started: true, code: null, killed: true }); }
     });
   });
-  rmSync(home, { recursive: true, force: true });
+
   assert.ok(!out.includes('ReferenceError'), out);
   assert.match(out, /Monitoring 1 URL/);
-  assert.equal(exitCode, null);
+  assert.equal(outcome.started, true, `watch never started: ${out}`);
+  assert.equal(outcome.killed, true, `watch exited by itself: ${JSON.stringify(outcome)}`);
 });

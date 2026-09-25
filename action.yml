@@ -59,6 +59,7 @@ runs:
 
         # Normalize input to a space-separated URL list
         read -r -a URL_LIST <<< "$(printf '%s' "$DU_URLS" | tr '\n' ' ')"
+        export DU_EXPECTED_URLS=${#URL_LIST[@]}
         echo "Checking URLs: ${URL_LIST[*]}"
 
         # Run check in --json mode; capture exit code without failing early
@@ -74,6 +75,26 @@ runs:
 
         echo "$OUT"
         printf '%s' "$OUT" > deskuptime-results.json
+
+        # Verify the payload before counting it. An empty array, a missing
+        # `healthy` field or fewer results than requested URLs would otherwise
+        # count as down=0 and turn a broken check into a green run.
+        node -e '
+          const fs = require("fs");
+          const raw = fs.readFileSync("deskuptime-results.json", "utf8");
+          const fail = (msg) => { console.error("::error::" + msg); process.exit(1); };
+          let r;
+          try { r = JSON.parse(raw); } catch (e) { fail("deskuptime did not return valid JSON: " + e.message); }
+          const expected = Number(process.env.DU_EXPECTED_URLS);
+          if (!Number.isInteger(expected) || expected < 1) fail("internal error: expected URL count is unknown");
+          if (!Array.isArray(r)) fail("deskuptime returned " + typeof r + ", expected a JSON array");
+          if (r.length === 0) fail("deskuptime returned no results for " + expected + " URL(s)");
+          if (r.length !== expected) fail("deskuptime returned " + r.length + " result(s) for " + expected + " URL(s)");
+          for (const x of r) {
+            if (typeof x.url !== "string" || x.url === "") fail("result without a url field");
+            if (typeof x.healthy !== "boolean") fail("result for " + x.url + " has no boolean healthy field");
+          }
+        '
 
         # Parse results with node (no jq dependency on runner)
         DOWN_COUNT=$(node -e '

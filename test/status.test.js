@@ -400,6 +400,123 @@ test('action: down-count uses the CLI health decision', async (t) => {
   assert.match(output, /glob=\*/);
 });
 
+function actionEnv(extra, temp) {
+  return {
+    ...process.env,
+    DU_SSL_DAYS: '0',
+    DU_SUMMARY: 'false',
+    DU_TIMEOUT: REQUEST_TIMEOUT,
+    GITHUB_OUTPUT: join(temp, 'github-output'),
+    GITHUB_STEP_SUMMARY: join(temp, 'github-summary'),
+    ...extra,
+  };
+}
+
+// A stub CLI lets the action be tested against payloads the real CLI does not
+// emit today — the cases where counting silently reported down=0 and passed.
+function stubAction(t, payload) {
+  const root = mkdtempSync(join(tmpdir(), 'deskuptime-stub-'));
+  const temp = mkdtempSync(join(tmpdir(), 'deskuptime-stub-run-'));
+  t.after(() => {
+    rmSync(root, { recursive: true, force: true });
+    rmSync(temp, { recursive: true, force: true });
+  });
+  mkdirSync(join(root, 'src'), { recursive: true });
+  writeFileSync(join(root, 'src', 'cli.js'), `console.log(${JSON.stringify(payload)});\n`);
+  return { root, temp };
+}
+
+test('action: a payload that cannot be counted fails the step', async (t) => {
+  const cases = [
+    { name: 'empty result array', urls: 2, payload: '[]', expected: /returned no results/ },
+    { name: 'no boolean healthy field', urls: 1, payload: JSON.stringify([{ url: 'https://a.test/' }]), expected: /no boolean healthy field/ },
+    { name: 'result without a url', urls: 1, payload: JSON.stringify([{ healthy: true }]), expected: /without a url field/ },
+    { name: 'healthy as a string', urls: 1, payload: JSON.stringify([{ url: 'https://a.test/', healthy: 'yes' }]), expected: /no boolean healthy field/ },
+    { name: 'not an array', urls: 2, payload: '{"ok":true}', expected: /expected a JSON array/ },
+    { name: 'not JSON at all', urls: 2, payload: 'Error: something went wrong', expected: /did not return valid JSON/ },
+  ];
+
+  for (const { name, urls, payload, expected } of cases) {
+    const { root, temp } = stubAction(t, payload);
+    await assert.rejects(
+      run('bash', ['-c', actionScript()], {
+        cwd: temp,
+        env: actionEnv({
+          DU_URLS: Array.from({ length: urls }, (_, i) => `https://url${i}.test/`).join(' '),
+          DU_FAIL_ON_DOWN: 'true',
+          GITHUB_ACTION_PATH: root,
+        }, temp),
+      }),
+      (error) => {
+        assert.equal(error.code, 1, `${name}: expected exit 1`);
+        assert.match(`${error.stdout}${error.stderr}`, expected, name);
+        return true;
+      },
+      name,
+    );
+  }
+});
+
+test('action: fewer results than requested URLs fails the step', async (t) => {
+  const { root, temp } = stubAction(t, JSON.stringify([{ url: 'https://a.test/', healthy: true }]));
+  await assert.rejects(
+    run('bash', ['-c', actionScript()], {
+      cwd: temp,
+      env: actionEnv({
+        DU_URLS: 'https://a.test/ https://b.test/',
+        DU_FAIL_ON_DOWN: 'false',
+        GITHUB_ACTION_PATH: root,
+      }, temp),
+    }),
+    (error) => {
+      assert.equal(error.code, 1);
+      assert.match(error.stderr, /returned 1 result\(s\) for 2 URL\(s\)/);
+      return true;
+    },
+  );
+});
+
+test('action: fail-on-down=true exits 2 with the down count', async (t) => {
+  const baseUrl = await statusServer(t);
+  const urls = [`${baseUrl}/status/200`, `${baseUrl}/status/500`, `${baseUrl}/hang`];
+  const temp = mkdtempSync(join(tmpdir(), 'deskuptime-action-fail-'));
+  t.after(() => rmSync(temp, { recursive: true, force: true }));
+
+  await assert.rejects(
+    run('bash', ['-c', actionScript()], {
+      cwd: temp,
+      env: actionEnv({
+        DU_URLS: urls.join(' '),
+        DU_FAIL_ON_DOWN: 'true',
+        GITHUB_ACTION_PATH: ROOT,
+      }, temp),
+    }),
+    (error) => {
+      assert.equal(error.code, 2);
+      assert.match(`${error.stdout}${error.stderr}`, /::error::2 URL\(s\) are unhealthy/);
+      assert.match(readFileSync(join(temp, 'github-output'), 'utf8'), /^down=2$/m);
+      return true;
+    },
+  );
+});
+
+test('action: all healthy URLs exit 0 and report down=0', async (t) => {
+  const baseUrl = await statusServer(t);
+  const urls = [`${baseUrl}/status/200`, `${baseUrl}/status/204`, `${baseUrl}/redirect`];
+  const temp = mkdtempSync(join(tmpdir(), 'deskuptime-action-ok-'));
+  t.after(() => rmSync(temp, { recursive: true, force: true }));
+
+  await run('bash', ['-c', actionScript()], {
+    cwd: temp,
+    env: actionEnv({
+      DU_URLS: urls.join(' '),
+      DU_FAIL_ON_DOWN: 'true',
+      GITHUB_ACTION_PATH: ROOT,
+    }, temp),
+  });
+  assert.match(readFileSync(join(temp, 'github-output'), 'utf8'), /^down=0$/m);
+});
+
 test('headers: connection refusal returns a structured error without crashing', async (t) => {
   const url = `http://127.0.0.1:${await unusedPort()}`;
   const redirectTarget = `https://127.0.0.1:${await unusedPort()}`;
