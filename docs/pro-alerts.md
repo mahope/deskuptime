@@ -84,6 +84,11 @@ Ingen licensnøgle, device-id eller brugerdata sendes i payloaden. Se §5.
 - Licensserveren (`https://mahope.tools/api/license/*`) modtager `license_key`,
   `device_id` (maskinnavn, maks. 128 tegn) og `product`. Ingen overvågede URL'er,
   ingen IP-adresser, ingen historik.
+- `device_id` er `deskuptime-` + maskinnavnet i lowercase, trimmet og afkortet til
+  128 tegn. På native Windows læses `COMPUTERNAME`, fordi `os.hostname()` der
+  returnerer det 15-tegns NetBIOS-navn, som CLI'en ellers ville afvige fra
+  desktopappen på. Scheme'et er låst i `test/fixtures/device-id.golden.json`,
+  som Rust-siden skal køre mod samme fil.
 - Webhook-modtageren ser kun felterne i §2 — den URL, der netop ændrede tilstand.
 - Gemt state (`~/.deskuptime/state.json`) indeholder de URL'er, brugeren selv har
   tilføjet, plus sidste status, SSL-dage og content-hash. Filen skrives `0600` på POSIX.

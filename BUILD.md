@@ -18,7 +18,7 @@ Desktop website monitor (uptime + SSL + content changes). CLI gratis, Pro $19 en
 ### Trin 3 ✅ — Licensflow via Stripe (24/9)
 - [x] Køb via Stripe Payment Link: https://buy.stripe.com/7sY9AS9eX3Iu418fJ5bMQ01
 - [x] src/license.js — activate/validate/deactivate mod https://mahope.tools/api/license/* (product `deskuptime-pro`)
-- [x] Desktop-appen (Rust) bruger samme licens-API; fælles device_id `deskuptime-<hostname>`
+- [x] Desktop-appen (Rust) bruger samme licens-API; fælles device_id `deskuptime-<maskinnavn>` (på Windows `COMPUTERNAME`, ikke NetBIOS-navnet — scheme låst i `test/fixtures/device-id.golden.json`)
 - [x] Blød fejl: netværksfejl/5xx beholder cachet Pro-status i 7 dage
 - [ ] Opdater landing page (deskuptime.com) med betalingslinket
 

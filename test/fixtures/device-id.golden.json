@@ -1,0 +1,105 @@
+{
+  "$comment": "Golden fixture for the DeskUptime device_id scheme (see src/license.js getDeviceId). The Node CLI and the desktop app must produce identical ids from identical inputs, so one machine never burns two of the three activation seats. Versioned: bump `version` when the scheme changes. A Rust equivalent must pass this same file in mahope/deskuptime-desktop.",
+  "version": 1,
+  "prefix": "deskuptime-",
+  "max_length": 128,
+  "fallback": "unknown",
+  "cases": [
+    {
+      "name": "windows_prefers_computername_over_truncated_netbios",
+      "platform": "win32",
+      "env": {
+        "COMPUTERNAME": "WORKSTATION-NORD-01"
+      },
+      "hostname": "WORKSTATIO-NORD-01",
+      "expected": "deskuptime-workstation-nord-01"
+    },
+    {
+      "name": "windows_falls_back_when_computername_is_empty",
+      "platform": "win32",
+      "env": {
+        "COMPUTERNAME": ""
+      },
+      "hostname": "WORKSTATION-01",
+      "expected": "deskuptime-workstation-01"
+    },
+    {
+      "name": "windows_falls_back_when_computername_is_blank",
+      "platform": "win32",
+      "env": {
+        "COMPUTERNAME": "   "
+      },
+      "hostname": "WORKSTATION-01",
+      "expected": "deskuptime-workstation-01"
+    },
+    {
+      "name": "windows_falls_back_when_computername_is_absent",
+      "platform": "win32",
+      "env": {},
+      "hostname": "WORKSTATION-01",
+      "expected": "deskuptime-workstation-01"
+    },
+    {
+      "name": "windows_trims_and_lowercases_computername",
+      "platform": "win32",
+      "env": {
+        "COMPUTERNAME": "  My-Workstation  "
+      },
+      "hostname": "IGNORED",
+      "expected": "deskuptime-my-workstation"
+    },
+    {
+      "name": "darwin_ignores_computername",
+      "platform": "darwin",
+      "env": {
+        "COMPUTERNAME": "SOME-WINDOWS-PC"
+      },
+      "hostname": "mads-macbook",
+      "expected": "deskuptime-mads-macbook"
+    },
+    {
+      "name": "linux_uses_hostname",
+      "platform": "linux",
+      "env": {},
+      "hostname": "build-server-01",
+      "expected": "deskuptime-build-server-01"
+    },
+    {
+      "name": "linux_ignores_computername",
+      "platform": "linux",
+      "env": {
+        "COMPUTERNAME": "SOME-WINDOWS-PC"
+      },
+      "hostname": "build-server-01",
+      "expected": "deskuptime-build-server-01"
+    },
+    {
+      "name": "linux_unknown_when_hostname_is_empty",
+      "platform": "linux",
+      "env": {},
+      "hostname": "",
+      "expected": "deskuptime-unknown"
+    },
+    {
+      "name": "windows_unknown_when_nothing_is_available",
+      "platform": "win32",
+      "env": {},
+      "hostname": "",
+      "expected": "deskuptime-unknown"
+    },
+    {
+      "name": "truncates_name_longer_than_128_chars",
+      "platform": "linux",
+      "env": {},
+      "hostname": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "expected": "deskuptime-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    {
+      "name": "keeps_name_of_exactly_128_chars",
+      "platform": "linux",
+      "env": {},
+      "hostname": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "expected": "deskuptime-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    }
+  ]
+}

@@ -5,6 +5,7 @@
 
 import { test, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import {
   activateLicense,
   validateLicense,
@@ -44,6 +45,40 @@ test('license: device id is stable and within 128 chars', () => {
   const id = getDeviceId();
   assert.equal(id, getDeviceId());
   assert.ok(id.length > 0 && id.length <= 128);
+});
+
+// ── device_id scheme: the golden fixture the desktop app must also pass ──
+const golden = JSON.parse(readFileSync(new URL('./fixtures/device-id.golden.json', import.meta.url), 'utf8'));
+
+test('device id: golden fixture is the version this build implements', () => {
+  assert.equal(golden.version, 1);
+  assert.equal(golden.prefix, 'deskuptime-');
+  assert.equal(golden.max_length, 128);
+  assert.equal(golden.fallback, 'unknown');
+  assert.ok(Array.isArray(golden.cases) && golden.cases.length > 0);
+});
+
+test('device id: matches every case in the golden fixture', () => {
+  for (const c of golden.cases) {
+    assert.equal(
+      getDeviceId({ platform: c.platform, env: c.env, host: c.hostname }),
+      c.expected,
+      `case ${c.name}`,
+    );
+  }
+});
+
+test('device id: Windows CLI and desktop agree on a long machine name', () => {
+  // The bug this guards: os.hostname() returns the 15-char NetBIOS name, so the
+  // CLI and the desktop app each claimed a seat for the same machine.
+  const desktop = getDeviceId({ platform: 'win32', env: { COMPUTERNAME: 'WORKSTATION-NORD-01' }, host: 'WORKSTATIO-NORD-01' });
+  assert.equal(desktop, 'deskuptime-workstation-nord-01');
+  assert.notEqual(desktop, `deskuptime-${'workstatio-nord-01'}`);
+});
+
+test('device id: CLI and desktop both read COMPUTERNAME on Windows', () => {
+  const args = { platform: 'win32', env: { COMPUTERNAME: 'WORKSTATION-NORD-01' }, host: 'WORKSTATIO-NORD-01' };
+  assert.equal(getDeviceId(args), getDeviceId(args));
 });
 
 test('activate: posts key, device_id and product to /activate', async () => {

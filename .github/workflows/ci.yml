@@ -21,3 +21,15 @@ jobs:
       - run: npm run audit
       - name: Smoke — JSON mode parses with jq
         run: node src/cli.js check https://example.com --json | jq -e '.[0].healthy == true'
+
+  # The device_id scheme must be identical on native Windows, where os.hostname()
+  # returns the 15-char NetBIOS name while the desktop app reads COMPUTERNAME.
+  license-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: npm ci --ignore-scripts
+      - run: node --test test/license.test.js

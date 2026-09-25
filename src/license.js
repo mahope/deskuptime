@@ -36,9 +36,20 @@ export function normalizeKey(key) {
 /**
  * Stable per-machine id. Same scheme as the desktop app, so the CLI and the
  * desktop app on one machine share a single activation seat.
+ *
+ * On native Windows we must prefer COMPUTERNAME. `os.hostname()` returns the
+ * NetBIOS name there, which Windows truncates to 15 characters, so a machine
+ * called `WORKSTATION-NORD-01` would get `deskuptime-workstatio-nord-01` from
+ * the CLI while the desktop app — which reads COMPUTERNAME — sends
+ * `deskuptime-workstation-nord-01`. Two ids, one machine, two of three seats.
+ *
+ * Arguments are injectable so the scheme can be pinned by a golden fixture
+ * (test/fixtures/device-id.golden.json) that the desktop repo can also run.
  */
-export function getDeviceId() {
-  return `deskuptime-${hostname().trim().toLowerCase() || 'unknown'}`.slice(0, 128);
+export function getDeviceId({ platform = process.platform, env = process.env, host = hostname() } = {}) {
+  const fromEnv = String(env?.COMPUTERNAME ?? '').trim();
+  const name = platform === 'win32' && fromEnv ? fromEnv : host;
+  return `deskuptime-${String(name ?? '').trim().toLowerCase() || 'unknown'}`.slice(0, 128);
 }
 
 async function post(endpoint, body) {
