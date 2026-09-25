@@ -7,6 +7,8 @@
  * Free tier: up to 3 URLs, 60s minimum interval.
  * Pro tier (activated license): unlimited URLs, intervals down to 30s,
  * desktop notifications via osascript (macOS) where available.
+ * Those numbers come from src/features.js — the same source the README,
+ * --help and docs/pro-alerts.md matrix are generated from.
  */
 
 import { checkUrl } from './engine.js';
@@ -16,14 +18,14 @@ import { dirname, posix, win32 } from 'path';
 import { homedir } from 'os';
 import { createHash, randomUUID } from 'crypto';
 import { assertValidHttpUrls } from './status.js';
+import { FREE, PRO, PRODUCT } from './features.js';
 
-const FREE_URL_LIMIT = 3;
-const FREE_MIN_INTERVAL = 60;
-const PRO_MIN_INTERVAL = 30;
 const LICENSE_RECHECK_MS = 24 * 60 * 60 * 1000;
 const STATE_LOCK_MAX_AGE_MS = 5 * 60 * 1000;
 const WEBHOOK_TIMEOUT_MS = 10_000;
-export const PRO_BUY_URL = 'https://buy.stripe.com/7sY9AS9eX3Iu418fJ5bMQ01';
+// The limits and the buy link live in src/features.js, so the free/Pro claims in
+// README, --help and docs/pro-alerts.md cannot drift from what is enforced here.
+export const PRO_BUY_URL = PRODUCT.buyUrl;
 
 /**
  * One upgrade path, used wherever a free user hits a Pro-only limit.
@@ -31,6 +33,14 @@ export const PRO_BUY_URL = 'https://buy.stripe.com/7sY9AS9eX3Iu418fJ5bMQ01';
  */
 function upgradeHint(feature) {
   return `Pro unlocks ${feature}: ${PRO_BUY_URL} — then "deskuptime activate <key>".`;
+}
+
+/**
+ * The single free-tier refusal, so `--once` and the watch loop tell the user the
+ * same thing — including where to buy Pro.
+ */
+export function freeLimitMessage(url) {
+  return `Free tier monitors ${FREE.urlLimit} URLs. ${url} not added. ${upgradeHint(`unlimited URLs and a ${PRO.minIntervalSeconds}s interval`)}`;
 }
 
 export function getStateFile({ env = process.env, platform = process.platform } = {}) {
@@ -223,14 +233,14 @@ export function printStatus(options = {}) {
 }
 
 function addMonitoredUrls(state, urls, pro) {
-  const limit = pro ? Infinity : FREE_URL_LIMIT;
+  const limit = pro ? PRO.urlLimit : FREE.urlLimit;
   let added = 0;
   for (const url of urls) {
     if (state.urls[url]) continue;
     if (Object.keys(state.urls).length >= limit) {
       console.log(pro
         ? `⚠️  Skipping duplicate/extra URL: ${url}`
-        : `⚠️  Free tier monitors ${FREE_URL_LIMIT} URLs. ${url} not added. ${upgradeHint('unlimited URLs and a 30s interval')}`);
+        : `⚠️  ${freeLimitMessage(url)}`);
       continue;
     }
     state.urls[url] = {
@@ -322,7 +332,7 @@ export async function runOnce(urls, opts = {}) {
     const state = loadState(opts);
     const pro = isPro(state);
     if (!pro) {
-      const available = Math.max(FREE_URL_LIMIT - Object.keys(state.urls).length, 0);
+      const available = Math.max(FREE.urlLimit - Object.keys(state.urls).length, 0);
       const rejected = [...new Set(urls)].filter(url => !state.urls[url]).slice(available);
       if (rejected.length > 0) return { events: [], results: [], healthy: false, added: 0, rejected };
     }
@@ -416,7 +426,7 @@ export async function startWatch(urls, opts = {}) {
     }
   }
 
-  const minInterval = pro ? PRO_MIN_INTERVAL : FREE_MIN_INTERVAL;
+  const minInterval = pro ? PRO.minIntervalSeconds : FREE.minIntervalSeconds;
   const interval = Math.max(opts.interval || 300, minInterval);
   const added = addMonitoredUrls(state, urls, pro);
   if (added === 0 && Object.keys(state.urls).length === 0) {

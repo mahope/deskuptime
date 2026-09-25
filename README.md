@@ -63,21 +63,27 @@ invalid URL fails the complete check with exit code `1`.
 DeskUptime is free and complete for the core job: checking your sites. Pro removes the
 limits and adds alerts that reach you when you are not at the terminal.
 
-| | Free CLI (MIT) | Pro ($19 one-time) |
-|---|---|---|
-| `check` / `headers` on any number of URLs | ✅ | ✅ |
-| SSL expiry, content-change detection | ✅ | ✅ |
-| GitHub Action with JSON + job summary | ✅ | ✅ |
-| `watch` background monitoring | 3 URLs, min. 60s interval | Unlimited URLs, min. 30s interval |
-| Terminal alerts on up/down/SSL/content change | ✅ | ✅ |
-| Webhook alerts | — | ✅ |
-| Local desktop notification | — | ✅ macOS (Windows/Linux via desktop app) |
-| Desktop app: tray, background monitoring | — | ✅ |
+<!-- BEGIN GENERATED: matrix -->
+| Feature | Free CLI (MIT) | Pro ($19 one-time, 3 machines) | Status |
+| --- | --- | --- | --- |
+| `check` and `headers` on any number of URLs | ✅ | ✅ | In both tiers |
+| SSL expiry countdown, issuer and content-change detection | ✅ | ✅ | In both tiers |
+| GitHub Action with JSON output, `down-count` and job summary | ✅ | ✅ | In both tiers |
+| JSON output (`--json`) for scripts and CI | ✅ | ✅ | In both tiers |
+| `watch` background monitoring | 3 URLs, min. 60s interval | Unlimited URLs, min. 30s interval | In both tiers |
+| Terminal alerts on up/down/SSL/content change | ✅ | ✅ | In both tiers |
+| `deskuptime status` — license state and monitored URLs, read-only | ✅ | ✅ | In both tiers |
+| Webhook alerts on every event (`--webhook`) | — | ✅ | Pro only |
+| Local desktop notification (macOS in the CLI, all platforms in the desktop app) | — | ✅ | Pro only |
+| Desktop app: tray, background loop, activity view | — | ✅ | Pro only — private desktop app |
+<!-- END GENERATED: matrix -->
 
-There is no email or Slack/Teams integration — and there is no "coming soon" upsell in
-this README. The channels that exist today are the ones above. The full matrix, the
-webhook payload and the offline behaviour are specified in
-[`docs/pro-alerts.md`](docs/pro-alerts.md).
+Rows for channels that are not built — email, Slack/Discord/Teams, shareable status
+page, batch jobs — are deliberately left out of the table above, so this README cannot
+promise something that does not exist. The full matrix, including what is *not* built,
+is [`docs/pro-alerts.md`](docs/pro-alerts.md) §1, which also specifies the webhook
+payload and the offline behaviour. `deskuptime --help` and the npm page are generated
+from the same source as this table, so they cannot drift apart.
 
 ## Pro license
 
@@ -92,6 +98,18 @@ macOS + Windows); unlock it with your license key.
 deskuptime activate <license-key>   # unlock Pro on this machine
 deskuptime deactivate               # free this machine's seat for another one
 ```
+
+### What leaves your machine
+
+<!-- BEGIN GENERATED: license data -->
+The license server receives exactly three fields per call: `license_key`, `device_id`, `product`. Never: monitored URLs, page content, check results, IP addresses or history.
+
+| Field | What it is |
+| --- | --- |
+| `license_key` | Your 32-character license key |
+| `device_id` | A machine id derived from the computer name (`deskuptime-` + name, max. 128 chars) |
+| `product` | The product key `deskuptime-pro` |
+<!-- END GENERATED: license data -->
 
 The CLI and the desktop app on the same machine share one seat. The license is re-checked
 daily; if the license server is unreachable, Pro keeps working from a cached status for

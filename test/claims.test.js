@@ -11,7 +11,8 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
-import { PRO_BUY_URL } from '../src/watch.js';
+import { PRO_BUY_URL, freeLimitMessage } from '../src/watch.js';
+import { MATRIX } from '../src/features.js';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const readme = readFileSync(join(root, 'README.md'), 'utf-8');
@@ -70,21 +71,22 @@ test('kun det aftalte betalingslink og donationslinket forekommer', () => {
 });
 
 test('upgrade-vejen nævner købslinket, så gratisbrugere ikke sidder fast ved en Pro-grænse', () => {
+  // Rendered, not grepped: the message a free user actually reads must carry the link.
+  assert.ok(freeLimitMessage('https://yoursite.com/').includes(PRO_BUY), 'URL-grænsen skal pege på det aftalte købslink');
   const watch = readFileSync(join(root, 'src', 'watch.js'), 'utf-8');
   assert.ok(watch.includes('upgradeHint'), 'src/watch.js mangler upgradeHint');
-  assert.ok(watch.includes(PRO_BUY), 'upgradeHint skal pege på det aftalte købslink');
-  const hintCalls = [...watch.matchAll(/upgradeHint\('([^']+)'\)/g)].map(match => match[1]);
-  assert.ok(hintCalls.length >= 2, `upgradeHint bruges kun ${hintCalls.length} steder`);
+  const hinted = [...watch.matchAll(/upgradeHint\(([^)]*)\)/g)].map(match => match[1]);
+  assert.ok(hinted.length >= 2, `upgradeHint bruges kun ${hinted.length} steder`);
+  assert.ok(hinted.some(call => call.includes('webhook alerts')), 'webhook-grænsen skal pege på upgradeHint');
 });
 
-test('matrixen i README og specen dækker de samme tre Pro-værdier', () => {
-  const values = [
-    ['Unlimited URLs', 'Ubegrænsede URL'],
-    ['Webhook alerts', 'Webhook-POST'],
-    ['Desktop app', 'Desktop-app'],
-  ];
-  for (const [readmeValue, specValue] of values) {
-    assert.ok(readme.includes(readmeValue), `README mangler Pro-værdi: ${readmeValue}`);
-    assert.ok(spec.toLowerCase().includes(specValue.toLowerCase()), `docs/pro-alerts.md mangler Pro-værdi: ${specValue}`);
+test('matrixen i README og specen dækker de samme byggede Pro-værdier', () => {
+  // Locked against src/features.js, not against hand-typed strings: a Pro value
+  // that is added to the matrix must reach both languages or this test fails.
+  const proValues = MATRIX.filter(row => row.implemented && row.pro.en !== row.free.en);
+  assert.ok(proValues.length >= 3, `matrixen har kun ${proValues.length} rækker, hvor Pro tilføjer noget`);
+  for (const row of proValues) {
+    assert.ok(readme.includes(row.en), `README mangler Pro-værdi: ${row.en}`);
+    assert.ok(spec.includes(row.da), `docs/pro-alerts.md mangler Pro-værdi: ${row.da}`);
   }
 });

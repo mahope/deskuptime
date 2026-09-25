@@ -1,9 +1,9 @@
 # IMPLEMENTATION_PLAN.md
 
 STATUS: I GANG
-Iteration: 11 — 2026-09-25
-Arbejdsgrene: `ceo/install-version-checksum` (P0-9b)
-Næste handling: P0-9b er færdig. Næste iteration tager **P1-1** (dokumentation, konvertering, åben kerne) — eller, hvis Mads har svaret på ❓ 9, en lille konverteringsopgave fra trafikdata. P0-9b afventer én ting fra Mads: en ny `v*-cli`-release, så `.sha256` faktisk findes (se ❓ 10).
+Iteration: 12 — 2026-09-25
+Arbejdsgrene: `ceo/feature-matrix-source` (P1-1 del A)
+Næste handling: P1-1 del A er færdig — én versionsstyret matrix driver `--help`, README, `docs/pro-alerts.md` og de håndhævede gratisgrænser. Næste iteration tager **P1-1 del B** (konvertering: én købsknap pr. side + det manglende `deskuptime status`-ord `unverified` fra ❓ 9) eller **P2-1** (deterministiske tests: `example.com`-afhængighederne i `test/test.js` og `test/status.test.js`). P1-1 AC3 (sitekilder) er `BLOCKED` på ❓ 8, AC5 afventer Mads' svar på ❓ 1–3.
 
 ## Mission
 
@@ -25,7 +25,7 @@ Dette offentlige repo leverer den gratis, fuldt brugbare DeskUptime-CLI (MIT). D
 Den aktuelle gate-definition er registreret her:
 
 - Root: `npm ci --ignore-scripts` skal lykkes med den committede lockfil.
-- Root: `npm test` (105 tests, 105 passed på Node 26 efter P0-9b: 87 + 9 tarballtests + 9 installtests).
+- Root: `npm test` (113 tests, 113 passed på Node 26.7.0 efter P1-1 del A: 105 + 8 matrixtests). **Bemærk:** på en maskine med kun Node 22 fejler de 7 installtests + action-testen, fordi `install.sh` og `action.yml` korrekt kræver Node 24+; brug den installerede `PATH`-node (26.7.0), ellers er gate ikke grøn af miljøårsager.
 - Root: `npm run audit` skal rapportere 0 sårbarheder.
 - Root: `npm run lint` findes ikke i `package.json`; rapporteres som manglende gate, ikke som grønt.
 - Root: `npm run build` findes ikke i `package.json`; der er ingen JS-build/typecheck-script.
@@ -335,17 +335,31 @@ Den aktuelle gate-definition er registreret her:
 
 **Status 2026-09-25:** Færdig i `711d3b8` på `ceo/install-version-checksum`. `tools/install.sh` er skrevet om til POSIX `sh` med `die`/`note`, opløser nyeste `v*-cli`-release med tarball-asset, verificerer sha256 før `tar -xzf`, erstatter i stedet for fletter den forrige installation, og nægter en tarball uden `src/cli.js`. `release-cli.yml` uploader nu begge assets i samme step, fejler hvis sidecaren mangler, og `diff`-er sidecaren mod `sha256sum` før upload. Det gamle, forkerte `deskuptime-0.1.3.tar.gz` er fjernet fra repo-roden (`.gitignore` dækkede det allerede). `test/install.test.js` (9 tests) kører det rigtige script mod en lokal HTTP-server: opløsning med 6 forskellige releasetyper i vilkårlig rækkefølge, manipulations-afvisning, manglende sidecar i begge modi, pin, fallback ved ulæseligt feed, erstatning af gammel installation, tarball uden cli.js, gammel-Node-fejl og versions-driftstest mod `package.json`/`engines`. **Bevis:** Node 26.7.0 — `npm ci --ignore-scripts`, **105/105** tests, `npm run audit` 0/0, `node --check` alle JS-filer, `sh -n`/`bash -n`, YAML-parse af alle workflows, ingen tabs og `git diff --check` grønne. **Live-evidence:** `sh tools/install.sh` mod den rigtige GitHub-feed installerede **0.2.5** (den faktisk nyeste `v*-cli`-release) i stedet for den hårdkodede 0.1.4, og advarede korrekt, at 0.2.5 endnu ikke har en publiceret sidecar.
 
-### P1-1 — TODO — Hæd dokumentation, konvertering og åben kerne
+### P1-1 — I GANG (del A færdig) — Hæd dokumentation, konvertering og åben kerne
 
 **Begrundelse:** Kunder skal kunne forstå gratis/Pro, købe med ét link og bruge den samme truthful beskrivelse på README, CLI-help, npm, desktop og site.
 
 **Acceptkriterier:**
 
-1. Én versionsstyret featurematrix bruges på alle overflader.
-2. README/help retter `watch` og kanalclaims, og beskriver præcist hvilken data der sendes til licensserveren.
-3. Produkt-sidekilder eller en dokumenteret source-of-truth findes; EN/DA/llms/npm/UI bliver konsistente.
-4. Det eksisterende Stripe-link (`https://buy.stripe.com/7sY9AS9eX3Iu418fJ5bMQ01`) og donation-linket bruges konsistent, uden nye produkter.
-5. `❓`-beslutninger om email, gratis desktoptray, rapport/status-side og prioriteret support er besvaret før konkrete claims låses.
+1. Én versionsstyret featurematrix bruges på alle overflader. — **Del A færdig**
+2. README/help retter `watch` og kanalclaims, og beskriver præcist hvilken data der sendes til licenserveren. — **Del A færdig**
+3. Produkt-sidekilder eller en dokumenteret source-of-truth findes; EN/DA/llms/npm/UI bliver konsistente. — **BLOCKED på ❓ 8** (sitens kilder ligger uden for repoet)
+4. Det eksisterende Stripe-link (`https://buy.stripe.com/7sY9AS9eX3Iu418fJ5bMQ01`) og donation-linket bruges konsistent, uden nye produkter. — **Del A færdig**
+5. `❓`-beslutninger om email, gratis desktoptray, rapport/status-side og prioriteret support er besvaret før konkrete claims låses. — **afventer ❓ 1–3**
+
+**Del A — FÆRDIG 2026-09-25 (`ceo/feature-matrix-source`):**
+
+- **`src/features.js` er ny source of truth:** produktnøgle, pris, maskiner, købs-/donations-/API-links, de håndhævede gratis- og Pro-grænser, 14 matrixrækker på EN + DA med `implemented`-flag, samt de præcis tre felter der sendes til licenserveren.
+- **Overfladerne renderer fra den:** `deskuptime --help` (`renderHelpPro()`), README-matrixen og `docs/pro-alerts.md` §1 + §5 (`tools/matrix.mjs` skriver blokke mellem `<!-- BEGIN/END GENERATED: … -->`; `npm run matrix` opdaterer, `--check` fejler ved drift).
+- **Koden håndhæver det samme:** `src/watch.js` bruger `FREE.urlLimit`/`FREE.minIntervalSeconds`/`PRO.minIntervalSeconds` i stedet for egne tal, og `src/license.js` henter `PRODUCT.key`/`buyUrl`/`licenseApiBase`.
+- **Konverteringshul lukket:** `watch --once` nåede gratisgrænsen med `Free tier monitors 3 URLs. … not added.` og **uden købslink**, mens watch-loopen havde `upgradeHint`. Begge bruger nu `freeLimitMessage()`.
+- **Hjælpebanneret er rettet** til en bredde, der følger versionen (var 6 tegn for smalt).
+- **README:** ny sektion "What leaves your machine" med genereret felt-tabel + "Aldrig: overvågede URL'er, sideindhold, …", og en note om hvorfor ikke-byggede kanaler står i spec'en frem for i README.
+- **Test:** ny `test/matrix.test.js` (8 tests) — `matrix.mjs --check`, alle rækker i begge sprog, ikke-byggede kanaler uden for README/`--help`, hjælpegenberegning, licensfelter, gratisgrænse mod en færdig `state.json` (ingen netværk), intervalhævning mod lokal HTTP-server, kontraktlinks + `FUNDING.yml`. `test/claims.test.js` låser nu mod `MATRIX` i stedet for håndskrevne strenge.
+- **Mutationstest:** ændrede `FREE` i `src/features.js` → 3 fejl; håndredigeret README-tabel → 2 fejl. En håndskrevet tabel kan altså ikke overleve.
+- **Bevis:** Node 26.7.0 — `npm ci --ignore-scripts`, **113/113** tests, `npm run audit` 0/0, `node --check` alle JS-filer, `sh -n`/`bash -n`, YAML tab-fri, `git diff --check` grønne. `node tools/matrix.mjs --check` grøn. Ingen afhængighed ændret.
+
+**Del B — TODO (næste iteration):** konvertering og resten af ❓ 9: ét købsflow pr. side, `unverified`-tilstanden for `deskuptime status`, og npm-beskrivelsen som tredje genererede overflade.
 
 ### P1-2 — TODO — Byg dokumenteret Pro-værdi for bureauer
 
@@ -375,6 +389,8 @@ Den aktuelle gate-definition er registreret her:
 
 ### Aktuel offentlig CLI
 
+- `2026-09-25`: P1-1 del A gjorde **én versionsstyret matrix** til source of truth for gratis/Pro-claims: ny `src/features.js` (produkt, pris, links, håndhævede grænser, 14 rækker EN+DA, licensens tre felter). `src/watch.js` og `src/license.js` læser derfra i stedet for egne konstanter, `--help` gengiver matrixen, og README + `docs/pro-alerts.md` §1/§5 er genererede blokke (`npm run matrix`, `--check` i testen). Derved er tre claims fundet og rettet: `watch --once` nåede gratisgrænsen uden købslink, hjælpebanneret var 6 tegn for smalt, og claims-testen låste på håndskrevne strenge. Ny `test/matrix.test.js` (8 tests); `npm test` er grøn med **113/113**; `npm run audit` 0/0; `node --check`, `sh -n`/`bash -n`, YAML og `git diff --check` grønne på Node 26.7.0. Mutationstest bekræfter, at en håndredigeret tabel eller en ændret grænse bryder testen. Ingen afhængighed ændret.
+
 - `2026-09-25`: P0-9b (del B af P0-9) rettede **curl-installationsstien**: `install.sh` havde `VERSION="0.1.4"` fastlåst, tre minorer under npm-versionen, og udpakkede uden nogen checksum-verifikation. Den løser nu den nyeste publicerede `v*-cli`-release (kun releases med `deskuptime-<ver>.tar.gz`-asset, højeste semver, drafts/prereleases sprunget over) via det offentlige read-only releases-API, verificerer den publicerede `.sha256` **før** udpakning og erstatter i stedet for fletter en tidligere installation. `release-cli.yml` uploader nu tarball **og** sidecar i samme step. 9 nye tests kører det rigtige script mod en lokal server, inkl. manipulations-afvisning. Det gamle `deskuptime-0.1.3.tar.gz` er fjernet fra repo-roden. `npm test` er grøn med **105/105**; `npm run audit` 0/0; shell-, YAML-, syntax- og diff-check grønne på Node 26.7.0. Live-`curl`-ruten installerer nu 0.2.5 i stedet for 0.1.4. Ingen afhængighed ændret.
 
 - `2026-09-25`: P0-9a (del A af P0-9) repaired the **brudde release-build**: `make_tarball.sh` fejlede sin egen self-check, fordi den håndlavne filliste manglede `src/status.js` and `src/checkers/headers.js`, så ingen ny `v*-cli`-tag kunne skæres, og curl-/brew-install var døde på første kommando. Hele `src/`-træet pakkes nu, self-checken kører også `headers --json` og `watch --once`, og der skrives en `.sha256`-sidecar. Ny `test/tarball.test.js` (9 tests) bygger tarballen mod en lokal HTTP-server og kører den udpakkede CLI. `npm test` er grøn med **96/96**; `npm run audit` 0/0; `node --check` og `git diff --check` grønne på Node 26.7.0. Ingen afhængighed ændret; `.gitignore` udelukker nu tarball-artefakter.
@@ -402,6 +418,8 @@ Den aktuelle gate-definition er registreret her:
 - `2026-09-25`: Før denne iteration kunne `npm audit` ikke køre uden lockfile. Trivy/OSV fandt `glib 0.18.5`; advisoryen følger nu det private desktoprepo.
 
 ## ❓ Til Mads
+
+0. **Skal `src/features.js` også være source of truth for siten og det private desktoprepo?** Matrixen er nu én fil i dette repo, og den private desktop-app plus `deskuptime.com` har hver deres egen matrix. Hvis de skal følge med automatisk, er vejen et lille public npm-pakke (`@mahope/product-matrix`) som alle tre repoer importerer. Uden beslutning fortsætter de to andre overflader med at være håndskrevne — og det er præcis den drift, del A lukker her.
 
 1. Hvad er den endelige gratis/Pro-matrix? Skal desktoptray og lokale notifications være gratis, eller kun Pro? README, kode og mission peger i dag i forskellige retninger.
 2. Skal Pro email og Slack/Discord/Teams implementeres nu, eller skal de forblive uden for matrixen, indtil de er bygget? P0-5 har fjernet dem fra alle overflader i dette repo og noteret dem som ikke-implementeret; **live-siten `deskuptime.com` hævder stadig email for Desktop Pro**, og rettelsen ligger uden for dette repo (P0-12 er `BLOCKED`). Svar på spørgsmålet afgør både næste CLI-opgave og sitens claim.
@@ -435,3 +453,4 @@ Den aktuelle gate-definition er registreret her:
 - **Iteration 9 (P0-10 + P0-13):** To opgaver i samme iteration, begge små og begge committet. P0-10: `actions/checkout` 4 → 7 i alle fire workflows i `b27ba35` (ren pin-bump, ingen inputs bruges, eneste brydende v7-adfærd er relateret til triggere repoet ikke bruger); CI grøn. Derefter fandt en læsning af den røde selvmonitorering, at `eucomply-scan/stats` meldte DOWN med HTTP 404, mens curl og node-fetch svarede 200 — årsagen var, at reachability-checket kun sendte HEAD, og Workers matcher ikke HEAD-routes. P0-13 (`1d19697`) tilføjer én GET-retry ved 404/405/501 med GET som dominerende svar, delt `--timeout`-budget, annulleret GET-body og fem deterministiske tests; 87/87 tests, audit 0/0, Node 26.7.0, `node --check` og `git diff --check` grønne; den rigtige worker giver nu 200 UP med exit 0. Næste iteration: P0-11 (`actions/setup-node` 4 → 7), derefter P0-9.
 - **Iteration 10 (P0-11 + P0-9a):** To opgaver, begge committet og mergeret. P0-11 (`6761f26`): `actions/setup-node` 4 → 7 i fire workflows plus README-snippet, ren pin-bump, CI-run `36174538867` grøn. Derefter faldt målingen af P0-9's releasevej, og den var værre end forventet: **bygget af tarballen var brudt** — `make_tarball.sh` fejlede sin egen self-check, fordi fillisten manglede `src/status.js` og `src/checkers/headers.js`, så ingen ny `v*-cli`-release kunne skæres, og installerede kopier døde med `ERR_MODULE_NOT_FOUND` på første kommando. P0-9a (`4defd8d`) pakker hele `src/`-træet, udvider self-checken til de dovent importerende kommandoer, skriver en `.sha256`-sidecar og tilføjer 9 tests, der bygger tarballen mod en lokal server og kører den udpakkede CLI. Versionsdrift målt samtidig: package 0.2.8 / nyeste `v*-cli` v0.2.5 / install.sh 0.1.4 — udskudt til P0-9b med en dokumenteret beslutningsmulighed. `npm ci --ignore-scripts`, 96/96 tests, audit 0/0, `node --check` og `git diff --check` grønne. Begge grene fast-forward-merget til `main` og pushet 2026-09-25. Næste iteration: P0-9b.
 - **Iteration 11 (P0-9b):** P0-9b lukkede de to sidste huller i curl-stien. `install.sh` havde `VERSION="0.1.4"` fastlåst tre minorer under npm-versionen og udpakkede uden checksum; den løser nu den nyeste publicerede `v*-cli`-release via det read-only releases-API (kun releases med CLI-tarball-asset, højeste semver, drafts/prereleases sprunget over), verificerer den publicerede `.sha256` før `tar -xzf`, erstatter i stedet for fletter en tidligere installation, nægter en tarball uden `src/cli.js` og har ét Node-krav (`REQUIRED_NODE_MAJOR` + én `node_too_old()`). Undervejs blev det målt, at **ingen** af de 12 publicerede releases har et `.sha256`-asset, så afvigende sum er en hård fejl, mens manglende sidecar er en tydelig advarsel (hård fejl med `DESKUPTIME_REQUIRE_CHECKSUM=1`) — ellers ville merge have slået hver curl-install ihjel. `release-cli.yml` uploader nu tarball og sidecar i samme step og `diff`-er sidecaren mod `sha256sum` før upload. Det forkerte `deskuptime-0.1.3.tar.gz` er fjernet fra repo-roden. 9 nye tests i `test/install.test.js` kører det rigtige script mod en lokal HTTP-server (opløsning, manipulations-afvisning, manglende sidecar i begge modi, pin, fallback, erstatning, tarball uden cli.js, gammel Node, versions-drift). Node 26.7.0: `npm ci --ignore-scripts`, **105/105** tests, audit 0/0, `node --check`, `sh -n`/`bash -n`, YAML-parse, ingen tabs, `git diff --check` grønne. Live-evidence: den rigtige GitHub-feed installerer nu 0.2.5 i stedet for 0.1.4. Næste iteration: P1-1, med ❓ 10 (ny `v*-cli`-release) som Mads-afhængighed.
+- **Iteration 12 (P1-1 del A):** Den versionsstyrede matrix blev source of truth for alle claims: ny `src/features.js` med produkt, pris, købs-/donations-/API-links, de håndhævede gratis-/Pro-grænser, 14 matrixrækker på både EN og DA med `implemented`-flag, og de præcis tre felter der sendes til licenserveren. `src/watch.js` og `src/license.js` læser konstanterne derfra, `--help` gengiver matrixen, og README + `docs/pro-alerts.md` §1/§5 er genererede blokke (`npm run matrix`; `--check` fejler på drift). Tre reelle fund blev lukket undervejs: `watch --once` afviste den fjerde URL med `Free tier monitors 3 URLs` **uden købslink** (watch-loopen havde den), hjælpebanneret var 6 tegn for smalt, og claims-testen låste på håndskrevne strenge. Ny `test/matrix.test.js` (8 tests) dækker generator-drift, alle rækker i begge sprog, at ikke-byggede kanaler (email/Slack/Discord/Teams/status-side/batch) ikke står i README eller `--help`, licensfelterne, gratisgrænsen mod en færdig `state.json` uden netværk, intervalhævningen mod en lokal HTTP-server og kontraktlinks + `FUNDING.yml`. Mutationstest: ændret `FREE` → 3 fejl, håndredigeret README-tabel → 2 fejl. Node 26.7.0: `npm ci --ignore-scripts`, **113/113** tests, `npm run audit` 0/0, `node --check`, `sh -n`/`bash -n`, YAML tab-fri og `git diff --check` grønne. P1-1 AC3 er `BLOCKED` på ❓ 8, AC5 afventer ❓ 1–3; nyt ❓ 0 spørger, om matrixen også skal eje siten og det private desktoprepo. Næste iteration: P1-1 del B eller P2-1.

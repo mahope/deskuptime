@@ -12,11 +12,12 @@
  */
 
 import { checkUrls, summarize } from './engine.js';
-import { startWatch, runOnce, printStatus, printPass, loadState, saveState } from './watch.js';
+import { startWatch, runOnce, printStatus, printPass, loadState, saveState, freeLimitMessage } from './watch.js';
 import { readFileSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { invalidHttpUrls } from './status.js';
+import { FREE, PRODUCT, renderHelpPro } from './features.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const pkg = JSON.parse(readFileSync(join(__dirname, '..', 'package.json'), 'utf-8'));
@@ -27,19 +28,21 @@ const command = args[0];
 
 // ── Help ──
 function showHelp() {
+  const title = `  deskuptime v${pkg.version} — Website Monitor CLI`;
+  const rule = '═'.repeat(title.length);
   console.log(`
-╔═══════════════════════════════════════════╗
-║  deskuptime v${pkg.version} — Website Monitor CLI        ║
-╚═══════════════════════════════════════════╝
+╔${rule}╗
+║${title}║
+╚${rule}╝
 
 USAGE:
   deskuptime check <urls...> [--json] [--timeout ms]  Check one or more URLs
   deskuptime headers <url>      Redirect chain, HTTPS enforcement + security headers
-  deskuptime watch <url> [--interval 300] [--webhook URL]  Monitor in background (free: up to 3 URLs)
+  deskuptime watch <url> [--interval 300] [--webhook URL]  Monitor in background (free: up to ${FREE.urlLimit} URLs)
   deskuptime watch <url> --once                      Run one monitoring pass and exit
   deskuptime watch --status                         Show status without network checks
   deskuptime activate <key>     Unlock Pro with your license key
-  deskuptime deactivate         Free this machine's Pro seat (3 machines per license)
+  deskuptime deactivate         Free this machine's Pro seat (${PRODUCT.machines} machines per license)
   deskuptime status             Show license state (active/cached/invalid/free) + monitored URLs
   deskuptime --version          Show version
   deskuptime --help             This help
@@ -58,12 +61,7 @@ FEATURES:
   • JSON output with --json for scripting/CI
   • Zero dependencies — Node 24+, any OS
 
-PRO FEATURES (license key, $19 one-time):
-  • Unlimited monitored URLs and a 30s interval (free: 3 URLs, 60s minimum)
-  • Webhook alerts: deskuptime watch <url> --webhook https://hooks.example.com/xyz
-  • Desktop app with tray, background monitoring and notifications (Windows/Linux/macOS)
-
-  Full free/Pro matrix and webhook payload: docs/pro-alerts.md
+${renderHelpPro()}
 `.trim());
 }
 
@@ -383,7 +381,7 @@ if (command === 'watch') {
       console.error('❌ Error: another watch pass is already running. Try again after it finishes.');
       process.exitCode = 1;
     } else if (pass.rejected) {
-      for (const url of pass.rejected) console.error(`❌ Error: Free tier monitors 3 URLs. ${url} not added.`);
+      for (const url of pass.rejected) console.error(`❌ Error: ${freeLimitMessage(url)}`);
       process.exitCode = 1;
     } else if (pass.empty) {
       console.error('❌ Error: at least one URL required');

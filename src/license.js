@@ -12,10 +12,13 @@
  */
 
 import { hostname } from 'os';
+import { PRODUCT } from './features.js';
 
-export const LICENSE_API_BASE = 'https://mahope.tools/api/license';
-export const PRODUCT_KEY = 'deskuptime-pro';
-export const BUY_URL = 'https://buy.stripe.com/7sY9AS9eX3Iu418fJ5bMQ01';
+// Product key, purchase link and API base are version-controlled in
+// src/features.js, so no customer surface can quote a different product.
+export const LICENSE_API_BASE = PRODUCT.licenseApiBase;
+export const PRODUCT_KEY = PRODUCT.key;
+export const BUY_URL = PRODUCT.buyUrl;
 export const OFFLINE_GRACE_MS = 7 * 24 * 60 * 60 * 1000;
 
 /** Hard total budget for one license call. A hanging server must not hang the CLI. */

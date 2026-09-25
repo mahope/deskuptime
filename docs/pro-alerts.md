@@ -1,28 +1,31 @@
 # Pro-alerts — kanalmatrix, payload og købsflow
 
-Status: **specificeret 2026-09-25**. Denne fil er source of truth for hvad gratis- og
-Pro-udgaven gør. README, `--help`, npm-beskrivelse og den private desktop-app skal
-matche denne matrix. `test/claims.test.js` fejler, hvis en kundeflade lover en kanal,
-der ikke står her som implementeret.
+Status: **specificeret 2026-09-25**. Kilden til sandheden er `src/features.js`: den
+matrix, der gengives her og i README, er genereret fra den fil af `tools/matrix.mjs`, og
+`test/matrix.test.js` fejler, hvis en committet flade afviger. Rækker, der ikke er
+implementeret, står her som *ikke bygget* — de skjules i README og `--help`, så ingen
+kundeflade kan love dem. Redigér claims i `src/features.js`, ikke i tabellerne.
 
 ## 1. Kanalmatrix
 
-| Funktion | Gratis (CLI, MIT) | Pro ($19 engang, 3 maskiner) | Implementeret |
-|---|---|---|---|
-| `check` — engangskontrol af vilkårlig mange URL'er | ✅ | ✅ | Ja |
-| `headers` — redirect-kæde + sikkerhedsheadere | ✅ | ✅ | Ja |
-| SSL-udløbsvarsel, issuer, gyldighed | ✅ | ✅ | Ja |
-| Content-ændringsdetektion (SHA-256) | ✅ | ✅ | Ja |
-| GitHub Action: `json`-output, `down-count`, job-summary | ✅ | ✅ | Ja |
-| `watch` — baggrundsovervågning | ✅ op til 3 URL'er, min. interval 60 s | ✅ ubegrænsede URL'er, min. interval 30 s | Ja |
-| Terminal-udskrift ved UP/DOWN/SSL/content | ✅ | ✅ | Ja |
-| Webhook-POST ved hændelse | ❌ | ✅ | Ja — se §2 |
-| Lokal desktop-notification | ❌ | ✅ (macOS) | Ja — se §3 |
-| Desktop-app: tray, baggrundsloop, aktivitetsoversigt | ❌ | ✅ | Privat repo `mahope/deskuptime-desktop` |
-| Email-alerts | ❌ | ❌ | **Nej.** Der loves ingen email i nogen kundeflade. |
-| Slack / Discord / Teams-kanal | ❌ | ❌ | **Nej.** Kræver en kanaladapter, der ikke findes. |
-| Delelig status-side / kunderapport | ❌ | Planlagt | **Nej.** |
-| Batch-job, flere lokationer, prioriteret support | ❌ | Planlagt | **Nej.** |
+<!-- BEGIN GENERATED: matrix -->
+| Funktion | Gratis (CLI, MIT) | Pro ($19 one-time, 3 maskiner) | Status |
+| --- | --- | --- | --- |
+| `check` og `headers` på vilkårlig mange URL'er | ✅ | ✅ | I begge |
+| SSL-udløbsnedtælling, issuer og content-ændringsdetektion | ✅ | ✅ | I begge |
+| GitHub Action med JSON-output, `down-count` og job-summary | ✅ | ✅ | I begge |
+| JSON-output (`--json`) til scripts og CI | ✅ | ✅ | I begge |
+| `watch` baggrundsovervågning | 3 URL'er, min. 60 s interval | Ubegrænsede URL'er, min. 30 s interval | I begge |
+| Terminal-udskrift ved UP/DOWN/SSL/content-ændring | ✅ | ✅ | I begge |
+| `deskuptime status` — licenstilstand og overvågede URL'er, read-only | ✅ | ✅ | I begge |
+| Webhook-alerts ved hver hændelse (`--webhook`) | — | ✅ | Kun Pro |
+| Lokal desktop-notification (macOS i CLI'en, alle platforme i desktopappen) | — | ✅ | Kun Pro |
+| Desktop-app: tray, baggrundsloop, aktivitetsoversigt | — | ✅ | Kun Pro — privat desktopapp |
+| Email-alerts | — | — | **Ikke bygget** |
+| Slack / Discord / Teams-kanal | — | — | **Ikke bygget** |
+| Delelig status-side / kunderapport | — | Planlagt | Planlagt — ikke en del af købet |
+| Batch-job, flere lokationer, prioriteret support | — | Planlagt | Planlagt — ikke en del af købet |
+<!-- END GENERATED: matrix -->
 
 Regel: en kanal må ikke nævnes i README, `--help`, npm eller købsflow, medmindre den
 står som implementeret her. Planlagte kanaler nævnes kun som planlagt og uden købsclaim.
@@ -86,11 +89,19 @@ Den fulde klassificering, timeout og tilstandsmaskineri står i
 
 ## 5. Privacy
 
-- Licensserveren (`https://mahope.tools/api/license/*`) modtager `license_key`,
-  `device_id` (maskinnavn, maks. 128 tegn) og `product`. Ingen overvågede URL'er,
-  ingen IP-adresser, ingen historik.
-- `device_id` er `deskuptime-` + maskinnavnet i lowercase, trimmet og afkortet til
-  128 tegn. På native Windows læses `COMPUTERNAME`, fordi `os.hostname()` der
+<!-- BEGIN GENERATED: license data -->
+Licensserveren modtager pr. kald præcis tre felter: `license_key`, `device_id`, `product`. Aldrig: overvågede URL'er, sideindhold, kontrolresultater, IP-adresser eller historik.
+
+| Felt | Hvad det er |
+| --- | --- |
+| `license_key` | Din 32-tegns licensnøgle |
+| `device_id` | Et maskine-id udledt af computerens navn (`deskuptime-` + navn, maks. 128 tegn) |
+| `product` | Produktnøglen `deskuptime-pro` |
+<!-- END GENERATED: license data -->
+
+- Licensserveren kaldes kun fra `activate` og den daglige re-check; intet andet i
+  CLI'en taler med `mahope.tools`.
+- `device_id` på native Windows læses `COMPUTERNAME`, fordi `os.hostname()` der
   returnerer det 15-tegns NetBIOS-navn, som CLI'en ellers ville afvige fra
   desktopappen på. Scheme'et er låst i `test/fixtures/device-id.golden.json`,
   som Rust-siden skal køre mod samme fil.
