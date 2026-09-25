@@ -20,6 +20,7 @@ import { invalidHttpUrls } from './status.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const pkg = JSON.parse(readFileSync(join(__dirname, '..', 'package.json'), 'utf-8'));
+const MAX_WATCH_INTERVAL = 2_147_483;
 
 const args = process.argv.slice(2);
 const command = args[0];
@@ -281,7 +282,7 @@ if (command === 'deactivate') {
 
 function watchOptionValue(raw, index, name) {
   const value = raw[index + 1];
-  if (value === undefined || (name !== '--interval' && value.startsWith('-'))) {
+  if (!value || (name !== '--interval' && value.startsWith('-'))) {
     console.error(`❌ Error: ${name} requires a value`);
     process.exit(1);
   }
@@ -319,8 +320,8 @@ function parseWatchArgs(raw) {
           process.exit(1);
         }
         const interval = Number(watchOptionValue(raw, index, '--interval'));
-        if (!Number.isInteger(interval) || interval < 1) {
-          console.error('❌ Error: --interval must be a positive integer');
+        if (!Number.isInteger(interval) || interval < 1 || interval > MAX_WATCH_INTERVAL) {
+          console.error(`❌ Error: --interval must be between 1 and ${MAX_WATCH_INTERVAL} seconds`);
           process.exit(1);
         }
         options.interval = interval;
@@ -373,7 +374,13 @@ if (command === 'watch') {
     process.exitCode = 0;
   } else if (options.once) {
     const pass = await runOnce(options.urls, { interval: options.interval });
-    if (pass.empty) {
+    if (pass.busy) {
+      console.error('❌ Error: another watch pass is already running. Try again after it finishes.');
+      process.exitCode = 1;
+    } else if (pass.rejected) {
+      for (const url of pass.rejected) console.error(`❌ Error: Free tier monitors 3 URLs. ${url} not added.`);
+      process.exitCode = 1;
+    } else if (pass.empty) {
       console.error('❌ Error: at least one URL required');
       console.error('Usage: deskuptime watch <url> --once');
       process.exitCode = 1;

@@ -11,7 +11,7 @@
 
 import { checkUrl } from './engine.js';
 import { activateLicense, refreshLicense } from './license.js';
-import { readFileSync, writeFileSync, mkdirSync, existsSync, renameSync, unlinkSync } from 'fs';
+import { readFileSync, writeFileSync, mkdirSync, existsSync, renameSync, unlinkSync, statSync } from 'fs';
 import { dirname, posix, win32 } from 'path';
 import { homedir } from 'os';
 import { createHash, randomUUID } from 'crypto';
@@ -21,6 +21,7 @@ const FREE_URL_LIMIT = 3;
 const FREE_MIN_INTERVAL = 60;
 const PRO_MIN_INTERVAL = 30;
 const LICENSE_RECHECK_MS = 24 * 60 * 60 * 1000;
+const STATE_LOCK_MAX_AGE_MS = 5 * 60 * 1000;
 
 export function getStateFile({ env = process.env, platform = process.platform } = {}) {
   const home = platform === 'win32'
@@ -222,13 +223,82 @@ function mergePersistedState(state, options) {
   return state;
 }
 
+function removeStaleStateLock(lockFile) {
+  let modifiedAt;
+  try {
+    modifiedAt = statSync(lockFile).mtimeMs;
+  } catch (error) {
+    return error.code === 'ENOENT';
+  }
+
+  let owner = null;
+  try {
+    owner = JSON.parse(readFileSync(lockFile, 'utf8'));
+  } catch {
+    if (Date.now() - modifiedAt < 30_000) return false;
+  }
+
+  if (owner && Date.now() - modifiedAt <= STATE_LOCK_MAX_AGE_MS) {
+    if (!Number.isInteger(owner.pid) || owner.pid <= 0 || owner.pid === process.pid) return false;
+    try {
+      process.kill(owner.pid, 0);
+      return false;
+    } catch (error) {
+      if (error.code !== 'ESRCH') return false;
+    }
+  }
+
+  try {
+    unlinkSync(lockFile);
+    return true;
+  } catch (error) {
+    return error.code === 'ENOENT';
+  }
+}
+
+function acquireStateLock(stateFile) {
+  const lockFile = `${stateFile}.lock`;
+  const token = randomUUID();
+  mkdirSync(dirname(stateFile), { recursive: true });
+
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      writeFileSync(lockFile, JSON.stringify({ pid: process.pid, createdAt: Date.now(), token }), { flag: 'wx', mode: 0o600 });
+      return () => {
+        try {
+          const owner = JSON.parse(readFileSync(lockFile, 'utf8'));
+          if (owner.token === token) unlinkSync(lockFile);
+        } catch {}
+      };
+    } catch (error) {
+      if (error.code !== 'EEXIST') throw error;
+      if (attempt === 0 && removeStaleStateLock(lockFile)) continue;
+      return null;
+    }
+  }
+  return null;
+}
+
 export async function runOnce(urls, opts = {}) {
   assertValidHttpUrls(urls);
-  const state = loadState(opts);
-  const added = addMonitoredUrls(state, urls, isPro(state));
-  if (Object.keys(state.urls).length === 0) return { events: [], results: [], healthy: false, added, empty: true };
-  const pass = await runPass(state, { ...opts, returnResults: true });
-  return { ...pass, added };
+  const release = acquireStateLock(stateFileFrom(opts));
+  if (!release) return { events: [], results: [], healthy: false, added: 0, busy: true };
+
+  try {
+    const state = loadState(opts);
+    const pro = isPro(state);
+    if (!pro) {
+      const available = Math.max(FREE_URL_LIMIT - Object.keys(state.urls).length, 0);
+      const rejected = [...new Set(urls)].filter(url => !state.urls[url]).slice(available);
+      if (rejected.length > 0) return { events: [], results: [], healthy: false, added: 0, rejected };
+    }
+    const added = addMonitoredUrls(state, urls, pro);
+    if (Object.keys(state.urls).length === 0) return { events: [], results: [], healthy: false, added, empty: true };
+    const pass = await runPass(state, { ...opts, returnResults: true });
+    return { ...pass, added };
+  } finally {
+    release();
+  }
 }
 
 /**

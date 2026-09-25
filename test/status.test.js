@@ -8,7 +8,7 @@ import { tmpdir } from 'node:os';
 import { join, win32 } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { checkUrl, checkUrls } from '../src/engine.js';
-import { getStateFile, loadState, runOnce, runPass } from '../src/watch.js';
+import { getStateFile, loadState, runPass } from '../src/watch.js';
 
 const run = promisify(execFile);
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
@@ -384,6 +384,63 @@ test('watch --once without a URL or saved state exits 1', async (t) => {
   );
 });
 
+test('watch --once rejects URLs beyond the free limit before any request', async (t) => {
+  let requests = 0;
+  const baseUrl = await statusServer(t, undefined, () => { requests++; });
+  const home = mkdtempSync(join(tmpdir(), 'deskuptime-once-limit-'));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  const urls = [200, 201, 202, 203].map(status => `${baseUrl}/status/${status}`);
+
+  await assert.rejects(
+    run(process.execPath, [CLI, 'watch', ...urls, '--once'], {
+      env: { ...process.env, HOME: home, USERPROFILE: home },
+    }),
+    (error) => {
+      assert.equal(error.code, 1);
+      assert.match(error.stderr, /Free tier monitors 3 URLs/);
+      assert.match(error.stderr, new RegExp(urls[3].replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+      return true;
+    },
+  );
+  assert.equal(requests, 0);
+});
+
+test('watch --once rejects empty option values before any request', async (t) => {
+  let requests = 0;
+  const baseUrl = await statusServer(t, undefined, () => { requests++; });
+  const home = mkdtempSync(join(tmpdir(), 'deskuptime-once-options-'));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  const env = { ...process.env, HOME: home, USERPROFILE: home };
+
+  for (const option of ['--activate', '--webhook']) {
+    await assert.rejects(
+      run(process.execPath, [CLI, 'watch', `${baseUrl}/status/200`, '--once', option, ''], { env }),
+      (error) => {
+        assert.equal(error.code, 1);
+        assert.match(error.stderr, new RegExp(`${option} requires a value`));
+        return true;
+      },
+    );
+  }
+  assert.equal(requests, 0);
+});
+
+test('watch rejects intervals that cannot be scheduled safely', async (t) => {
+  const home = mkdtempSync(join(tmpdir(), 'deskuptime-interval-'));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+
+  await assert.rejects(
+    run(process.execPath, [CLI, 'watch', '--interval', '2147483648'], {
+      env: { ...process.env, HOME: home, USERPROFILE: home },
+    }),
+    (error) => {
+      assert.equal(error.code, 1);
+      assert.match(error.stderr, /--interval must be between 1 and 2147483 seconds/);
+      return true;
+    },
+  );
+});
+
 test('watch --once exits 2 for DOWN and never claims all sites are OK', async (t) => {
   const baseUrl = await statusServer(t);
   const home = mkdtempSync(join(tmpdir(), 'deskuptime-once-down-'));
@@ -500,47 +557,36 @@ test('watch status transitions use healthy and preserve DOWN across saved passes
   ]);
 });
 
-test('watch pass does not mix a concurrent state snapshot into its results', async (t) => {
-  const url = 'http://watch.test/concurrent';
-  const home = mkdtempSync(join(tmpdir(), 'deskuptime-concurrent-'));
+test('watch --once refuses a concurrent pass without changing state', async (t) => {
+  let requests = 0;
+  const baseUrl = await statusServer(t, undefined, () => { requests++; });
+  const home = mkdtempSync(join(tmpdir(), 'deskuptime-locked-'));
   t.after(() => rmSync(home, { recursive: true, force: true }));
+  const url = `${baseUrl}/status/200`;
   const options = { env: { HOME: home, USERPROFILE: home } };
   const stateFile = getStateFile(options);
-  const initialEntry = {
-    ...watchState(url).urls[url],
-    wasUp: true,
-    lastStatus: 200,
-    lastHash: 'stable',
-    lastChecked: '2026-09-25T00:00:00.000Z',
-  };
+  const lockFile = `${stateFile}.lock`;
   mkdirSync(join(home, '.deskuptime'), { recursive: true });
-  writeFileSync(stateFile, JSON.stringify({ urls: { [url]: initialEntry } }));
+  const state = { urls: { [url]: { wasUp: true, lastStatus: 200 } } };
+  const lock = { pid: process.pid, createdAt: Date.now() };
+  writeFileSync(stateFile, JSON.stringify(state));
+  writeFileSync(lockFile, JSON.stringify(lock));
+  const stateBefore = readFileSync(stateFile, 'utf8');
+  const lockBefore = readFileSync(lockFile, 'utf8');
 
-  const pass = await runOnce([url], {
-    ...options,
-    check: async () => {
-      writeFileSync(stateFile, JSON.stringify({
-        urls: {
-          [url]: {
-            ...initialEntry,
-            wasUp: false,
-            lastStatus: 503,
-            lastChecked: '2099-01-01T00:00:00.000Z',
-          },
-        },
-      }));
-      return watchResult({
-        url,
-        content: { fetched: true, contentLength: 10, hash: 'stable', changed: false },
-      });
+  await assert.rejects(
+    run(process.execPath, [CLI, 'watch', url, '--once'], {
+      env: { ...process.env, ...options.env },
+    }),
+    (error) => {
+      assert.equal(error.code, 1);
+      assert.match(error.stderr, /another watch pass is already running/i);
+      return true;
     },
-  });
-
-  const saved = JSON.parse(readFileSync(stateFile, 'utf8')).urls[url];
-  assert.deepEqual(pass.events, []);
-  assert.equal(pass.healthy, true);
-  assert.equal(saved.wasUp, true);
-  assert.equal(saved.lastStatus, 200);
+  );
+  assert.equal(requests, 0);
+  assert.equal(readFileSync(stateFile, 'utf8'), stateBefore);
+  assert.equal(readFileSync(lockFile, 'utf8'), lockBefore);
 });
 
 test('watch content transitions are latched to the saved hash', async (t) => {
