@@ -372,3 +372,18 @@ test('engine: a too-large page is never reported as a DOWN site', async (t) => {
   assert.equal(result.content.fetched, false);
   assert.equal(result.content.tooLarge, true);
 });
+
+test('content: a non-UTF-8 page keeps its title and reports its real byte count', async (t) => {
+  // The old code reported UTF-16 code units as "bytes" and let the runtime pick
+  // the decoder. Getting either wrong shows up as a one-off false
+  // content-changed alert on every non-ASCII site after an upgrade.
+  const body = Buffer.from('<html><head><title>Smørrebrød</title></head><body>æøå</body></html>', 'latin1');
+  const base = await bodyServer(t, (_req, res) => {
+    res.writeHead(200, { 'content-type': 'text/html; charset=iso-8859-1' });
+    res.end(body);
+  });
+  const r = await checkContentChange(`${base}/`);
+  assert.equal(r.fetched, true);
+  assert.equal(r.title, 'Smørrebrød', 'the declared charset must be honoured, not mojibake');
+  assert.equal(r.contentLength, body.length, 'bytes on the wire, not characters');
+});
