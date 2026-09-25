@@ -6,14 +6,20 @@
 import { test, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { createServer } from 'node:http';
 import {
   activateLicense,
   validateLicense,
   deactivateLicense,
   refreshLicense,
   getDeviceId,
+  normalizeLicense,
+  describeLicense,
+  redactSecrets,
   LICENSE_API_BASE,
   PRODUCT_KEY,
+  LICENSE_STATUS,
+  LICENSE_TIMEOUT_MS,
   OFFLINE_GRACE_MS,
 } from '../src/license.js';
 
@@ -21,14 +27,15 @@ const KEY = '0123456789abcdef0123456789abcdef';
 const realFetch = globalThis.fetch;
 let calls = [];
 
-function mockFetch(status, body) {
+function mockFetch(status, body, { raw = false } = {}) {
   calls = [];
   globalThis.fetch = async (url, init) => {
     calls.push({ url, init, body: JSON.parse(init.body) });
     if (body instanceof Error) throw body;
-    return new Response(JSON.stringify(body), {
+    const payload = raw ? body : JSON.stringify(body);
+    return new Response(payload, {
       status,
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': raw ? 'text/html' : 'application/json' },
     });
   };
 }
@@ -170,4 +177,201 @@ test('refresh: definitive invalid answer drops Pro', async () => {
   const r = await refreshLicense(lic(1), { now: NOW });
   assert.equal(r.pro, false);
   assert.match(r.reason, /revoked/);
+});
+
+// ── P0-7: a hard timeout, so a hanging server cannot hang the CLI ──
+test('license: every call carries an abort signal and a finite timeout', async () => {
+  mockFetch(200, { ok: true, activated: true });
+  await activateLicense(KEY, 'dev-1');
+  assert.ok(calls[0].init.signal instanceof AbortSignal);
+  assert.equal(LICENSE_TIMEOUT_MS, 10_000);
+  // An unset signal would hang forever: a timed-out signal is what turns a
+  // stalled connection into a transient verdict.
+  assert.ok(Number.isFinite(LICENSE_TIMEOUT_MS) && LICENSE_TIMEOUT_MS > 0);
+});
+
+test('license: a real stalled server is aborted and reported as transient', async () => {
+  const real = realFetch;
+  let released;
+  const stalled = new Promise((resolve) => { released = resolve; });
+  const server = createServer(async (req, res) => { await stalled; res.end('{}'); });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const { port } = server.address();
+  globalThis.fetch = (url, init) => real(`http://127.0.0.1:${port}/`, init);
+  try {
+    const res = await validateLicense(KEY, 'dev-1', { timeoutMs: 150 });
+    assert.equal(res.valid, false);
+    assert.equal(res.transient, true);
+    assert.match(res.error, /did not answer within 150ms/);
+  } finally {
+    globalThis.fetch = real;
+    released();
+    server.close();
+  }
+});
+
+// ── P0-7: which HTTP answers carry a verdict, and which do not ──
+test('validate: 408 and 429 carry no verdict, 400/403/404/409 do', async () => {
+  for (const status of [408, 429, 502, 503]) {
+    mockFetch(status, { ok: false, error: 'later' });
+    const res = await validateLicense(KEY, 'dev-1');
+    assert.equal(res.transient, true, `HTTP ${status} must be transient`);
+  }
+  for (const status of [400, 403, 404, 409]) {
+    mockFetch(status, { ok: false, error: 'definitive' });
+    const res = await validateLicense(KEY, 'dev-1');
+    assert.equal(res.transient, false, `HTTP ${status} must be a verdict`);
+  }
+});
+
+test('validate: a 200 that is not a verdict (HTML page, empty body, ok:false) is transient', async () => {
+  mockFetch(200, '<html>Just a moment…</html>', { raw: true });
+  let res = await validateLicense(KEY, 'dev-1');
+  assert.equal(res.valid, false);
+  assert.equal(res.transient, true, 'a captive portal must not read as "revoked"');
+
+  mockFetch(200, {});
+  res = await validateLicense(KEY, 'dev-1');
+  assert.equal(res.transient, true);
+
+  mockFetch(200, { ok: false, error: 'proxy said no' });
+  res = await validateLicense(KEY, 'dev-1');
+  assert.equal(res.transient, true);
+});
+
+test('validate: 200 with ok:true and valid:false is a real verdict, not a fault', async () => {
+  mockFetch(200, { ok: true, valid: false, reason: 'Expired 2026-01-01' });
+  const res = await validateLicense(KEY, 'dev-1');
+  assert.equal(res.valid, false);
+  assert.equal(res.transient, false);
+  assert.match(res.error, /Expired/);
+});
+
+test('validate: 200 with ok:true but no valid field is no verdict', async () => {
+  mockFetch(200, { ok: true, plan: 'pro' });
+  const res = await validateLicense(KEY, 'dev-1');
+  assert.equal(res.transient, true, 'a missing verdict must not silently revoke Pro');
+  const r = await refreshLicense(lic(1), { now: NOW });
+  assert.equal(r.pro, true);
+  assert.equal(r.status, LICENSE_STATUS.CACHED);
+});
+
+test('activate: a malformed 200 is transient and never stores a key', async () => {
+  mockFetch(200, 'not json at all', { raw: true });
+  const res = await activateLicense(KEY, 'dev-1');
+  assert.equal(res.valid, false);
+  assert.equal(res.activated, false);
+  assert.equal(res.transient, true);
+  assert.equal(res.key, undefined);
+});
+
+test('deactivate: transient or malformed answers keep the seat occupied', async () => {
+  mockFetch(503, { ok: false, error: 'down' });
+  let res = await deactivateLicense(KEY, 'dev-1');
+  assert.equal(res.deactivated, false);
+  assert.equal(res.transient, true);
+  mockFetch(200, '<html>maintenance</html>', { raw: true });
+  res = await deactivateLicense(KEY, 'dev-1');
+  assert.equal(res.deactivated, false);
+  mockFetch(200, { ok: true, deactivated: false });
+  res = await deactivateLicense(KEY, 'dev-1');
+  assert.equal(res.deactivated, false, 'only deactivated:true frees the seat');
+});
+
+// ── P0-7: status — four states, and the key is kept for diagnosis ──
+test('refresh: a transient fault inside the grace window reports cached/offline', async () => {
+  mockFetch(429, { ok: false, error: 'slow down' });
+  const r = await refreshLicense(lic(1), { now: NOW });
+  assert.equal(r.pro, true);
+  assert.equal(r.status, LICENSE_STATUS.CACHED);
+  assert.equal(r.license.status, LICENSE_STATUS.CACHED);
+  assert.equal(r.license.key, KEY);
+});
+
+test('refresh: a malformed 200 keeps cached Pro instead of revoking it', async () => {
+  mockFetch(200, '{"ok": true', { raw: true });
+  const r = await refreshLicense(lic(2), { now: NOW });
+  assert.equal(r.pro, true);
+  assert.equal(r.status, LICENSE_STATUS.CACHED);
+});
+
+test('refresh: revoked key loses Pro at once but keeps the key for support', async () => {
+  mockFetch(404, { ok: false, error: 'Unknown license key' });
+  const r = await refreshLicense(lic(0.01), { now: NOW });
+  assert.equal(r.pro, false);
+  assert.equal(r.status, LICENSE_STATUS.INVALID);
+  assert.equal(r.license.key, KEY, 'the key must survive so a later check can restore Pro');
+  assert.equal(r.license.instance, 'dev-1');
+});
+
+test('refresh: no key at all is the free state', async () => {
+  mockFetch(200, {});
+  const r = await refreshLicense(null, { now: NOW });
+  assert.equal(r.pro, false);
+  assert.equal(r.status, LICENSE_STATUS.FREE);
+  assert.equal(calls.length, 0);
+});
+
+test('describe: reports free, active, cached/offline and invalid', () => {
+  assert.equal(describeLicense(null).status, LICENSE_STATUS.FREE);
+  assert.equal(describeLicense({ key: KEY, instance: 'dev-1', status: 'active', validatedAt: new Date(NOW).toISOString() }, { now: NOW }).status, LICENSE_STATUS.ACTIVE);
+  const cached = describeLicense({ key: KEY, instance: 'dev-1', status: 'cached', validatedAt: new Date(NOW - 2 * DAY).toISOString() }, { now: NOW });
+  assert.equal(cached.status, LICENSE_STATUS.CACHED);
+  assert.match(cached.detail, /unreachable/);
+  const invalid = describeLicense({ key: KEY, instance: 'dev-1', status: 'invalid', validatedAt: new Date(NOW).toISOString() }, { now: NOW });
+  assert.equal(invalid.status, LICENSE_STATUS.INVALID);
+});
+
+test('describe: a state file written before the status field exists is classified by age', () => {
+  const fresh = { key: KEY, instance: 'dev-1', validatedAt: new Date(NOW - 1 * DAY).toISOString() };
+  assert.equal(describeLicense(fresh, { now: NOW }).status, LICENSE_STATUS.ACTIVE);
+  const stale = { key: KEY, instance: 'dev-1', validatedAt: new Date(NOW - 9 * DAY).toISOString() };
+  const described = describeLicense(stale, { now: NOW });
+  assert.equal(described.status, LICENSE_STATUS.INVALID);
+  assert.match(described.detail, /9 days/);
+});
+
+test('describe: a cached state whose grace has since run out reports invalid, not cached', () => {
+  const stale = { key: KEY, instance: 'dev-1', status: 'cached', validatedAt: new Date(NOW - 9 * DAY).toISOString() };
+  const described = describeLicense(stale, { now: NOW });
+  assert.equal(described.status, LICENSE_STATUS.INVALID);
+  assert.match(described.detail, /9 days/);
+  assert.doesNotMatch(described.detail, /rejected/, 'no verdict is not a rejection');
+});
+
+test('normalizeLicense: a malformed record is not a license', () => {
+  assert.equal(normalizeLicense(null), null);
+  assert.equal(normalizeLicense('nope'), null);
+  assert.equal(normalizeLicense({ key: 'short', instance: 'dev-1' }), null);
+  assert.equal(normalizeLicense({ key: KEY.toUpperCase(), instance: '' }), null);
+  assert.equal(normalizeLicense({ key: KEY, instance: 'x'.repeat(129) }), null);
+  const ok = normalizeLicense({ key: ` ${KEY.toUpperCase()} `, instance: ' dev-1 ', status: 'active', validatedAt: '2026-09-24T12:00:00Z', plan: 'pro' });
+  assert.deepEqual(ok, { key: KEY, instance: 'dev-1', status: 'active', validatedAt: '2026-09-24T12:00:00.000Z', plan: 'pro' });
+});
+
+// ── P0-7: no key, no machine name, in any message we print ──
+test('redact: server errors and network errors never carry the key or the machine', () => {
+  assert.equal(redactSecrets(`bad key ${KEY}`), 'bad key «key»');
+  assert.equal(redactSecrets('device deskuptime-workstation-nord-01 rejected'), 'device deskuptime-«device» rejected');
+  assert.doesNotMatch(redactSecrets('getaddrinfo failed for deskuptime-workstation-nord-01'), /workstation/);
+});
+
+test('redact: a server that echoes the key back cannot leak it to the terminal', async () => {
+  mockFetch(403, { ok: false, error: `Key ${KEY} is for another product (deskuptime-maskine-01)` });
+  const res = await validateLicense(KEY, 'dev-1');
+  assert.doesNotMatch(res.error, new RegExp(KEY));
+  assert.doesNotMatch(res.error, /maskine-01/);
+  assert.match(res.error, /«key»/);
+  const act = await activateLicense(KEY, 'dev-1');
+  assert.doesNotMatch(act.error, new RegExp(KEY));
+});
+
+test('activate: 200 with ok:true but no activated field is no verdict', async () => {
+  mockFetch(200, { ok: true, plan: 'pro' });
+  const res = await activateLicense(KEY, 'dev-1');
+  assert.equal(res.transient, true);
+  assert.equal(res.key, undefined);
+  // An explicit activated:false is a real answer and stays definitive.
+  mockFetch(200, { ok: true, activated: false, error: 'Seat already released' });
+  assert.equal((await activateLicense(KEY, 'dev-1')).transient, false);
 });

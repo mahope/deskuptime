@@ -3,12 +3,12 @@ import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { createServer } from 'node:http';
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, existsSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, existsSync, rmSync, readdirSync, statSync, chmodSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, win32 } from 'node:path';
+import { join, dirname, win32 } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { checkUrl, checkUrls } from '../src/engine.js';
-import { getStateFile, loadState, runPass } from '../src/watch.js';
+import { getStateFile, loadState, runPass, saveState, isPro } from '../src/watch.js';
 
 const run = promisify(execFile);
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
@@ -650,4 +650,82 @@ test('watch SSL warnings latch through unavailable checks until recovery', async
   const warnings = passes.flatMap(pass => pass.events.filter(event => event.type === 'ssl_warning'));
   assert.equal(warnings.length, 2);
   assert.equal(state.urls[url].sslWarned, true);
+});
+
+// ── P0-7: the stored license and the state file that holds it ──
+const LICENSE_KEY = '0123456789abcdef0123456789abcdef';
+
+test('state file is 0600 inside a 0700 directory and leaves no temp file', { skip: process.platform === 'win32' ? 'POSIX modes' : false }, (t) => {
+  const home = mkdtempSync(join(tmpdir(), 'deskuptime-mode-'));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  const options = { env: { HOME: home, USERPROFILE: home } };
+  const stateFile = getStateFile(options);
+
+  saveState({ ...watchState('https://watch.test/'), license: { key: LICENSE_KEY, instance: 'deskuptime-maskine' } }, options);
+  assert.equal(statSync(dirname(stateFile)).mode & 0o777, 0o700, 'the directory holds the key');
+  assert.equal(statSync(stateFile).mode & 0o777, 0o600, 'the key must not be world-readable');
+
+  // A pre-existing world-readable file is tightened on the next write.
+  chmodSync(stateFile, 0o644);
+  saveState({ urls: {} }, options);
+  assert.equal(statSync(stateFile).mode & 0o777, 0o600);
+  assert.deepEqual(readdirSync(dirname(stateFile)), ['state.json'], 'atomic swap leaves no temp file');
+});
+
+test('loadState drops a corrupt license record instead of granting Pro', (t) => {
+  const home = mkdtempSync(join(tmpdir(), 'deskuptime-license-'));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  const options = { env: { HOME: home, USERPROFILE: home } };
+  const stateFile = getStateFile(options);
+  const write = (license) => {
+    mkdirSync(dirname(stateFile), { recursive: true });
+    writeFileSync(stateFile, JSON.stringify({ urls: {}, license }));
+  };
+
+  write({ key: 'not-a-key', instance: 'deskuptime-maskine' });
+  assert.equal(isPro(loadState(options)), false, 'a malformed key is not Pro');
+
+  write({ key: LICENSE_KEY });
+  assert.equal(isPro(loadState(options)), false, 'a license without a device id is not Pro');
+
+  write('just a string');
+  assert.equal(loadState(options).license, undefined);
+
+  write({ key: LICENSE_KEY.toUpperCase(), instance: ' deskuptime-maskine ', status: 'active', validatedAt: '2026-09-24T12:00:00Z' });
+  const loaded = loadState(options);
+  assert.equal(isPro(loaded), true);
+  assert.equal(loaded.license.key, LICENSE_KEY, 'the key is normalised on load');
+  assert.equal(loaded.license.instance, 'deskuptime-maskine');
+});
+
+test('a license the server rejected loses Pro, a cached one keeps it', () => {
+  const base = { key: LICENSE_KEY, instance: 'deskuptime-maskine' };
+  assert.equal(isPro({ license: { ...base, status: 'invalid' } }), false);
+  assert.equal(isPro({ license: { ...base, status: 'cached' } }), true);
+  assert.equal(isPro({ license: { ...base, status: 'active' } }), true);
+  // Legacy state without a status keeps working until the next re-check.
+  assert.equal(isPro({ license: base }), true);
+});
+
+test('cli: status names the license state and never prints the key', async (t) => {
+  const home = mkdtempSync(join(tmpdir(), 'deskuptime-status-'));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  const stateFile = getStateFile({ env: { HOME: home } });
+  mkdirSync(dirname(stateFile), { recursive: true });
+  const env = { ...process.env, HOME: home, USERPROFILE: home };
+  const withLicense = async (license) => {
+    writeFileSync(stateFile, JSON.stringify({ urls: {}, license }));
+    const { stdout } = await run(process.execPath, [CLI, 'status'], { env });
+    return stdout;
+  };
+  const yesterday = new Date(Date.now() - 86_400_000).toISOString();
+
+  assert.match(await withLicense(null), /Free tier\. Activate Pro/);
+  assert.match(await withLicense({ key: LICENSE_KEY, instance: 'deskuptime-maskine', status: 'active', validatedAt: yesterday }), /Pro license: active, last verified/);
+  assert.match(await withLicense({ key: LICENSE_KEY, instance: 'deskuptime-maskine', status: 'cached', validatedAt: yesterday }), /Pro license: cached\/offline/);
+  const invalid = await withLicense({ key: LICENSE_KEY, instance: 'deskuptime-maskine', status: 'invalid', validatedAt: yesterday });
+  assert.match(invalid, /Pro license: invalid/);
+  assert.match(invalid, /still stored/);
+  assert.doesNotMatch(invalid, new RegExp(LICENSE_KEY));
+  assert.doesNotMatch(invalid, /deskuptime-maskine/);
 });

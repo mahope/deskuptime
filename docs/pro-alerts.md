@@ -74,10 +74,15 @@ Ingen licensnøgle, device-id eller brugerdata sendes i payloaden. Se §5.
 
 | Situation | Adfærd |
 |---|---|
-| Licensserver nede eller 5xx | Pro fortsætter med cachet status i 7 dage, ingen låsning ude |
+| Licensserver nede, timeout, 429/408/5xx eller ulæseligt svar | Pro fortsætter med cachet status i 7 dage, ingen låsning ude |
+| Licensnøgle afslået (400/403/404/409) | Pro slår fra med det samme; nøglen bevares til diagnose |
 | Webhook-endpoint nede eller timeout | Advarsel på stderr, overvågningen fortsætter, ingen retry |
 | Overvåget site nede | Gentages `is DOWN`-linje hvert pass; kun `down`-begivenheden går i webhook |
 | `watch` kørt to gange samtidig | Anden proces afvises med exit 1, ingen state-skrivning |
+
+Den fulde klassificering, timeout og tilstandsmaskineri står i
+`docs/license-lifecycle.md`. `deskuptime status` viser tilstanden som `active`,
+`cached/offline`, `invalid` eller `free`.
 
 ## 5. Privacy
 
@@ -91,7 +96,8 @@ Ingen licensnøgle, device-id eller brugerdata sendes i payloaden. Se §5.
   som Rust-siden skal køre mod samme fil.
 - Webhook-modtageren ser kun felterne i §2 — den URL, der netop ændrede tilstand.
 - Gemt state (`~/.deskuptime/state.json`) indeholder de URL'er, brugeren selv har
-  tilføjet, plus sidste status, SSL-dage og content-hash. Filen skrives `0600` på POSIX.
+  tilføjet, plus sidste status, SSL-dage og content-hash. Licensnøglen ligger i
+  samme fil og skrives `0600` i en `0700`-mappe på POSIX.
 
 ## 6. Pris og entitlement
 

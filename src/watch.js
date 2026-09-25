@@ -10,8 +10,8 @@
  */
 
 import { checkUrl } from './engine.js';
-import { activateLicense, refreshLicense } from './license.js';
-import { readFileSync, writeFileSync, mkdirSync, existsSync, renameSync, unlinkSync, statSync } from 'fs';
+import { activateLicense, refreshLicense, normalizeLicense, LICENSE_STATUS } from './license.js';
+import { readFileSync, writeFileSync, mkdirSync, existsSync, renameSync, unlinkSync, statSync, chmodSync } from 'fs';
 import { dirname, posix, win32 } from 'path';
 import { homedir } from 'os';
 import { createHash, randomUUID } from 'crypto';
@@ -52,7 +52,13 @@ function normalizeState(value) {
   const urls = Object.fromEntries(
     Object.entries(value.urls).filter(([, entry]) => entry && typeof entry === 'object' && !Array.isArray(entry)),
   );
-  return { ...value, urls };
+  const state = { ...value, urls };
+  // A license record is only trusted if it validates: a hand-edited or
+  // half-written state file must not hand out Pro, and must not crash the CLI.
+  const license = normalizeLicense(state.license);
+  if (license) state.license = license;
+  else delete state.license;
+  return state;
 }
 
 function stateFileFrom(options) {
@@ -69,21 +75,39 @@ export function loadState(options = {}) {
   }
 }
 
+/**
+ * State holds the license key and the monitored URLs, so it is written 0600
+ * inside a 0700 directory, and swapped in atomically: a crash mid-write can
+ * never leave a truncated state file behind.
+ */
 export function saveState(state, options = {}) {
   const stateFile = stateFileFrom(options);
-  mkdirSync(dirname(stateFile), { recursive: true });
+  const dir = dirname(stateFile);
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  if (process.platform !== 'win32') {
+    try { chmodSync(dir, 0o700); } catch { /* pre-existing dir we may not own */ }
+  }
   const temporaryFile = `${stateFile}.${process.pid}.${randomUUID()}.tmp`;
   try {
     writeFileSync(temporaryFile, JSON.stringify(state, null, 2), { mode: 0o600 });
     renameSync(temporaryFile, stateFile);
+    if (process.platform !== 'win32') chmodSync(stateFile, 0o600);
   } catch (error) {
     try { unlinkSync(temporaryFile); } catch {}
     throw error;
   }
 }
 
+/**
+ * Pro requires a *usable* license: a valid record that the server has not
+ * rejected. A cached (offline) license still counts as Pro, an invalidated one
+ * does not — so a revoked key loses its entitlements on the next pass instead
+ * of on the next reinstall.
+ */
 export function isPro(state) {
-  return Boolean(state?.license?.key && state?.license?.instance);
+  const license = state?.license;
+  if (!license?.key || !license?.instance) return false;
+  return license.status !== LICENSE_STATUS.INVALID;
 }
 
 function hashContent(str) {
@@ -380,10 +404,13 @@ export async function startWatch(urls, opts = {}) {
     console.log('🔑 Activating license...');
     const result = await activateLicense(opts.activateKey);
     if (result.valid) {
-      state.license = { key: result.key, instance: result.deviceId, plan: result.meta.plan, validatedAt: new Date().toISOString() };
+      state.license = { key: result.key, instance: result.deviceId, plan: result.meta.plan, status: LICENSE_STATUS.ACTIVE, validatedAt: new Date().toISOString() };
       saveState(state, opts);
       pro = true;
       console.log('✅ Pro activated.');
+    } else if (result.transient) {
+      console.error(`❌ Could not reach the license server: ${result.error}`);
+      console.error('    Nothing was changed. Try again when the server answers — your Pro is unchanged.');
     } else {
       console.error(`❌ Activation failed: ${result.error}`);
     }

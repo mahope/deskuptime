@@ -1,9 +1,9 @@
 # IMPLEMENTATION_PLAN.md
 
 STATUS: I GANG
-Iteration: 7 — 2026-09-25
-Arbejdsgren: `main` via `ceo/device-id-parity`
-Næste handling: P0-12 er `BLOCKED` (sitens kilder ligger uden for dette repo og uden for agentens adgang); P0-6 er færdig i `e344531` og mergeret 2026-09-25. Næste iteration starter P0-7 (hårdgør licenslifecycle), derefter P0-10/P0-11.
+Iteration: 8 — 2026-09-25
+Arbejdsgren: `main` via `ceo/license-lifecycle`
+Næste handling: P0-7 er færdig (se afsnittet nedenfor) og mergeret 2026-09-25. Næste iteration tager P0-10 (`actions/checkout` 4 → 7) og derefter P0-11, som hver skal være én commit.
 
 ## Mission
 
@@ -25,7 +25,7 @@ Dette offentlige repo leverer den gratis, fuldt brugbare DeskUptime-CLI (MIT). D
 Den aktuelle gate-definition er registreret her:
 
 - Root: `npm ci --ignore-scripts` skal lykkes med den committede lockfil.
-- Root: `npm test` (55 tests, 55 passed på Node 26 efter P0-5).
+- Root: `npm test` (82 tests, 82 passed på Node 26 efter P0-7).
 - Root: `npm run audit` skal rapportere 0 sårbarheder.
 - Root: `npm run lint` findes ikke i `package.json`; rapporteres som manglende gate, ikke som grønt.
 - Root: `npm run build` findes ikke i `package.json`; der er ingen JS-build/typecheck-script.
@@ -51,6 +51,7 @@ Den aktuelle gate-definition er registreret her:
 - Den eksterne produktside og Stripe-fulfillment ligger uden for repoet og kan ikke verificeres endeligt her.
 - Desktopparitet, IPC- og UI-fund er overført til `mahope/deskuptime-desktop`; de skal ikke genåbnes i dette offentlige CLI-repo.
 - `src/license.js:14,40-42` bruger `os.hostname()`, mens Rust bruger `COMPUTERNAME` på Windows. **Løst i `e344531`:** `getDeviceId` bruger nu ikke-tom `COMPUTERNAME` på native Windows; scheme'et er låst i `test/fixtures/device-id.golden.json`. Gamle gemte `license.instance`/`instance_id` migrerer fortsat ikke automatisk, og det er bevidst overlådt til det private desktoprepo (P0-6, privat follow-up).
+- Licenslifecycle er hærdet og dokumenteret i `docs/license-lifecycle.md`: hard timeout, transient vs. permanent klassificering (malformed 200 er transient), fire synlige tilstande, `0600`-fil i `0700`-mappe, valideret licensrecord og `redactSecrets()` på alle fejlstrenge. `deskuptime status` er read-only og foretager ingen netværkskald.
 - `tools/make_tarball.sh:14` udelader `src/checkers/headers.js`; `tools/install.sh:6` er fastsat til 0.1.4; npm/tarball/desktop-versioner er ikke synkroniserede.
 
 ## Prioriteret kø
@@ -202,7 +203,7 @@ Den aktuelle gate-definition er registreret her:
 
 **Bevidst ikke gjort (til privat repo):** Ingen eksisterende `license.instance` omskrives — `refreshLicense` bruger stadig det gemte id, så ingen installation mister Pro. Acceptkriterium 4 (serverens migrering/alias for gamle id'er) og Rust-golden-pariteten er derfor **åbne** og skal afsluttes i `mahope/deskuptime-desktop`, hvor Rust-kilden ligger.
 
-### P0-7 — TODO — Hårdgør licenslifecycle
+### P0-7 — FÆRDIG — Hårdgør licenslifecycle
 
 **Begrundelse:** Betalende brugere må ikke låses ude ved timeout/5xx, men revoked/expired må heller ikke fortsætte at få Pro. Node-delen er offentlig; desktopdeactivation og Rust-timeouts følger i det private repo.
 
@@ -210,10 +211,26 @@ Den aktuelle gate-definition er registreret her:
 
 1. Node har hård total timeout, 429/408/5xx og malformed 200 håndteres som transient med syv-dages cached grace; Rust-kravet følger privat.
 2. 403/404/409 og definitive invalideringer slår Pro fra med det samme; nøglen bevares til senere diagnose.
-3. `status` viser `active`, `cached/offline`, `invalid` eller `free`, ikke bare “nøgle findes”.
+3. `status` viser `active`, `cached/offline`, `invalid` eller `free`, ikke bare "nøgle findes".
 4. Desktop deactivation venter på serverens `deactivated: true` før lokal state slettes; denne accept testes i `mahope/deskuptime-desktop`.
 5. Node state-/licensfiler er `0600` på POSIX, atomisk skrevet og valideres ved indlæsning; Rust gør det samme privat.
 6. Rå nøgler, følsomme URL-query-strings og device-identiteter logges ikke.
+
+**Fund og rettelser:**
+
+- **Lockout-bug:** ethvert HTTP 200 blev behandlet som *permanent* afslag. En Cloudflare/captive-portal-HTML-side, en trunkeret proxy-svar eller `{ok:true}` uden `valid`-felt kunne derfor slå Pro fra for en betalende kunde. Nu er `malformed` et eget udfald: transient, aldrig permanent. Kun `200 {ok:true, valid:true|false}` er et verdikt.
+- **Manglende timeout:** licenskald havde intet `signal`. Et hængende svar kunne hænge CLI'en og en cron-kørende watch-loop. Nu `AbortSignal.timeout(10s)` — verificeret med en rigtig lokal server, der aldrig svarer.
+- **Fejlklassificering:** kun `>=500` var transient. `408`, `425` og `429` (throttling) gav permanent afslag. Nu transient.
+- **Pro-låsning ved revocation:** `isPro()` så kun på `key` + `instance`, så en tilbagekaldt nøgle beholdt ubegrænsede URL'er og 30 s interval ind til næste reinstall. Nu giver `status: 'invalid'` ikke længere Pro.
+- **Skriverejttigheder:** state-filen skrev `0600`, men mappen blev skabt med umaskens standardrettigheder, og en eksisterende `0644`-fil blev ikke strammet. Nu `0700`-mappe + eksplicit `chmod 0600` ved skrivning.
+- **Uvalideret licensrecord:** `loadState` kopierede `license` ukritisk, så en håndredigeret state-fil med `{key:'x'}` gav Pro. Nu valideres recordet ved indlæsning (32 hex, device-id 1–128 tegn, kendt status); alt andet læses som "ingen licens".
+- **Lækagevej:** en server, der ekkoer nøglen i `error`, skrev den ufiltreret til terminalen. Alle fejlstrenge passerer nu `redactSecrets()` (32-hex → `«key»`, `deskuptime-*` → `deskuptime-«device»`).
+- **Ærlighed i `status`:** kommandoen sagde "Pro license: active" uanset hvad. Nu fire tilstande med forklaring, inkl. skelnen mellem "afslået af serveren" og "aldrig verificeret — serveren svarede ikke i 9 dage", så support ikke jager en ugyldig nøgle.
+- **Deactivation:** CLI'en slettede intet ved fejl, men sagde intet om pladsen. Nu siges det eksplicit, at pladsen *ikke* er frigjort, og `deactivate` kræver `deactivated: true` (Rust gør det samme privat).
+
+**Status 2026-09-25:** Færdig på `ceo/license-lifecycle`. `docs/license-lifecycle.md` er source of truth med HTTP-klassificering, tilstandsmaskineri, lagring, redaction og en kravliste til Rust-siden. 23 nye tests (16 i `test/license.test.js`, 7 i `test/status.test.js`) dækker timeout mod en rigtig hængende server, 408/425/429/5xx vs. 400/403/404/409, tre former for malformed 200, de fire tilstande, legacy-state alder, filrettigheder, atomisk skrivning, record-validering og redaction. Node 26.7.0: `npm ci --ignore-scripts`, 82/82 tests, `npm run audit` 0/0, `node --check` alle filer og `git diff --check` grønne. CLI'en er desuden kørt manuelt i alle fire tilstande. **Live-evidence:** et `validate`-kald mod den rigtige licensserver med en ukendt nøgle svarer `404 "License key not found…"` og klassificeres korrekt som permanent, ikke transient.
+
+**Krav stillet til privat repo (ikke gjort her):** Acceptkriterium 4 (desktop-deactivation) og Rust-siden af 1, 5 og 6 afspejles i `docs/license-lifecycle.md` §5. Rust skal køre mod `test/fixtures/device-id.golden.json` og mod de samme HTTP-klassificeringer.
 
 ### P0-8 — PRIVAT REPO — Gør desktop-overvågning feature-paritet
 
@@ -300,6 +317,7 @@ Den aktuelle gate-definition er registreret her:
 
 ### Aktuel offentlig CLI
 
+- `2026-09-25`: P0-7 tilføjede 23 tests til licenslifecycle: timeout mod en rigtig hængende server, transient vs. permanent HTTP-klassificering, fire synlige tilstande, legacy-state alder, `0600`/`0700`-rettigheder, atomisk skrivning, licensrecord-validering og redaction. `npm test` er grøn med 82/82; `npm run audit` 0 sårbarheder. Node 26.7.0, `npm ci --ignore-scripts`, `node --check` og `git diff --check` grønne. `docs/license-lifecycle.md` er ny source of truth.
 - `2026-09-25`: P0-6 tilføjede 4 device_id-tests og en 12-sagers golden-fixture; nye CI-job `license-windows` kører licenstestene på native Windows med Node 24. `npm test` er grøn med 59/59; `npm run audit` 0 sårbarheder. Mutationstest bekræfter, at testene fanger den gamle `os.hostname()`-adfærd. Node 26.7.0, `npm ci --ignore-scripts`, `node --check`, YAML/JSON og `git diff --check` grønne.
 - `2026-09-25`: Node-runtime `>=18` → `>=24`, den aktive LTS. Verificeret med Node 24.21.0; ingen application-kodeændring udover help-tekst var nødvendig.
 - `2026-09-25`: Nul runtime-/dev-dependencies bevaret; `package-lock.json` v3 tilføjet. `npm ci --ignore-scripts` og `npm run audit` er grønne med 0 sårbarheder.
@@ -324,6 +342,7 @@ Den aktuelle gate-definition er registreret her:
 3. Hvilken rapport/status-side skal være første bureau-feature, og hvilke data må en kunde-rapport indeholde?
 4. Skal det eksisterende Stripe Payment Link verificeres manuelt for pris, valuta, fulfillment og license-key før næste release? Ingen betaling eller Stripe-write udføres af agenten.
 5. Er der allerede Mahope/Stripe-aktiveringer fra pre-release Windows-builds, der kræver device_id-migration? Det afgør, om minimal generator-fix er nok.
+9. Skal `deskuptime status` få et femte ordensord, fx `unverified`, for "licensen kunne ikke verificeres i 7 dage, serveren svarer ikke"? Nu vises den som `invalid` med en forklaring, der *siger*, at nøglen aldrig blev afslået. Fælden er, at kunden kan tro nøglen er død og købe igen. Fire ord rækker til kontraktens krav, men et eget ord er ærligere.
 6. Pro-navne, hvis et nyt brand senere ønskes: **DeskUptime Pro** (trygt og tydeligt), **Uptime Desk** (kortere), **Watchtower** (produktnavn, men bruges ofte) eller **Signal Monitor**. Ingen produkter, der allerede er i Stripe, omdøbes uden Mads' beslutning.
 7. Skal den betalte desktopkilde, som stadig findes i offentlig Git-history før `39c434f`, fjernes via en separat historikskrivning af Mads? Agenten gennemfører aldrig force-push eller historik-rewrite.
 8. **Hvilket repo indeholder kilden til `deskuptime.com`?** P0-12 er `BLOCKED`, fordi sitens HTML ikke ligger i dette repo, og agenten ikke må læse det formodentlige `~/Projects/hermes/hermes-passiv`. Giv enten adgang til det repo, eller lav de fem konkrete rettelser i P0-12 selv. Dette er det mest synlige købs-flow, der i dag lover noget, der ikke findes.
@@ -343,3 +362,4 @@ Den aktuelle gate-definition er registreret her:
 - **Iteration 5 (P0-4):** Commits `364ae0d` og `4e685df` gør `watch --once` single-pass, persisterende og exit-korrekt, gør `watch --status` read-only, latcher DOWN/SSL/content-begivenheder korrekt og forhindrer samtidige state-tab med et kortlevende process-lock. Temp-HOME- og CLI-tests dækker de seks acceptkriterier samt reviewfund. Node 24.21.0, 45/45 tests, audit 0/0, syntax/diff er grønne. Fast-forward-merge til `main` skete 2026-09-25T14:26:12Z; næste opgave er P0-5.
 - **Iteration 6 (P0-5):** Commit `4024d08` gør produktobne ærlige. `docs/pro-alerts.md` er source of truth med kanalmatrix, webhook-payload, timeout/retry, offline-adfærd og privacy. README's email/Slack-claim og hjælpens email/push-claim er væk; `--webhook` uden Pro-licens lyder nu med købslink i stedet for at tie; webhook har 10 s timeout og returnerer status; gratis-grænsen peger på købslinket. Desktop-download peger på den verificerede release `desktop-v0.2.7`, ikke på et domæne uden download. 10 nye tests. Node 26.7.0, 55/55 tests, audit 0/0, syntax/diff grønne. Fast-forward-merge til `main` skete 2026-09-25T15:42:30Z. **Nyt fund:** live-siten `deskuptime.com` (verificeret HTTP 200) hævder stadig email-alerts for Desktop Pro → P0-12; næste iteration starter P0-12 og derefter P0-6.
 - **Iteration 7 (P0-12 forsøgt + P0-6):** P0-12 blev undersøgt og fundet uudførlig her — sitens kilder er uden for repoet og uden for agentens `external_directory`-adgang, så opgaven er markeret `BLOCKED` med evidens, de fem konkrete site-ændringer og en verificeret måling af, at `/da/`-siden ingen email-claim har. Herefter blev P0-6 færdig i `e344531`: `getDeviceId` bruger ikke-tom `COMPUTERNAME` på native Windows, så én maskine ikke længre bruger to af tre Pro-pladser. Scheme'et låses i `test/fixtures/device-id.golden.json` (12 tilfælde, version 1) til deling med Rust-siden, og et nyt CI-job kører licenstestene på `windows-latest` med Node 24. Mutationstest bekræfter testenes dækning. Node 26.7.0, `npm ci --ignore-scripts`, 59/59 tests, audit 0/0, `node --check`, YAML/JSON og diff-check grønne. Fast-forward-merge til `main` og push af begge grene 2026-09-25. Næste iteration starter P0-7.
+- **Iteration 8 (P0-7):** Licenslifecycle hærdet på `ceo/license-lifecycle`. Ethvert HTTP 200 uden gyldigt verdikt (`malformed`) er nu transient i stedet for permanent, så en Cloudflare-side ikke længere kan låse en betalende kunde ude; `408/425/429` er transient; hvert kald har 10 s hard timeout. `isPro()` respekterer nu `status: 'invalid'`, så en tilbagekaldt nøgle mister ubegrænsede URL'er og 30 s interval med det samme. State skrives `0600` i `0700`-mappe, licensrecordet valideres ved indlæsning, og `redactSecrets()` filtrerer nøgler og device-id'er ud af alle fejlstrenge. `deskuptime status` viser `active`/`cached/offline`/`invalid`/`free` med forklaring i stedet for "nøgle fundet". `docs/license-lifecycle.md` dokumenterer reglerne og stiller de Rust-krav, der ikke kan løses her. 23 nye tests; Node 26.7.0, `npm ci --ignore-scripts`, 82/82 tests, audit 0/0, `node --check` og `git diff --check` grønne; CLI'en kørt manuelt i alle fire tilstande; live-`validate` mod licensserveren bekræfter 404-klassificeringen. Næste iteration: P0-10, derefter P0-11.

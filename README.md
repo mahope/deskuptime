@@ -95,7 +95,9 @@ deskuptime deactivate               # free this machine's seat for another one
 
 The CLI and the desktop app on the same machine share one seat. The license is re-checked
 daily; if the license server is unreachable, Pro keeps working from a cached status for
-7 days, so an outage never locks you out.
+7 days, so an outage never locks you out. `deskuptime status` tells you which state you
+are in — `active`, `cached/offline`, `invalid` or `free` — and a rejected key is never
+silently deleted. Details: [`docs/license-lifecycle.md`](docs/license-lifecycle.md).
 
 Like the free tools? [Support open source development](https://donate.stripe.com/7sYeVcbn50wieFM8gDbMQ0c).
 

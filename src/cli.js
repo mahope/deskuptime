@@ -40,7 +40,7 @@ USAGE:
   deskuptime watch --status                         Show status without network checks
   deskuptime activate <key>     Unlock Pro with your license key
   deskuptime deactivate         Free this machine's Pro seat (3 machines per license)
-  deskuptime status             Show license + monitored URLs
+  deskuptime status             Show license state (active/cached/invalid/free) + monitored URLs
   deskuptime --version          Show version
   deskuptime --help             This help
 
@@ -247,15 +247,16 @@ if (command === 'activate') {
     process.exit(1);
   }
   console.log('🔑 Activating license...');
-  const { activateLicense } = await import('./license.js');
+  const { activateLicense, LICENSE_STATUS } = await import('./license.js');
   const res = await activateLicense(key);
   // No process.exit() after fetch — see the note at "Unknown command" below.
   if (!res.valid) {
     console.error(`❌ Activation failed: ${res.error}`);
+    if (res.transient) console.error('   Nothing was stored. Pro on this machine is unchanged — try again shortly.');
     process.exitCode = 1;
   } else {
     const state = loadState();
-    state.license = { key: res.key, instance: res.deviceId, plan: res.meta.plan, validatedAt: new Date().toISOString() };
+    state.license = { key: res.key, instance: res.deviceId, plan: res.meta.plan, status: LICENSE_STATUS.ACTIVE, validatedAt: new Date().toISOString() };
     saveState(state);
     console.log(`✅ Pro activated${res.meta.devicesInUse != null ? ' (' + res.meta.devicesInUse + ' of 3 machines in use)' : ''}.`);
     console.log('   Unlimited monitored URLs, intervals down to 30s, desktop notifications.');
@@ -272,7 +273,10 @@ if (command === 'deactivate') {
   const { deactivateLicense } = await import('./license.js');
   const res = await deactivateLicense(state.license.key, state.license.instance);
   if (!res.deactivated) {
+    // Local state is only dropped when the server confirms the seat is free —
+    // otherwise the machine would look free while still occupying a seat.
     console.error(`❌ Deactivation failed: ${res.error}`);
+    console.error('   The seat was NOT released and this machine still counts as activated. Try again shortly.');
     process.exitCode = 1;
   } else {
     delete state.license;
@@ -407,13 +411,21 @@ if (command === 'watch') {
 
 // ── Status ──
 if (command === 'status') {
+  const { describeLicense, LICENSE_STATUS, BUY_URL } = await import('./license.js');
   const state = loadState();
   const urls = Object.keys(state.urls);
-  if (state.license?.key) {
-    const verified = state.license.validatedAt ? `, last verified ${state.license.validatedAt.slice(0, 10)}` : '';
-    console.log(`Pro license: active${verified}`);
-  } else {
+  const license = describeLicense(state.license);
+  if (license.status === LICENSE_STATUS.FREE) {
     console.log('Free tier. Activate Pro: deskuptime activate <license-key>');
+  } else if (license.status === LICENSE_STATUS.ACTIVE) {
+    console.log(`Pro license: active${license.detail ? `, ${license.detail}` : ''}`);
+  } else if (license.status === LICENSE_STATUS.CACHED) {
+    console.log(`Pro license: cached/offline — ${license.detail}`);
+  } else {
+    // The key is kept on disk, so support and a later `activate` still work.
+    console.log(`Pro license: invalid — ${license.detail}`);
+    console.log('  The key is still stored. Re-check it with: deskuptime activate <license-key>');
+    console.log(`  If you have not bought yet: ${BUY_URL}`);
   }
   console.log(`Monitored URLs (${urls.length}):`);
   for (const u of urls) {
