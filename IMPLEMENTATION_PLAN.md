@@ -1,9 +1,9 @@
 # IMPLEMENTATION_PLAN.md
 
 STATUS: I GANG
-Iteration: 8 — 2026-09-25
-Arbejdsgren: `main` via `ceo/license-lifecycle`
-Næste handling: P0-7 er færdig (se afsnittet nedenfor) og mergeret 2026-09-25. Næste iteration tager P0-10 (`actions/checkout` 4 → 7) og derefter P0-11, som hver skal være én commit.
+Iteration: 9 — 2026-09-25
+Arbejdsgren: `main` via `ceo/actions-checkout-v7` og `ceo/head-get-fallback`
+Næste handling: P0-10 og P0-13 er færdige og mergeret 2026-09-25 (`b27ba35`, `1d19697`). Næste iteration tager P0-11 (`actions/setup-node` 4 → 7) som én commit og derefter P0-9.
 
 ## Mission
 
@@ -257,7 +257,7 @@ Den aktuelle gate-definition er registreret her:
 5. CI/release-triggerne har én owner pr. tagtype; ingen release/publish udføres af agenten.
 6. npm-pakken, curl-stien og Homebrew-formlen dokumenteres med samme version og Stripe-link.
 
-### P0-10 — TODO — Opgrader actions/checkout 4 → 7 i en commit
+### P0-10 — FÆRDIG — Opgrader actions/checkout 4 → 7 i en commit
 
 **Begrundelse:** CI-run `36105085970` markerer `actions/checkout@v4`s Node 20-runtime som deprecated. Dependabot PR #3 er ren og foreslår major 7; brugerkontrakten kræver én major-opgradering pr. commit.
 
@@ -266,6 +266,23 @@ Den aktuelle gate-definition er registreret her:
 1. PR #3 eller en tilsvarende minimal branch opgraderer kun `actions/checkout` 4 → 7.
 2. Hele Node 24-gaten er grøn efter merge.
 3. Ingen anden action-opgradering, release eller npm-publish følger med.
+
+**Status 2026-09-25:** Færdig i `b27ba35` på `ceo/actions-checkout-v7`, fast-forward-merget til `main` og pushet. Alle seks `actions/checkout@v4` (ci.yml ×2, publish.yml, release-cli.yml, self-monitor.yml) → `@v7`; diffet er identisk med Dependabot PR #3. Ingen checkout-inputs bruges nogen steder, så opgraderingen er en ren pin-bump. **Brydende ændring siden v4:** v7.0.0 blockerer checkout af fork-PRs for `pull_request_target` og `workflow_run` — ingen af repoets workflows bruger de triggere. v6 flyttede desuden persistents credentials til en separat fil, hvilket er internt i actionen. `actions/setup-node` er bevidst urørt (P0-11). **Bevis:** Node 26.7.0 — `npm ci --ignore-scripts`, 82/82 tests, `npm run audit` 0/0, YAML-parse af alle fem workflows og `git diff --check` grønne; CI-run `36169872603` på `b27ba35` grøn i begge jobs med `actions/checkout@v7`-steps.
+
+### P0-13 — FÆRDIG — Ret falsk DOWN når serveren ikke svarer på HEAD
+
+**Begrundelse:** Selvmonitoreringen har været rød hver 3. time siden mindst 2026-09-25 kl. 17:14 UTC. Run `36165886470` rapporterede `https://eucomply-scan.mahope-eeb.workers.dev/stats` som `HTTP 404 / DOWN`, mens både `curl` og `node -e fetch()` svarede **200** på samme URL. Reachability-checket sendte udelukkende `HEAD`; Cloudflare Workers matcher kun GET-routes og svarer derfor 404 på HEAD. Et sunde site blev meldt nede, hvilket er missionens prioritet 1 og samtidig ødelægger repoets egen alarm.
+
+**Acceptkriterier:**
+
+1. Et HEAD-svar med 404, 405 eller 501 genforsøges én gang med GET, og GET-svaret er det dominerende.
+2. En route, der er 404 på både HEAD og GET, er stadig DOWN med `errorType: 'http_error'`; 400/410/500 og redirect-til-fejl er uændrede.
+3. Et sundt HEAD-svar sender stadig præcis ét request — fallbacken må ikke gøre almindelige sites dyrere.
+4. `--timeout` er et budget for hele checket, ikke pr. request, så worst case ikke fordobles; GET-bodyen annulleres straks, da kun statuslinjen bruges.
+5. Deterministiske lokale fixtures dækker 404/405/501-fallback, dobbelt-404, intet retry ved sundt HEAD og det delte timeout-budget; ingen test mod `example.com` for denne adfærd.
+6. Bevis mod den rigtige worker: 404 før rettelsen, 200 efter.
+
+**Status 2026-09-25:** Færdig i `1d19697` på `ceo/head-get-fallback`, fast-forward-merget til `main` og pushet 2026-09-25. `src/checkers/ping.js` har nu `request(url, method, signal)` og `HEAD_UNSUPPORTED = {404, 405, 501}`; `remainingMs()` giver retryen kun resten af budgettet. Fem nye tests i `test/status.test.js`. Node 26.7.0: `npm ci --ignore-scripts`, **87/87** tests, `npm run audit` 0/0, `node --check` og `git diff --check` grønne. Den eksisterende statusmatrix-test (200/204/400/404/410/500/redirect/timeout/refused) er uændret grøn, så ægte fejl er ikke maskeret. Manuel verifikation: `node src/cli.js check https://eucomply-scan.mahope-eeb.workers.dev/stats` gav 404 DOWN før og **200 UP, exit 0** efter. Selvmonitoreringen bruger `uses: ./` og henter den mergede kode, så næste cron-kørsel (`17 */3 * * *`) bærer rettelsen automatisk — ingen deploy-note nødvendig.
 
 ### P0-11 — TODO — Opgrader actions/setup-node 4 → 7 i en commit
 
@@ -317,6 +334,9 @@ Den aktuelle gate-definition er registreret her:
 
 ### Aktuel offentlig CLI
 
+- `2026-09-25`: P0-13 rettede **falsk DOWN** på routes, der ikke svarer på `HEAD` (Cloudflare Workers m.fl.). 5 nye tests; `npm test` er grøn med 87/87; `npm run audit` 0 sårbarheder. Node 26.7.0, `npm ci --ignore-scripts`, `node --check` og `git diff --check` grønne. Verificeret mod den rigtige worker: 404 → 200.
+- `2026-09-25`: P0-10 opgraderede `actions/checkout` v4 → v7 i alle fire workflows (seks pin-bumps, identisk med Dependabot PR #3). `npm test` 82/82, audit 0/0, YAML-parse grøn; CI grøn på `b27ba35`. Kræver ingen kodeændring. Dependabot PR #3 er nu overflødig og kan lukkes af Mads — agenten foretager ingen writes mod GitHub-PR'er.
+
 - `2026-09-25`: P0-7 tilføjede 23 tests til licenslifecycle: timeout mod en rigtig hængende server, transient vs. permanent HTTP-klassificering, fire synlige tilstande, legacy-state alder, `0600`/`0700`-rettigheder, atomisk skrivning, licensrecord-validering og redaction. `npm test` er grøn med 82/82; `npm run audit` 0 sårbarheder. Node 26.7.0, `npm ci --ignore-scripts`, `node --check` og `git diff --check` grønne. `docs/license-lifecycle.md` er ny source of truth.
 - `2026-09-25`: P0-6 tilføjede 4 device_id-tests og en 12-sagers golden-fixture; nye CI-job `license-windows` kører licenstestene på native Windows med Node 24. `npm test` er grøn med 59/59; `npm run audit` 0 sårbarheder. Mutationstest bekræfter, at testene fanger den gamle `os.hostname()`-adfærd. Node 26.7.0, `npm ci --ignore-scripts`, `node --check`, YAML/JSON og `git diff --check` grønne.
 - `2026-09-25`: Node-runtime `>=18` → `>=24`, den aktive LTS. Verificeret med Node 24.21.0; ingen application-kodeændring udover help-tekst var nødvendig.
@@ -325,7 +345,7 @@ Den aktuelle gate-definition er registreret her:
 - `2026-09-25`: P0-5 tilføjede 10 tests (6 claims-konformance + 4 webhook). Webhook har nu 10 s timeout; claims låst mod `docs/pro-alerts.md`. Node 26.7.0, `npm ci --ignore-scripts`, audit 0/0, `node --check` og `git diff --check` grønne.
 - `2026-09-25`: P0-4 tilføjede 13 isolerede watch/state-tests. Node 24.21.0, `npm ci --ignore-scripts`, audit 0/0, JavaScript-syntax og diff-check er grønne; fresh review-fund blev triageret og rettet eller eksplicit flyttet til P0-5/P0-7.
 - `2026-09-25`: P0-3 tilføjede seks lokale status-/Action-/headers-/preflight-tests. Node 24.21.0, `npm ci --ignore-scripts`, audit 0/0, JavaScript-syntax og diff-check er grønne; fresh review fandt ingen P0/P1.
-- `2026-09-25`: Actions-størrelserne 4 → 7 ligger i rene Dependabot PR #2 og #3 og udskydes til separate P0-10/P0-11-commits.
+- `2026-09-25`: Actions-størrelserne 4 → 7 ligger i rene Dependabot PR #2 og #3; #3 er reimplementeret og mergeret som P0-10, #2 (setup-node) er P0-11.
 - `2026-09-25`: Fjern-CI `36105085970` på `ee8e8ab` passerede alle steps. Annotations advarer om eksisterende Actions v4 Node 20-runtime og fremtidig `ubuntu-latest`-migration; ingen ny blocker.
 
 ### Historisk desktop-iteration før repoopdelingen
@@ -363,3 +383,4 @@ Den aktuelle gate-definition er registreret her:
 - **Iteration 6 (P0-5):** Commit `4024d08` gør produktobne ærlige. `docs/pro-alerts.md` er source of truth med kanalmatrix, webhook-payload, timeout/retry, offline-adfærd og privacy. README's email/Slack-claim og hjælpens email/push-claim er væk; `--webhook` uden Pro-licens lyder nu med købslink i stedet for at tie; webhook har 10 s timeout og returnerer status; gratis-grænsen peger på købslinket. Desktop-download peger på den verificerede release `desktop-v0.2.7`, ikke på et domæne uden download. 10 nye tests. Node 26.7.0, 55/55 tests, audit 0/0, syntax/diff grønne. Fast-forward-merge til `main` skete 2026-09-25T15:42:30Z. **Nyt fund:** live-siten `deskuptime.com` (verificeret HTTP 200) hævder stadig email-alerts for Desktop Pro → P0-12; næste iteration starter P0-12 og derefter P0-6.
 - **Iteration 7 (P0-12 forsøgt + P0-6):** P0-12 blev undersøgt og fundet uudførlig her — sitens kilder er uden for repoet og uden for agentens `external_directory`-adgang, så opgaven er markeret `BLOCKED` med evidens, de fem konkrete site-ændringer og en verificeret måling af, at `/da/`-siden ingen email-claim har. Herefter blev P0-6 færdig i `e344531`: `getDeviceId` bruger ikke-tom `COMPUTERNAME` på native Windows, så én maskine ikke længre bruger to af tre Pro-pladser. Scheme'et låses i `test/fixtures/device-id.golden.json` (12 tilfælde, version 1) til deling med Rust-siden, og et nyt CI-job kører licenstestene på `windows-latest` med Node 24. Mutationstest bekræfter testenes dækning. Node 26.7.0, `npm ci --ignore-scripts`, 59/59 tests, audit 0/0, `node --check`, YAML/JSON og diff-check grønne. Fast-forward-merge til `main` og push af begge grene 2026-09-25. Næste iteration starter P0-7.
 - **Iteration 8 (P0-7):** Licenslifecycle hærdet på `ceo/license-lifecycle`. Ethvert HTTP 200 uden gyldigt verdikt (`malformed`) er nu transient i stedet for permanent, så en Cloudflare-side ikke længere kan låse en betalende kunde ude; `408/425/429` er transient; hvert kald har 10 s hard timeout. `isPro()` respekterer nu `status: 'invalid'`, så en tilbagekaldt nøgle mister ubegrænsede URL'er og 30 s interval med det samme. State skrives `0600` i `0700`-mappe, licensrecordet valideres ved indlæsning, og `redactSecrets()` filtrerer nøgler og device-id'er ud af alle fejlstrenge. `deskuptime status` viser `active`/`cached/offline`/`invalid`/`free` med forklaring i stedet for "nøgle fundet". `docs/license-lifecycle.md` dokumenterer reglerne og stiller de Rust-krav, der ikke kan løses her. 23 nye tests; Node 26.7.0, `npm ci --ignore-scripts`, 82/82 tests, audit 0/0, `node --check` og `git diff --check` grønne; CLI'en kørt manuelt i alle fire tilstande; live-`validate` mod licensserveren bekræfter 404-klassificeringen. Merge til `main` og push af begge grene 2026-09-25. Næste iteration: P0-10, derefter P0-11.
+- **Iteration 9 (P0-10 + P0-13):** To opgaver i samme iteration, begge små og begge committet. P0-10: `actions/checkout` 4 → 7 i alle fire workflows i `b27ba35` (ren pin-bump, ingen inputs bruges, eneste brydende v7-adfærd er relateret til triggere repoet ikke bruger); CI grøn. Derefter fandt en læsning af den røde selvmonitorering, at `eucomply-scan/stats` meldte DOWN med HTTP 404, mens curl og node-fetch svarede 200 — årsagen var, at reachability-checket kun sendte HEAD, og Workers matcher ikke HEAD-routes. P0-13 (`1d19697`) tilføjer én GET-retry ved 404/405/501 med GET som dominerende svar, delt `--timeout`-budget, annulleret GET-body og fem deterministiske tests; 87/87 tests, audit 0/0, Node 26.7.0, `node --check` og `git diff --check` grønne; den rigtige worker giver nu 200 UP med exit 0. Næste iteration: P0-11 (`actions/setup-node` 4 → 7), derefter P0-9.
