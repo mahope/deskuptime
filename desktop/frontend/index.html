@@ -1,399 +1,111 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>DeskUptime</title>
-  <script src="https://cdn.tailwindcss.com"></script>
-  <style>
-    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
-    .status-up { background: #059669; }
-    .status-down { background: #dc2626; }
-    .status-checking { background: #d97706; }
-  </style>
+  <link rel="stylesheet" href="styles.css">
+  <script type="module" src="app.js"></script>
 </head>
-<body class="bg-gray-50 dark:bg-gray-900 min-h-screen">
-  <div class="max-w-4xl mx-auto p-4 sm:p-6">
-    <!-- Header -->
-    <div class="flex items-center justify-between mb-6">
+<body>
+  <a class="skip-link" href="#mainContent">Skip to content</a>
+  <main id="mainContent" class="app-shell">
+    <header class="app-header">
       <div>
-        <h1 class="text-2xl font-bold text-gray-900 dark:text-white">DeskUptime</h1>
-        <p class="text-sm text-gray-500 dark:text-gray-400">Desktop website monitor</p>
+        <h1 class="app-title">DeskUptime</h1>
+        <p class="app-subtitle">Desktop website monitor</p>
       </div>
-      <div class="flex gap-2">
-        <button id="btnCheckAll" class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm font-medium transition-colors">
-          Check All
-        </button>
-        <button id="btnAddUrl" class="px-4 py-2 bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-200 rounded-lg hover:bg-gray-300 dark:hover:bg-gray-600 text-sm font-medium transition-colors">
-          + Add URL
-        </button>
+      <div class="header-actions">
+        <button id="btnCheckAll" class="button button-secondary" type="button">Check all</button>
+        <button id="btnAddUrl" class="button" type="button">Add URL</button>
       </div>
-    </div>
+    </header>
 
-    <!-- Monitor controls -->
-    <div id="monitorBar" class="mb-4 flex items-center justify-between gap-3 flex-wrap">
-      <div class="flex items-center gap-2">
-        <span class="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
-        <span class="text-xs text-gray-500 dark:text-gray-400">Background monitoring active</span>
-        <span id="monitorBadge" class="hidden text-xs text-amber-600 dark:text-amber-400 font-medium"></span>
+    <section class="monitor-bar" aria-label="Background monitor status">
+      <div class="monitor-state">
+        <span class="monitor-dot" aria-hidden="true"></span>
+        <span>Background monitoring active</span>
+        <span id="monitorBadge" class="monitor-badge" hidden></span>
       </div>
-      <label class="text-xs text-gray-500 dark:text-gray-400">
-        Check every
-        <select id="intervalSelect" class="ml-1 px-2 py-1 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 text-xs">
+      <label class="interval-control">
+        <span>Check every</span>
+        <select id="intervalSelect" class="select">
           <option value="60">1 min</option>
           <option value="300" selected>5 min</option>
           <option value="600">10 min</option>
           <option value="1800">30 min</option>
         </select>
       </label>
-    </div>
+    </section>
 
-    <!-- Add URL form -->
-    <div id="addForm" class="hidden mb-4 p-4 bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 shadow-sm">
-      <div class="flex gap-2">
-        <input type="url" id="urlInput" placeholder="https://example.com" class="flex-1 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none">
-        <button id="btnAddConfirm" class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm font-medium transition-colors">Add</button>
-        <button id="btnAddCancel" class="px-3 py-2 text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 text-sm">Cancel</button>
+    <p id="appMessage" class="app-message" role="status" aria-live="polite"></p>
+
+    <section id="addForm" class="panel add-form" aria-labelledby="urlLabel" hidden>
+      <label id="urlLabel" class="field-label" for="urlInput">Website URL</label>
+      <div class="add-controls">
+        <input
+          id="urlInput"
+          class="text-input"
+          type="url"
+          name="url"
+          inputmode="url"
+          autocomplete="url"
+          spellcheck="false"
+          placeholder="example.com"
+        >
+        <button id="btnAddConfirm" class="button" type="button">Add</button>
+        <button id="btnAddCancel" class="button button-secondary" type="button">Cancel</button>
       </div>
-    </div>
+    </section>
 
-    <!-- URL list -->
-    <div id="urlList" class="space-y-3">
-      <div class="text-center py-12 text-gray-400 dark:text-gray-500">
-        <p class="text-lg mb-1">No URLs monitored yet</p>
-        <p class="text-sm">Click "+ Add URL" to start monitoring</p>
+    <section id="urlList" class="url-list" aria-label="Monitored URLs" aria-live="polite">
+      <div class="empty-state">
+        <p class="empty-title">No URLs monitored yet</p>
+        <p class="empty-hint">Add a URL to start monitoring.</p>
       </div>
-    </div>
+    </section>
 
-    <!-- Footer info -->
-    <div class="mt-6 text-center text-xs text-gray-400 dark:text-gray-600">
-      DeskUptime v0.1 — All checks run locally on your machine.
-    </div>
+    <p class="app-footer">All checks run locally on your machine.</p>
 
-    <!-- License section -->
-    <div id="licenseSection" class="mt-6 p-4 bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 shadow-sm">
-      <div id="licenseFree" class="flex items-center justify-between gap-3 flex-wrap">
+    <section class="panel license-section" aria-labelledby="licenseTitle">
+      <div id="licenseFree" class="panel-row">
         <div>
-          <p id="freeLimitText" class="text-sm font-medium text-gray-900 dark:text-gray-100">DeskUptime Free</p>
-          <p class="text-xs text-gray-500 dark:text-gray-400">Monitor up to 3 URLs. Upgrade for unlimited monitoring.</p>
+          <p id="licenseTitle" class="license-title">DeskUptime Free</p>
+          <p class="license-copy">Monitor up to 3 URLs. Upgrade for unlimited monitoring.</p>
         </div>
-        <div class="flex items-center gap-2">
-          <a id="btnBuy" href="https://buy.stripe.com/7sY9AS9eX3Iu418fJ5bMQ01" target="_blank" rel="noopener noreferrer"
-             class="px-4 py-2 border border-emerald-600 text-emerald-600 dark:text-emerald-400 rounded-lg hover:bg-emerald-50 dark:hover:bg-emerald-900/30 text-sm font-medium transition-colors">Buy Pro — $19</a>
-          <button id="btnShowLicense" class="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 text-sm font-medium transition-colors">Activate License</button>
+        <div class="license-actions">
+          <a class="button button-pro" href="https://buy.stripe.com/7sY9AS9eX3Iu418fJ5bMQ01" target="_blank" rel="noopener noreferrer">Buy Pro — $19</a>
+          <button id="btnShowLicense" class="button" type="button">Activate license</button>
         </div>
       </div>
-      <div id="licenseForm" class="hidden">
-        <label for="licenseInput" class="block text-xs text-gray-500 dark:text-gray-400 mb-1">License key (from your purchase email)</label>
-        <div class="flex gap-2">
-          <input type="text" id="licenseInput" placeholder="32-character key, e.g. 0123456789abcdef0123456789abcdef" class="flex-1 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 text-sm outline-none focus:ring-2 focus:ring-emerald-500">
-          <button id="btnActivate" class="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 text-sm font-medium">Activate</button>
-          <button id="btnCancelLicense" class="px-3 py-2 text-gray-500 hover:text-gray-700 text-sm">Cancel</button>
+
+      <div id="licenseForm" class="license-form" hidden>
+        <label for="licenseInput">License key from your purchase email</label>
+        <div class="add-controls">
+          <input
+            id="licenseInput"
+            class="text-input"
+            type="text"
+            name="license"
+            autocomplete="off"
+            autocapitalize="none"
+            spellcheck="false"
+            placeholder="32-character license key"
+          >
+          <button id="btnActivate" class="button" type="button">Activate</button>
+          <button id="btnCancelLicense" class="button button-secondary" type="button">Cancel</button>
         </div>
-        <p id="licenseError" class="hidden mt-2 text-xs text-red-600"></p>
+        <p id="licenseError" class="license-error" role="alert" hidden></p>
       </div>
-      <div id="licenseActive" class="hidden flex items-center justify-between gap-3 flex-wrap">
+
+      <div id="licenseActive" class="panel-row" hidden>
         <div>
-          <p class="text-sm font-medium text-emerald-600">✓ Pro activated</p>
-          <p id="licenseEmail" class="text-xs text-gray-500 dark:text-gray-400"></p>
+          <p class="license-active-title">Pro activated</p>
+          <p id="licenseVerified" class="license-verified"></p>
         </div>
-        <button id="btnDeactivate" class="px-4 py-2 border border-gray-300 dark:border-gray-600 text-gray-600 dark:text-gray-300 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 text-sm">Deactivate</button>
+        <button id="btnDeactivate" class="button button-danger" type="button">Deactivate</button>
       </div>
-    </div>
-  </div>
-
-  <script>
-    const { invoke } = window.__TAURI__?.core || {};
-    const { listen } = window.__TAURI__?.event || {};
-
-    // Live updates from the background monitor: re-render when a round finishes,
-    // and flash cards whose status flipped.
-    if (listen) {
-      listen('monitor-results', (ev) => {
-        const payload = ev.payload || {};
-        if (Array.isArray(payload.urls) && payload.urls.length > 0) {
-          urls = payload.urls.map(u => ({
-            url: u.url,
-            lastResult: u.last_result ? {
-              reachable: u.last_result.reachable,
-              statusCode: u.last_result.status_code,
-              responseTime: u.last_result.response_time,
-              ssl: u.last_result.ssl != null,
-              sslDays: u.last_result.ssl_days,
-              sslExpiring: u.last_result.ssl_expiring,
-              lastChecked: u.last_result.last_checked,
-            } : null,
-          }));
-          render();
-        }
-      });
-      // Periodic license re-validation in the backend (revoked key, offline grace expired)
-      listen('license-changed', () => loadLicense());
-      listen('status-changed', () => {
-        const el = document.getElementById('monitorBadge');
-        if (el) {
-          el.textContent = 'Status change detected — see notification';
-          el.classList.remove('hidden');
-          setTimeout(() => el.classList.add('hidden'), 8000);
-        }
-      });
-    }
-
-    // Monitor interval selector
-    async function loadInterval() {
-      if (!invoke) return;
-      try {
-        document.getElementById('intervalSelect').value = String(await invoke('get_monitor_interval'));
-      } catch (e) { console.error(e); }
-    }
-
-    // State
-    let urls = [];
-    let checking = new Set();
-    let licensed = false;
-    let freeLimit = 3;
-
-    // DOM refs
-    const urlList = document.getElementById('urlList');
-    const addForm = document.getElementById('addForm');
-    const urlInput = document.getElementById('urlInput');
-    const btnAddUrl = document.getElementById('btnAddUrl');
-    const btnAddConfirm = document.getElementById('btnAddConfirm');
-    const btnAddCancel = document.getElementById('btnAddCancel');
-    const btnCheckAll = document.getElementById('btnCheckAll');
-
-    // License UI refs
-    const licenseFree = document.getElementById('licenseFree');
-    const licenseForm = document.getElementById('licenseForm');
-    const licenseActive = document.getElementById('licenseActive');
-    const licenseInput = document.getElementById('licenseInput');
-    const licenseError = document.getElementById('licenseError');
-    const licenseEmail = document.getElementById('licenseEmail');
-
-    function renderLicenseUI() {
-      licenseFree.classList.toggle('hidden', licensed);
-      licenseForm.classList.add('hidden');
-      licenseActive.classList.toggle('hidden', !licensed);
-      if (licensed && !licenseActive.className.includes('flex')) {
-        // re-apply flex layout (classList toggle removed 'hidden' only)
-        licenseActive.className = 'flex items-center justify-between gap-3 flex-wrap';
-      } else if (!licensed) {
-        licenseActive.className = 'hidden';
-      }
-      licenseFree.className = licensed
-        ? 'hidden'
-        : 'flex items-center justify-between gap-3 flex-wrap';
-      if (licensed) licenseEmail.textContent = window._licVerified
-        ? 'Last verified ' + window._licVerified.slice(0, 10)
-        : 'Licensed on this machine';
-    }
-
-    async function loadLicense() {
-      if (!invoke) return;
-      try {
-        freeLimit = await invoke('get_free_limit') || 3;
-        document.querySelector('#freeLimitText').textContent =
-          `DeskUptime Free (up to ${freeLimit} URLs)`;
-        const lic = await invoke('get_license_state');
-        licensed = lic.active === true;
-        window._licVerified = lic.validated_at || null;
-        renderLicenseUI();
-      } catch (e) { console.error(e); }
-    }
-
-    document.getElementById('btnShowLicense').addEventListener('click', () => {
-      licenseForm.classList.remove('hidden');
-      licenseInput.focus();
-    });
-    document.getElementById('btnCancelLicense').addEventListener('click', () => {
-      licenseForm.classList.add('hidden');
-      licenseError.classList.add('hidden');
-    });
-    document.getElementById('btnActivate').addEventListener('click', async () => {
-      const key = licenseInput.value.trim();
-      if (!key) return;
-      licenseError.classList.add('hidden');
-      try {
-        const lic = await invoke('activate_license', { licenseKey: key });
-        licensed = lic.active === true;
-        window._licVerified = lic.validated_at || null;
-        renderLicenseUI();
-      } catch (e) {
-        licenseError.textContent = String(e);
-        licenseError.classList.remove('hidden');
-      }
-    });
-    document.getElementById('btnDeactivate').addEventListener('click', async () => {
-      try { await invoke('deactivate_license'); } catch (e) { console.error(e); }
-      licensed = false;
-      renderLicenseUI();
-    });
-
-    // Load URLs on startup
-    async function loadUrls() {
-      if (!invoke) return;
-      try {
-        urls = await invoke('get_urls');
-        render();
-        // Auto-check existing URLs
-        if (urls.length > 0) checkAll();
-      } catch (e) {
-        console.error('Failed to load URLs:', e);
-      }
-    }
-
-    // Render URL cards
-    function render() {
-      if (urls.length === 0) {
-        urlList.innerHTML = `
-          <div class="text-center py-12 text-gray-400 dark:text-gray-500">
-            <p class="text-lg mb-1">No URLs monitored yet</p>
-            <p class="text-sm">Click "+ Add URL" to start monitoring</p>
-          </div>`;
-        return;
-      }
-      urlList.innerHTML = urls.map(u => renderCard(u)).join('');
-    }
-
-    function renderCard(url) {
-      const isChecking = checking.has(url.url);
-      const r = url.lastResult;
-      const isUp = r?.reachable === true;
-      const isChecked = r !== null;
-      const statusColor = isChecking ? 'status-checking' : (isUp ? 'status-up' : (isChecked ? 'status-down' : 'bg-gray-400'));
-
-      return `
-        <div class="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 shadow-sm p-4 hover:shadow-md transition-shadow" data-url="${url.url}">
-          <div class="flex items-start justify-between">
-            <div class="flex-1 min-w-0">
-              <div class="flex items-center gap-2 mb-1">
-                <span class="w-3 h-3 rounded-full ${statusColor} flex-shrink-0"></span>
-                <span class="font-medium text-gray-900 dark:text-gray-100 truncate">${url.url}</span>
-                <button class="remove-url text-gray-400 hover:text-red-500 text-xs ml-1" data-url="${url.url}">✕</button>
-              </div>
-              ${isChecking ? '<p class="text-sm text-yellow-600 dark:text-yellow-400">Checking...</p>' : ''}
-              ${isChecked && !isChecking ? `
-                <div class="flex flex-wrap gap-x-4 gap-y-1 text-sm">
-                  <span class="text-gray-500 dark:text-gray-400">${isUp ? '✅ UP' : '❌ DOWN'}</span>
-                  <span class="text-gray-500 dark:text-gray-400">${r.statusCode || '—'}</span>
-                  <span class="text-gray-500 dark:text-gray-400">${r.responseTime || '—'}</span>
-                  ${r.ssl ? `<span class="${r.sslExpiring ? 'text-yellow-600' : 'text-gray-500'}">🔒 ${r.sslDays}d</span>` : ''}
-                  <span class="text-gray-400 text-xs">${r.lastChecked || ''}</span>
-                </div>
-              ` : ''}
-              ${!isChecked && !isChecking ? '<p class="text-sm text-gray-400">Not checked yet. Click "Check All" to run.</p>' : ''}
-            </div>
-            <button class="check-single px-3 py-1 text-xs font-medium text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/30 rounded-lg transition-colors" data-url="${url.url}">
-              Check
-            </button>
-          </div>
-        </div>`;
-    }
-
-    // Check a single URL
-    async function checkUrl(targetUrl) {
-      if (!invoke) return;
-      const idx = urls.findIndex(u => u.url === targetUrl);
-      if (idx === -1) return;
-      checking.add(targetUrl);
-      render();
-      try {
-        const result = await invoke('check_url', { url: targetUrl });
-        urls[idx].lastResult = {
-          reachable: result.reachable,
-          statusCode: result.status_code,
-          responseTime: result.response_time ? result.response_time + 'ms' : null,
-          ssl: result.ssl?.valid_days !== undefined,
-          sslDays: result.ssl?.valid_days,
-          sslExpiring: result.ssl?.expires_soon,
-          lastChecked: new Date().toLocaleTimeString(),
-        };
-        await invoke('update_url_result', { url: targetUrl, result: urls[idx].lastResult });
-      } catch (e) {
-        urls[idx].lastResult = { reachable: false, error: e.toString(), lastChecked: new Date().toLocaleTimeString() };
-      } finally {
-        checking.delete(targetUrl);
-        render();
-      }
-    }
-
-    // Check all URLs
-    async function checkAll() {
-      for (const u of urls) {
-        await checkUrl(u.url);
-      }
-    }
-
-    // Event handlers
-    btnAddUrl.addEventListener('click', () => addForm.classList.remove('hidden'));
-    btnAddCancel.addEventListener('click', () => { addForm.classList.add('hidden'); urlInput.value = ''; });
-    btnAddConfirm.addEventListener('click', async () => {
-      let input = urlInput.value.trim();
-      if (!input) return;
-      if (!input.startsWith('http://') && !input.startsWith('https://')) input = 'https://' + input;
-      if (invoke) {
-        try {
-          await invoke('add_url', { url: input });
-        } catch(e) {
-          // Free-tier limit or duplicate — show inline message with an upgrade path
-          urlInput.value = input;
-          const msg = String(e);
-          let banner = document.getElementById('limitBanner');
-          if (!banner) {
-            banner = document.createElement('div');
-            banner.id = 'limitBanner';
-            banner.className = 'mt-3 p-3 bg-amber-50 dark:bg-amber-900/30 border border-amber-300 dark:border-amber-700 rounded-lg text-sm text-amber-900 dark:text-amber-200';
-            addForm.parentNode.insertBefore(banner, addForm.nextSibling);
-          }
-          if (msg.includes('Upgrade to Pro')) {
-            banner.innerHTML = msg.replace(/Upgrade to Pro[^"]*/, '') +
-              ' <a href="https://buy.stripe.com/7sY9AS9eX3Iu418fJ5bMQ01" target="_blank" rel="noopener noreferrer" class="underline font-semibold">Buy Pro for $19 →</a>';
-          } else {
-            banner.textContent = msg;
-          }
-          return;
-        }
-      }
-      urls.push({ url: input, lastResult: null });
-      urlInput.value = '';
-      addForm.classList.add('hidden');
-      render();
-      checkUrl(input);
-    });
-
-    btnCheckAll.addEventListener('click', checkAll);
-
-    // Delegate: check single / remove
-    urlList.addEventListener('click', async (e) => {
-      const checkBtn = e.target.closest('.check-single');
-      if (checkBtn) {
-        checkUrl(checkBtn.dataset.url);
-        return;
-      }
-      const removeBtn = e.target.closest('.remove-url');
-      if (removeBtn) {
-        const targetUrl = removeBtn.dataset.url;
-        if (invoke) await invoke('remove_url', { url: targetUrl });
-        urls = urls.filter(u => u.url !== targetUrl);
-        render();
-      }
-    });
-
-    // Init
-    if (window.__TAURI__) {
-      loadUrls();
-      loadLicense();
-      loadInterval();
-    } else {
-      // Running outside Tauri (e.g., in browser for dev)
-      document.querySelector('.text-center.py-12 p:last-child').textContent = 'Runs inside the DeskUptime desktop app';
-    }
-
-    document.getElementById('intervalSelect').addEventListener('change', async (e) => {
-      if (!invoke) return;
-      try { await invoke('set_monitor_interval', { secs: parseInt(e.target.value, 10) }); }
-      catch (err) { console.error(err); }
-    });
-  </script>
+    </section>
+  </main>
 </body>
 </html>

@@ -39,80 +39,82 @@ pub fn save_settings(app: &tauri::AppHandle, s: &MonitorSettings) {
     }
 }
 
-/// Run one full round of checks over the currently stored URLs and persist
-/// the summaries. Returns true if any status flipped vs. the previous result.
-async fn run_round(
-    app: &tauri::AppHandle,
-    state: &AppState,
-) -> bool {
-    let urls: Vec<MonitoredUrl> = {
-        let guard = state.urls.lock().unwrap();
-        guard.clone()
-    };
-    if urls.is_empty() {
-        return false;
-    }
+#[derive(Clone, serde::Serialize)]
+struct MonitorResultsEvent<'a> {
+    urls: &'a [MonitoredUrl],
+    any_change: bool,
+}
 
-    let targets: Vec<String> = urls.iter().map(|u| u.url.clone()).collect();
-    let results = engine::check_urls(&targets).await;
-
-    let mut any_flip = false;
-    for res in results {
-        let summary = crate::CheckResultSummary {
-            reachable: res.reachable,
-            status_code: res.status_code,
-            response_time: res.response_time_ms.map(|ms| format!("{}ms", ms)),
-            ssl: res.ssl.as_ref().map(|_| true),
-            ssl_days: res.ssl.as_ref().and_then(|s| s.valid_days),
-            ssl_expiring: res.ssl.as_ref().map(|s| s.expires_soon).unwrap_or(false),
-            last_checked: Some(chrono::Local::now().format("%H:%M:%S").to_string()),
-            error: res.error.clone(),
+fn apply_round_results(
+    urls: &mut [MonitoredUrl],
+    results: &[engine::CheckResult],
+) -> Vec<(String, bool)> {
+    let mut changes = Vec::new();
+    for result in results {
+        let summary = crate::CheckResultSummary::from_check_result(result);
+        let Some(entry) = urls.iter_mut().find(|entry| entry.url == result.url) else {
+            continue;
         };
-
-        // Detect flip against previous state
-        let prev_reachable = {
-            let mut guard = state.urls.lock().unwrap();
-            if let Some(entry) = guard.iter_mut().find(|u| u.url == res.url) {
-                let prev = entry.last_result.as_ref().map(|r| r.reachable);
-                entry.last_result = Some(summary.clone());
-                prev
-            } else {
-                None
-            }
-        };
-        if let Some(prev) = prev_reachable {
-            if prev != res.reachable {
-                any_flip = true;
-                notify_status_change(app, &res.url, res.reachable);
-                let _ = app.emit(
-                    "status-changed",
-                    json!({ "url": res.url, "reachable": res.reachable }),
-                );
+        if !crate::result_is_newer(entry.last_result.as_ref(), &summary) {
+            continue;
+        }
+        let previous = entry
+            .last_result
+            .as_ref()
+            .map(|previous| previous.reachable);
+        entry.last_result = Some(summary);
+        if let Some(previous) = previous {
+            if previous != result.reachable {
+                changes.push((result.url.clone(), result.reachable));
             }
         }
     }
+    changes
+}
 
-    // Persist everything once
-    let final_urls: Vec<MonitoredUrl> = state.urls.lock().unwrap().clone();
-    crate::save_urls_pub(app, &final_urls);
+async fn run_round(app: &tauri::AppHandle, state: &AppState) -> Result<bool, String> {
+    let targets: Vec<String> = {
+        let urls = state.urls.lock().unwrap();
+        urls.iter().map(|url| url.url.clone()).collect()
+    };
+    if targets.is_empty() {
+        return Ok(false);
+    }
+
+    let results = engine::check_urls(&targets).await;
+    let mut current = state.urls.lock().unwrap();
+    let mut candidate = current.clone();
+    let changes = apply_round_results(&mut candidate, &results);
+    crate::commit_urls(&mut current, candidate, |urls| crate::save_urls(app, urls))?;
+    let persisted_urls = current.clone();
+    drop(current);
+
+    let any_change = !changes.is_empty();
     let _ = app.emit(
         "monitor-results",
-        json!({
-            "urls": final_urls,
-            "anyChange": any_flip,
-        }),
+        MonitorResultsEvent {
+            urls: &persisted_urls,
+            any_change,
+        },
     );
-    any_flip
+    for (url, reachable) in changes {
+        notify_status_change(app, &url, reachable);
+        let _ = app.emit(
+            "status-changed",
+            json!({ "url": url, "reachable": reachable }),
+        );
+    }
+    Ok(any_change)
 }
 
 fn notify_status_change(app: &tauri::AppHandle, url: &str, up: bool) {
     use tauri_plugin_notification::NotificationExt;
-    let host = url
-        .split("://")
-        .nth(1)
-        .unwrap_or(url)
-        .trim_end_matches('/');
-    let title = if up { "Site is back UP ✓" } else { "Site is DOWN ✗" };
+    let host = url.split("://").nth(1).unwrap_or(url).trim_end_matches('/');
+    let title = if up {
+        "Site is back UP ✓"
+    } else {
+        "Site is DOWN ✗"
+    };
     let body = if up {
         format!("{} responded again.", host)
     } else {
@@ -135,6 +137,69 @@ pub fn spawn_monitor(app: tauri::AppHandle) {
             tokio::time::sleep(interval).await;
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn result(timestamp: &str, reachable: bool) -> engine::CheckResult {
+        engine::CheckResult {
+            url: "https://example.com/".to_string(),
+            timestamp: timestamp.to_string(),
+            reachable,
+            status_code: Some(200),
+            response_time_ms: Some(10),
+            ssl: None,
+            content: None,
+            error: None,
+        }
+    }
+
+    #[test]
+    fn stale_results_cannot_overwrite_a_newer_manual_result() {
+        let mut urls = vec![MonitoredUrl {
+            url: "https://example.com/".to_string(),
+            last_result: Some(crate::CheckResultSummary {
+                reachable: false,
+                status_code: Some(200),
+                response_time: Some("10ms".to_string()),
+                ssl: None,
+                ssl_days: None,
+                ssl_expiring: false,
+                last_checked: Some("2026-09-25T12:00:02Z".to_string()),
+                error: None,
+            }),
+        }];
+
+        let changes = apply_round_results(&mut urls, &[result("2026-09-25T12:00:01Z", true)]);
+
+        assert!(changes.is_empty());
+        assert_eq!(
+            urls[0]
+                .last_result
+                .as_ref()
+                .and_then(|summary| summary.last_checked.as_deref()),
+            Some("2026-09-25T12:00:02Z")
+        );
+        assert_eq!(urls[0].last_result.as_ref().unwrap().reachable, false);
+    }
+
+    #[test]
+    fn monitor_event_uses_snake_case() {
+        let urls = vec![MonitoredUrl {
+            url: "https://example.com/".to_string(),
+            last_result: None,
+        }];
+        let value = serde_json::to_value(MonitorResultsEvent {
+            urls: &urls,
+            any_change: true,
+        })
+        .unwrap();
+
+        assert_eq!(value["any_change"], true);
+        assert!(value.get("anyChange").is_none());
+    }
 }
 
 // Silence unused-import warning for Mutex if unused elsewhere

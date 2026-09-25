@@ -4,13 +4,6 @@
   "description": "Default capability set for DeskUptime",
   "windows": ["main"],
   "permissions": [
-    "core:default",
-    "core:window:default",
-    "core:window:allow-close",
-    "core:window:allow-set-size",
-    "notification:default",
-    "notification:allow-is-permission-granted",
-    "notification:allow-request-permission",
-    "notification:allow-notify"
+    "core:event:allow-listen"
   ]
 }

@@ -1,9 +1,9 @@
 # IMPLEMENTATION_PLAN.md
 
-STATUS: RESEARCH
-Iteration: 1 — 2026-09-25
-Arbejdsgren: `ceo/research-roadmap`
-Næste handling: tag P0-1 og sæt den til `I GANG` i næste iteration.
+STATUS: I GANG
+Iteration: 2 — 2026-09-25
+Arbejdsgren: `ceo/desktop-security`
+Næste handling: committér den grønne P0-1 desktop-sikkerhedsændring, merge til `main`, og fortsæt med platform-smoke før P0-1 afsluttes.
 
 ## Mission
 
@@ -52,7 +52,7 @@ Den første gate-definition er registreret her:
 
 ## Prioriteret kø
 
-### P0-1 — TODO — Gør desktopappen brugbar og sikker
+### P0-1 — I GANG — Gør desktopappen brugbar og sikker
 
 **Begrundelse:** Den betalte desktopapp er kernedifferentieringen, men den nuværende frontend kan være uden Tauri-bridge, og remote script + rå nøgle gør webview'en tillidskritisk. Det er en reel købs- og brugerfejl.
 
@@ -74,7 +74,9 @@ Den første gate-definition er registreret her:
 5. Der er ingen remote script-kilde eller bred `script-src` i produktions-CSP.
 6. IPC-regressionstest dækker reachable, down, status, timing, SSL-null og fejl.
 
-**Mulige filer:** `desktop/frontend/index.html`, `desktop/src-tauri/tauri.conf.json`, `desktop/src-tauri/src/lib.rs`, Rust-tests, lokale frontend-assets.
+**Status 2026-09-25:** Implementeret på `ceo/desktop-security`: Tauri bridge og lokal CSS uden remote executable assets, stram CSP, minimal event capability, canonical URL-validering i Rust, snake_case IPC, sikker DOM-rendering og redigeret licens-DTO. `npm test` er grøn med 32/32; `cargo check --locked` og `cargo test --locked` er grønne med 9 tests. `cargo tauri build --debug` byggede macOS-appen og DMG'en. Windows- og interaktiv smoke-test mangler stadig før P0-1 kan afsluttes.
+
+**Mulige filer:** `desktop/frontend/index.html`, `desktop/frontend/app.js`, `desktop/frontend/styles.css`, `desktop/src-tauri/tauri.conf.json`, `desktop/src-tauri/capabilities/default.json`, `desktop/src-tauri/src/lib.rs`, `desktop/src-tauri/src/monitor.rs`, `test/desktop.test.js`.
 
 ### P0-2 — TODO — Ret afhængighedssikkerhed og runtime
 
@@ -217,11 +219,13 @@ Den første gate-definition er registreret her:
 
 ## Dependency- og opgraderingslog
 
-- `2026-09-25`: Root `npm test`: grøn, 26/26.
-- `2026-09-25`: Root `npm run lint`: mangler script.
-- `2026-09-25`: Root `npm run build`: mangler script.
-- `2026-09-25`: `cargo check --locked`: grøn med 2 eksisterende `dead_code`-warnings.
-- `2026-09-25`: `cargo test --locked`: grøn, 0 tests.
+- `2026-09-25`: `npm test`: grøn, 32/32.
+- `2026-09-25`: `npm run lint`: mangler script.
+- `2026-09-25`: `npm run build`: mangler script.
+- `2026-09-25`: `cargo check --locked`: grøn; kun to eksisterende `dead_code`-warnings i `desktop/src-tauri/src/engine/mod.rs`.
+- `2026-09-25`: `cargo test --locked`: grøn, 9 tests.
+- `2026-09-25`: `cargo tauri build --debug`: grøn på macOS; producerede lokal app og DMG.
+- `2026-09-25`: `cargo fmt -- --check`: rapportérer eksisterende formateringsafvigelser på tværs af eksisterende Rust-filer; ikke ændret i denne iteration.
 - `2026-09-25`: `npm audit --omit=dev`: ikke mulig uden lockfile; ikke klassificeret som grøn.
 - `2026-09-25`: Trivy/OSV fandt `glib 0.18.5`, fixed i `0.20.0`; kræver kompatibel Tauri/GTK-opdatering.
 - Ingen større dependency-opgradering er udført i denne research-iteration.
