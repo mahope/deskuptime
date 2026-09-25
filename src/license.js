@@ -21,8 +21,21 @@ export const PRODUCT_KEY = PRODUCT.key;
 export const BUY_URL = PRODUCT.buyUrl;
 export const OFFLINE_GRACE_MS = 7 * 24 * 60 * 60 * 1000;
 
-/** Hard total budget for one license call. A hanging server must not hang the CLI. */
+/** Hard per-attempt budget for one license call. A hanging server must not hang the CLI. */
 export const LICENSE_TIMEOUT_MS = 10_000;
+
+/**
+ * One call plus at most one retry, and a short pause between them. A momentary
+ * 429 or blip is a network event, not a verdict, and retrying once is the
+ * difference between a paying customer keeping Pro and a support ticket about a
+ * key that was never rejected. Never more than one retry: a retry storm against
+ * a rate limiter is what turns a blip into an outage.
+ */
+export const LICENSE_ATTEMPTS = 2;
+export const LICENSE_RETRY_DELAY_MS = 400;
+
+/** A `Retry-After` longer than this means "come back later", not "retry now". */
+const RETRY_AFTER_CAP_MS = 2_000;
 
 /**
  * The five states `deskuptime status` can report. Mirrored in
@@ -97,6 +110,18 @@ export function getDeviceId({ platform = process.platform, env = process.env, ho
   return `deskuptime-${String(name ?? '').trim().toLowerCase() || 'unknown'}`.slice(0, 128);
 }
 
+/** Retry-After in ms, if the server sent a small enough one to act on. */
+function retryAfterMs(response) {
+  const raw = response.headers?.get?.('retry-after');
+  if (!raw) return null;
+  const seconds = Number(raw);
+  if (Number.isFinite(seconds)) return Math.min(Math.max(seconds * 1000, 0), RETRY_AFTER_CAP_MS);
+  const at = Date.parse(raw);
+  return Number.isFinite(at) ? Math.min(Math.max(at - Date.now(), 0), RETRY_AFTER_CAP_MS) : null;
+}
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
 /**
  * One license API call, always bounded in time.
  *
@@ -105,9 +130,25 @@ export function getDeviceId({ platform = process.platform, env = process.env, ho
  * read as "revoked", because that would switch Pro off for a paying customer.
  * Those answers come back as `malformed: true` and are treated as transient.
  *
- * @returns {Promise<{status:number, data:object, transient:boolean, malformed:boolean, error:?string}>}
+ * Transient and malformed answers are retried once (see LICENSE_ATTEMPTS); a
+ * verdict of any kind is returned as-is and never re-asked.
+ *
+ * @returns {Promise<{status:number, data:object, transient:boolean, malformed:boolean, error:?string, attempts:number}>}
  */
-async function post(endpoint, body, { timeoutMs = LICENSE_TIMEOUT_MS } = {}) {
+async function post(endpoint, body, { timeoutMs = LICENSE_TIMEOUT_MS, attempts = LICENSE_ATTEMPTS, retryDelayMs = LICENSE_RETRY_DELAY_MS } = {}) {
+  let attempt = 0;
+  for (;;) {
+    const result = await postOnce(endpoint, body, timeoutMs);
+    attempt += 1;
+    const retryable = result.transient || result.malformed;
+    if (attempt >= attempts || !retryable || result.retryAfterTooLong) {
+      return { ...result, attempts: attempt };
+    }
+    await sleep(result.retryAfterMs ?? retryDelayMs);
+  }
+}
+
+async function postOnce(endpoint, body, timeoutMs) {
   let response;
   try {
     response = await fetch(`${LICENSE_API_BASE}/${endpoint}`, {
@@ -123,6 +164,8 @@ async function post(endpoint, body, { timeoutMs = LICENSE_TIMEOUT_MS } = {}) {
       data: {},
       transient: true,
       malformed: false,
+      retryAfterTooLong: false,
+      retryAfterMs: null,
       error: timedOut
         ? `License server did not answer within ${timeoutMs}ms`
         : `Network error: ${redactSecrets(err?.message ?? err)}`,
@@ -145,7 +188,18 @@ async function post(endpoint, body, { timeoutMs = LICENSE_TIMEOUT_MS } = {}) {
     ? null
     : (data.error || data.message || STATUS_MESSAGES[response.status] || `License server error (HTTP ${response.status})`);
 
-  return { status: response.status, data, transient, malformed, error };
+  // A rate limiter that asks for a long wait is answered by the cached grace
+  // window, not by hammering it once more from inside the same CLI call.
+  const after = retryAfterMs(response);
+  return {
+    status: response.status,
+    data,
+    transient,
+    malformed,
+    retryAfterTooLong: transient && after === RETRY_AFTER_CAP_MS,
+    retryAfterMs: transient ? after : null,
+    error,
+  };
 }
 
 const MALFORMED_ERROR = 'Unreadable answer from the license server — nothing was changed. Try again.';
@@ -156,12 +210,12 @@ const MALFORMED_ERROR = 'Unreadable answer from the license server — nothing w
  * @param {string} [deviceId] - defaults to getDeviceId()
  * @returns {Promise<object>} { valid, activated, key, deviceId, meta?, error?, status?, transient? }
  */
-export async function activateLicense(licenseKey, deviceId = getDeviceId(), { timeoutMs } = {}) {
+export async function activateLicense(licenseKey, deviceId = getDeviceId(), { timeoutMs, attempts, retryDelayMs } = {}) {
   const key = normalizeKey(licenseKey);
   if (!KEY_PATTERN.test(key)) {
     return { valid: false, activated: false, transient: false, error: 'Invalid license key format (expected 32 hex characters)' };
   }
-  const r = await post('activate', { license_key: key, device_id: deviceId, product: PRODUCT_KEY }, { timeoutMs });
+  const r = await post('activate', { license_key: key, device_id: deviceId, product: PRODUCT_KEY }, { timeoutMs, attempts, retryDelayMs });
   if (r.status === 200 && r.data.ok === true && r.data.activated === true) {
     return {
       valid: true,
@@ -194,12 +248,12 @@ export async function activateLicense(licenseKey, deviceId = getDeviceId(), { ti
  *   transient === true means "could not reach a verdict" (network error /
  *   timeout / 408 / 429 / 5xx / unreadable 200).
  */
-export async function validateLicense(licenseKey, deviceId = getDeviceId(), { timeoutMs } = {}) {
+export async function validateLicense(licenseKey, deviceId = getDeviceId(), { timeoutMs, attempts, retryDelayMs } = {}) {
   const key = normalizeKey(licenseKey);
   if (!KEY_PATTERN.test(key)) {
     return { valid: false, transient: false, error: 'Invalid license key format' };
   }
-  const r = await post('validate', { license_key: key, device_id: deviceId, product: PRODUCT_KEY }, { timeoutMs });
+  const r = await post('validate', { license_key: key, device_id: deviceId, product: PRODUCT_KEY }, { timeoutMs, attempts, retryDelayMs });
   // `valid` is the whole point of the call. An answer without it is no verdict,
   // not a silent revocation.
   const verdict = r.status === 200 && r.data.ok === true && typeof r.data.valid === 'boolean';
@@ -223,12 +277,12 @@ export async function validateLicense(licenseKey, deviceId = getDeviceId(), { ti
  * when `deactivated === true` — a seat that is not released server-side is
  * still occupied.
  */
-export async function deactivateLicense(licenseKey, deviceId = getDeviceId(), { timeoutMs } = {}) {
+export async function deactivateLicense(licenseKey, deviceId = getDeviceId(), { timeoutMs, attempts, retryDelayMs } = {}) {
   const key = normalizeKey(licenseKey);
   if (!KEY_PATTERN.test(key)) {
     return { deactivated: false, error: 'Stored license key is malformed — nothing was sent to the server' };
   }
-  const r = await post('deactivate', { license_key: key, device_id: deviceId }, { timeoutMs });
+  const r = await post('deactivate', { license_key: key, device_id: deviceId }, { timeoutMs, attempts, retryDelayMs });
   if (r.status === 200 && r.data.ok === true) {
     return { deactivated: r.data.deactivated === true, devicesInUse: r.data.devices_in_use ?? null, error: null };
   }

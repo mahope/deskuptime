@@ -20,6 +20,7 @@ import {
   PRODUCT_KEY,
   LICENSE_STATUS,
   LICENSE_TIMEOUT_MS,
+  LICENSE_ATTEMPTS,
   OFFLINE_GRACE_MS,
 } from '../src/license.js';
 
@@ -39,6 +40,9 @@ function mockFetch(status, body, { raw = false } = {}) {
     });
   };
 }
+
+/** Retry tests must not pay the real pause; the attempt count is what they pin. */
+const NO_WAIT = { retryDelayMs: 0 };
 
 afterEach(() => { globalThis.fetch = realFetch; });
 
@@ -214,12 +218,12 @@ test('license: a real stalled server is aborted and reported as transient', asyn
 test('validate: 408 and 429 carry no verdict, 400/403/404/409 do', async () => {
   for (const status of [408, 429, 502, 503]) {
     mockFetch(status, { ok: false, error: 'later' });
-    const res = await validateLicense(KEY, 'dev-1');
+    const res = await validateLicense(KEY, 'dev-1', NO_WAIT);
     assert.equal(res.transient, true, `HTTP ${status} must be transient`);
   }
   for (const status of [400, 403, 404, 409]) {
     mockFetch(status, { ok: false, error: 'definitive' });
-    const res = await validateLicense(KEY, 'dev-1');
+    const res = await validateLicense(KEY, 'dev-1', NO_WAIT);
     assert.equal(res.transient, false, `HTTP ${status} must be a verdict`);
   }
 });
@@ -399,4 +403,115 @@ test('activate: 200 with ok:true but no activated field is no verdict', async ()
   // An explicit activated:false is a real answer and stays definitive.
   mockFetch(200, { ok: true, activated: false, error: 'Seat already released' });
   assert.equal((await activateLicense(KEY, 'dev-1')).transient, false);
+});
+
+// ── P2-1 del B: one bounded retry, so a blip is not a support ticket ──
+// The bug these guard: a single 429 dropped a paying customer to cached, and a
+// single dropped connection could start the seven-day unverified clock. A retry
+// storm is the opposite failure, so the attempt count is pinned here too.
+function mockFetchSequence(steps) {
+  calls = [];
+  let i = 0;
+  globalThis.fetch = async (url, init) => {
+    calls.push({ url, init, body: JSON.parse(init.body) });
+    const step = steps[Math.min(i, steps.length - 1)];
+    i += 1;
+    if (step.throw) throw step.throw;
+    return new Response(step.raw ? step.body : JSON.stringify(step.body), {
+      status: step.status,
+      headers: { 'Content-Type': step.raw ? 'text/html' : 'application/json', ...(step.headers ?? {}) },
+    });
+  };
+}
+
+
+test('license: a transient 503 is retried once and the next verdict is used', async () => {
+  mockFetchSequence([
+    { status: 503, body: { ok: false, error: 'Temporarily unavailable' } },
+    { status: 200, body: { ok: true, valid: true, plan: 'pro' } },
+  ]);
+  const res = await validateLicense(KEY, 'dev-1', NO_WAIT);
+  assert.equal(res.valid, true);
+  assert.equal(res.transient, false);
+  assert.equal(calls.length, 2);
+});
+
+test('license: an activation that blips once still activates the key', async () => {
+  // "A license that does not activate" is the mission's first priority. One
+  // dropped connection must not read as a failed purchase.
+  mockFetchSequence([
+    { status: 500, body: { ok: false, error: 'boom' } },
+    { status: 200, body: { ok: true, activated: true, plan: 'pro' } },
+  ]);
+  const res = await activateLicense(KEY, 'dev-1', NO_WAIT);
+  assert.equal(res.activated, true);
+  assert.equal(res.valid, true);
+  assert.equal(res.key, KEY);
+  assert.equal(calls.length, 2);
+});
+
+test('license: a verdict is never re-asked, however wrong it is', async () => {
+  for (const step of [
+    { status: 200, body: { ok: true, valid: false, reason: 'Revoked' } },
+    { status: 403, body: { ok: false, error: 'Revoked' } },
+    { status: 404, body: { ok: false, error: 'Unknown license key' } },
+    { status: 409, body: { ok: false, error: 'Device limit reached' } },
+  ]) {
+    mockFetchSequence([step, { status: 200, body: { ok: true, valid: true } }]);
+    const res = await validateLicense(KEY, 'dev-1', NO_WAIT);
+    assert.equal(res.valid, false, `HTTP ${step.status} must stay a verdict`);
+    assert.equal(calls.length, 1, `HTTP ${step.status} must not be retried`);
+  }
+});
+
+test('license: a healthy answer costs exactly one request', async () => {
+  mockFetchSequence([{ status: 200, body: { ok: true, valid: true } }]);
+  await validateLicense(KEY, 'dev-1', NO_WAIT);
+  assert.equal(calls.length, 1, 'the common path must not pay for a retry it does not need');
+});
+
+test('license: two transient answers stop after one retry, never a storm', async () => {
+  for (const step of [
+    { status: 503, body: { ok: false, error: 'down' } },
+    { status: 429, body: { ok: false, error: 'slow down' } },
+    { status: 200, body: '<html>maintenance</html>', raw: true },
+    { throw: new TypeError('fetch failed') },
+  ]) {
+    mockFetchSequence([step]);
+    const res = await validateLicense(KEY, 'dev-1', NO_WAIT);
+    assert.equal(res.valid, false);
+    assert.equal(res.transient, true);
+    assert.equal(calls.length, LICENSE_ATTEMPTS, 'a persistent fault must not be retried forever');
+  }
+});
+
+test('license: a long Retry-After is obeyed instead of hammered once more', async () => {
+  mockFetchSequence([{ status: 429, body: { ok: false, error: 'rate limited' }, headers: { 'Retry-After': '60' } }]);
+  const res = await validateLicense(KEY, 'dev-1', NO_WAIT);
+  assert.equal(res.transient, true);
+  assert.equal(calls.length, 1, 'the server asked us to come back later, not now');
+});
+
+test('license: a short Retry-After is taken as the pause before the retry', async () => {
+  mockFetchSequence([
+    { status: 429, body: { ok: false, error: 'rate limited' }, headers: { 'Retry-After': '0' } },
+    { status: 200, body: { ok: true, valid: true } },
+  ]);
+  const started = Date.now();
+  const res = await validateLicense(KEY, 'dev-1', { retryDelayMs: 60_000 });
+  assert.equal(res.valid, true);
+  assert.equal(calls.length, 2);
+  assert.ok(Date.now() - started < 5000, 'Retry-After must win over the default pause');
+});
+
+test('license: refresh keeps a paying customer on Pro through a single blip', async () => {
+  // The end-to-end claim: one 503 must not start the seven-day unverified clock.
+  mockFetchSequence([
+    { status: 503, body: { ok: false, error: 'Temporarily unavailable' } },
+    { status: 200, body: { ok: true, valid: true, plan: 'pro' } },
+  ]);
+  const r = await refreshLicense(lic(6), { now: NOW });
+  assert.equal(r.pro, true);
+  assert.equal(r.status, LICENSE_STATUS.ACTIVE, 'the retry restored a real verdict');
+  assert.equal(calls.length, 2);
 });

@@ -16,6 +16,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { checkSSL } from '../src/checkers/ssl.js';
+import { checkContentChange, MAX_CONTENT_BYTES } from '../src/checkers/content.js';
+import { checkUrl } from '../src/engine.js';
 
 const run = promisify(execFile);
 const CLI = fileURLToPath(new URL('../src/cli.js', import.meta.url));
@@ -260,4 +262,113 @@ test('cli: watch starts monitoring without crashing', { timeout: 30000 }, async 
   assert.match(out, /Monitoring 1 URL/);
   assert.equal(outcome.started, true, `watch never started: ${out}`);
   assert.equal(outcome.killed, true, `watch exited by itself: ${JSON.stringify(outcome)}`);
+});
+
+// ── P2-1 del B: the content check must be bounded in size and in time ──
+// Both bounds exist because a monitored site is not under our control: a big
+// page and a stalling body must cost us a content signal, never the loop.
+async function bodyServer(t, handler) {
+  const server = createServer(handler);
+  const port = await listen(server);
+  t.after(() => close(server));
+  return `http://127.0.0.1:${port}`;
+}
+
+test('content: a normal page still hashes, counts bytes and extracts the title', async (t) => {
+  const base = await bodyServer(t, (_req, res) => {
+    res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+    res.end('<html><head><title>Hej kunde</title></head><body>ok</body></html>');
+  });
+  const r = await checkContentChange(`${base}/`);
+  assert.equal(r.fetched, true);
+  assert.equal(r.title, 'Hej kunde');
+  assert.equal(r.changed, null, 'no previous hash means no verdict, not "changed"');
+  // Real bytes on the wire. The old code reported UTF-16 code units, so a page
+  // with any non-ASCII text showed a smaller "bytes" figure than it sent.
+  assert.equal(r.contentLength, Buffer.byteLength('<html><head><title>Hej kunde</title></head><body>ok</body></html>'));
+  assert.equal(r.contentLength, new TextEncoder().encode('<html><head><title>Hej kunde</title></head><body>ok</body></html>').length);
+});
+
+test('content: an oversized page gives no content signal instead of buffering it', async (t) => {
+  const chunk = Buffer.alloc(64 * 1024, 0x61);
+  let written = 0;
+  const base = await bodyServer(t, (_req, res) => {
+    res.writeHead(200, { 'content-type': 'text/html' });
+    // No content-length, so the cap can only be enforced while streaming.
+    const pump = setInterval(() => {
+      if (res.writableEnded || res.destroyed) return clearInterval(pump);
+      written += chunk.length;
+      res.write(chunk);
+      if (written > 4 * 1024 * 1024) { clearInterval(pump); res.end(); }
+    }, 1);
+  });
+
+  const r = await checkContentChange(`${base}/`, 'stale-hash');
+  assert.equal(r.fetched, false);
+  assert.equal(r.tooLarge, true);
+  assert.equal(r.hash, undefined, 'a partial body must never be hashed');
+  assert.match(r.error, new RegExp(`${MAX_CONTENT_BYTES}-byte content-check limit`));
+  // The point of the cap: we stop reading instead of taking the whole body.
+  assert.ok(written < 4 * 1024 * 1024, `read ${written} bytes, expected the cap to stop it earlier`);
+});
+
+test('content: a declared oversized body is skipped without reading it', async (t) => {
+  let written = 0;
+  const base = await bodyServer(t, (_req, res) => {
+    res.writeHead(200, { 'content-type': 'application/octet-stream', 'content-length': String(64 * 1024 * 1024) });
+    res.on('drain', () => {});
+    const pump = setInterval(() => {
+      if (res.writableEnded || res.destroyed) return clearInterval(pump);
+      written += 65536;
+      res.write(Buffer.alloc(65536));
+    }, 1);
+  });
+
+  const r = await checkContentChange(`${base}/`);
+  assert.equal(r.fetched, false);
+  assert.equal(r.tooLarge, true);
+  assert.equal(r.contentLength, 64 * 1024 * 1024, 'the server already told us the size');
+  await new Promise((resolve) => setTimeout(resolve, 150));
+  assert.ok(written < 1024 * 1024, `read ${written} bytes of a body the server had already sized`);
+});
+
+test('content: a body that never ends is aborted, not waited on forever', { timeout: 30000 }, async (t) => {
+  const base = await bodyServer(t, (_req, res) => {
+    res.writeHead(200, { 'content-type': 'text/html' });
+    res.write('<html><body>');   // headers and a promise, then silence
+  });
+  const started = Date.now();
+  const r = await checkContentChange(`${base}/`, null, { timeoutMs: 250 });
+  const elapsed = Date.now() - started;
+  assert.equal(r.fetched, false);
+  assert.match(r.error, /did not send its body within 250ms/);
+  // The regression: the old code cleared its abort right after fetch resolved,
+  // so a stalling body had no deadline and this call never returned.
+  assert.ok(elapsed < 5000, `took ${elapsed}ms — the body read is not bounded in time`);
+});
+
+test('engine: a too-large page is never reported as a DOWN site', async (t) => {
+  const chunk = Buffer.alloc(64 * 1024, 0x61);
+  const base = await bodyServer(t, (req, res) => {
+    const { pathname } = new URL(req.url, 'http://localhost');
+    if (pathname === '/big') {
+      res.writeHead(200, { 'content-type': 'text/html' });
+      // Reachability is checked with HEAD first; that must answer, or the site
+      // is DOWN for a reason that has nothing to do with its size.
+      if (req.method === 'HEAD') return res.end();
+      const pump = setInterval(() => {
+        if (res.writableEnded || res.destroyed) return clearInterval(pump);
+        res.write(chunk);
+      }, 1);
+      return;
+    }
+    res.writeHead(200, { 'content-type': 'text/html' });
+    res.end('<html><body>ok</body></html>');
+  });
+
+  const result = await checkUrl(`${base}/big`, { timeoutMs: 5000 });
+  assert.equal(result.reachable, true);
+  assert.equal(result.healthy, true, 'a big page is not an outage');
+  assert.equal(result.content.fetched, false);
+  assert.equal(result.content.tooLarge, true);
 });

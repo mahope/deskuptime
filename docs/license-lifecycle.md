@@ -23,8 +23,17 @@ En tidligere fejlklassificering behandlede *alle* HTTP 200 som verdikt, så en
 Cloudflare-HTML-side kunne låse en betalende kunde ude. Derfor er `malformed` et
 eget udfald: det er transient, aldrig permanent.
 
-**Hård timeout:** hvert kald har 10 s total (`LICENSE_TIMEOUT_MS`). Et hængende
+**Hård timeout:** hvert forsøg har 10 s (`LICENSE_TIMEOUT_MS`). Et hængende
 server-svar kan ikke hænge CLI'en eller overvågningsloopet.
+
+**Én genprøvning, aldrig to.** Et `transient` eller `malformed` svar genprøves
+én gang efter `LICENSE_RETRY_DELAY_MS` (400 ms), så en kort 429 eller et øjebliks
+netværkshyl ikke sender en betalende kunde ned i `cached`/`unverified`.
+Et **verdikt** — hvad det så er — spørges aldrig om igen. `LICENSE_ATTEMPTS` er
+2, så der kan ikke opstå en retry-storm mod en ratelimiter; det er præcis det,
+der gør en kort blivende fejl til en reel fejl. Et `Retry-After` på mere end 2 s
+gør, at vi **ikke** genprøver: ratelimiteren beder os komme tilbage senere, og
+det er cached-grace-vinduet, der dækker det.
 
 ## 2. De fem tilstande
 
@@ -76,7 +85,8 @@ Ingen licensnøgle, device-id eller webhook-hemmelighed skrives i logfiler.
 ## 5. Hvad Rust-siden skal spejle
 
 1. Samme klassificering af 200/400/403/404/408/409/425/429/5xx og malformed 200.
-2. Samme 10 s timeout på hvert licenskald.
+2. Samme 10 s timeout pr. forsøg, samme én genprøvning med 400 ms pause, samme
+   to-forsøgs-loft og samme regel om at et langt `Retry-After` ikke genprøves.
 3. Samme fem tilstande i UI'en — især at `invalid` og `unverified` slår Pro fra med
    det samme, og at `unverified` ikke må få kunden til at tro nøglen er død.
 4. Samme 7-dages grace uden at skrive gamle `license.instance`-id'er om
