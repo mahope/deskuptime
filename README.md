@@ -45,9 +45,9 @@ npx @mahope/deskuptime watch --status
 npx @mahope/deskuptime --help
 ```
 
-Watch mode stores state in `~/.deskuptime/state.json` and resumes where it left off.
-It prints a line on every status change: site down 🚨, back up ✅, SSL expiring within
-14 days ⚠️, or content changed 🔄.
+Watch mode stores state in `~/.deskuptime/state.json` (or the native user profile on Windows) and resumes where it left off.
+The first pass records a baseline for every URL. `--once` runs exactly one pass, saves state, and exits with code `0` when all monitored URLs are healthy, `2` when any URL is DOWN, or `1` for invalid usage. `watch --status` only reads the saved state and never contacts monitored URLs.
+It prints a line on every status change: site down 🚨, back up ✅, SSL expiring within 14 days ⚠️, or content changed 🔄. An SSL warning is emitted once per crossing of the 14-day threshold; recovery resets it.
 
 ## Status policy
 

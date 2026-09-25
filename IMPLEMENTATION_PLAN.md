@@ -1,9 +1,9 @@
 # IMPLEMENTATION_PLAN.md
 
 STATUS: I GANG
-Iteration: 4 — 2026-09-25
-Arbejdsgren: `ceo/status-semantics`
-Næste handling: P0-3 er færdig i `5f8ff4c` og fast-forward-merged til `main` kl. 2026-09-25T09:24:49Z; næste iteration starter P0-4.
+Iteration: 5 — 2026-09-25
+Arbejdsgren: `ceo/watch-truth`
+Næste handling: P0-4 er markeret `I GANG` på `ceo/watch-truth`; implementér one-shot/read-only watch-semantik og SSL-begivenheder.
 
 ## Mission
 
@@ -114,7 +114,7 @@ Den aktuelle gate-definition er registreret her:
 
 **Status 2026-09-25:** Færdig i `5f8ff4c` på `ceo/status-semantics`. Lokale fixtures dækker 200, 204, redirect-til-200, 400, 404, 410, 500, redirect-til-500, timeout og connection refusal. CLI JSON/human/exit, watch-state og Action `down-count` bruger samme `healthy`-beslutning; CLI, engine og watch validerer hele batchen før request. Headers-fejl efter redirect bevarer origin-schema og er strukturerede. Node 24-gate: 32/32 tests, audit 0/0, syntax/diff grøn; fresh review fandt ingen P0/P1. Desktop Rust-pariteten følger i `mahope/deskuptime-desktop`.
 
-### P0-4 — TODO — Gør watch-kommandoerne ægte
+### P0-4 — I GANG — Gør watch-kommandoerne ægte
 
 **Begrundelse:** README's cron-opskrift `watch --once` og statusvisning `watch --status` er aktive, men regressionen kan efterlade cron-processer kørende.
 

@@ -3,11 +3,12 @@ import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { createServer } from 'node:http';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, existsSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, win32 } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { checkUrl, checkUrls } from '../src/engine.js';
+import { getStateFile, loadState, runOnce, runPass } from '../src/watch.js';
 
 const run = promisify(execFile);
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
@@ -31,9 +32,10 @@ async function unusedPort() {
   return port;
 }
 
-async function statusServer(t, redirectTarget) {
+async function statusServer(t, redirectTarget, onRequest = () => {}) {
   const sockets = new Set();
   const server = createServer((req, res) => {
+    onRequest(req);
     const { pathname } = new URL(req.url, 'http://localhost');
 
     if (pathname === '/hang') return;
@@ -316,4 +318,290 @@ test('headers: connection refusal returns a structured error without crashing', 
       return true;
     }
   );
+});
+
+function watchResult(overrides = {}) {
+  return {
+    url: 'http://watch.test/',
+    timestamp: new Date().toISOString(),
+    reachable: true,
+    healthy: true,
+    statusCode: 200,
+    responseTimeMs: 1,
+    ssl: null,
+    content: { fetched: true, contentLength: 10, hash: 'stable', changed: null },
+    errorType: null,
+    error: null,
+    ...overrides,
+  };
+}
+
+function watchState(url) {
+  return {
+    urls: {
+      [url]: {
+        addedAt: '2026-09-25T00:00:00.000Z',
+        wasUp: null,
+        lastHash: null,
+        lastContentLength: null,
+        sslWarned: false,
+      },
+    },
+  };
+}
+
+test('watch --once completes one pass and reports a healthy baseline', async (t) => {
+  let requests = 0;
+  const baseUrl = await statusServer(t, undefined, () => { requests++; });
+  const home = mkdtempSync(join(tmpdir(), 'deskuptime-once-'));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  const url = `${baseUrl}/status/200`;
+  const stateFile = getStateFile({ env: { HOME: home } });
+  const env = { ...process.env, HOME: home, USERPROFILE: home };
+
+  const { stdout } = await run(process.execPath, [CLI, 'watch', url, '--once'], { env });
+  assert.match(stdout, /baseline recorded: UP/);
+  assert.doesNotMatch(stdout, /Monitoring \d+ URL/);
+  assert.equal(requests, 2);
+  const state = JSON.parse(readFileSync(stateFile, 'utf8'));
+  assert.equal(state.urls[url].wasUp, true);
+  assert.equal(state.urls[url].lastStatus, 200);
+});
+
+test('watch --once without a URL or saved state exits 1', async (t) => {
+  const home = mkdtempSync(join(tmpdir(), 'deskuptime-once-empty-'));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+
+  await assert.rejects(
+    run(process.execPath, [CLI, 'watch', '--once'], {
+      env: { ...process.env, HOME: home, USERPROFILE: home },
+    }),
+    (error) => {
+      assert.equal(error.code, 1);
+      assert.match(error.stderr, /at least one URL required/);
+      return true;
+    },
+  );
+});
+
+test('watch --once exits 2 for DOWN and never claims all sites are OK', async (t) => {
+  const baseUrl = await statusServer(t);
+  const home = mkdtempSync(join(tmpdir(), 'deskuptime-once-down-'));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  const url = `${baseUrl}/status/500`;
+  const stateFile = getStateFile({ env: { HOME: home } });
+  const env = { ...process.env, HOME: home, USERPROFILE: home };
+
+  await assert.rejects(
+    run(process.execPath, [CLI, 'watch', url, '--once'], { env }),
+    (error) => {
+      assert.equal(error.code, 2);
+      assert.match(error.stdout, /baseline recorded: DOWN/);
+      assert.doesNotMatch(error.stdout, /all monitored sites OK/);
+      return true;
+    }
+  );
+  const state = JSON.parse(readFileSync(stateFile, 'utf8'));
+  assert.equal(state.urls[url].wasUp, false);
+  assert.equal(state.urls[url].lastStatus, 500);
+
+  await assert.rejects(
+    run(process.execPath, [CLI, 'watch', url, '--once'], { env }),
+    (error) => {
+      assert.equal(error.code, 2);
+      assert.match(error.stdout, /is DOWN/);
+      assert.doesNotMatch(error.stdout, /all monitored sites OK/);
+      return true;
+    }
+  );
+});
+
+test('watch --status is read-only and does not contact monitored URLs', async (t) => {
+  let requests = 0;
+  const server = createServer((_req, res) => {
+    requests++;
+    res.end('unexpected');
+  });
+  const port = await listen(server);
+  t.after(() => close(server));
+  const home = mkdtempSync(join(tmpdir(), 'deskuptime-status-'));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  const url = `http://127.0.0.1:${port}/status/200`;
+  const stateFile = getStateFile({ env: { HOME: home } });
+  mkdirSync(join(home, '.deskuptime'), { recursive: true });
+  const state = {
+    urls: {
+      [url]: { wasUp: true, lastStatus: 200, lastChecked: '2026-09-25T00:00:00.000Z' },
+    },
+  };
+  writeFileSync(stateFile, JSON.stringify(state));
+  const before = readFileSync(stateFile, 'utf8');
+
+  const { stdout } = await run(process.execPath, [CLI, 'watch', '--status'], {
+    env: { ...process.env, HOME: home, USERPROFILE: home },
+  });
+  assert.match(stdout, new RegExp(url.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+  assert.match(stdout, /200/);
+  assert.equal(requests, 0);
+  assert.equal(readFileSync(stateFile, 'utf8'), before);
+});
+
+test('watch --status with no state does not create a state file', async (t) => {
+  const home = mkdtempSync(join(tmpdir(), 'deskuptime-status-empty-'));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  const stateFile = getStateFile({ env: { HOME: home } });
+
+  const { stdout } = await run(process.execPath, [CLI, 'watch', '--status'], {
+    env: { ...process.env, HOME: home, USERPROFILE: home },
+  });
+  assert.match(stdout, /No URLs monitored/);
+  assert.equal(existsSync(stateFile), false);
+});
+
+test('watch state path uses HOME and Windows USERPROFILE', () => {
+  const posixHome = '/tmp/deskuptime-home';
+  assert.equal(getStateFile({ env: { HOME: posixHome }, platform: 'linux' }), join(posixHome, '.deskuptime', 'state.json'));
+  const windowsHome = 'C:\\Users\\deskuptime';
+  assert.equal(
+    getStateFile({ env: { USERPROFILE: windowsHome, HOME: '/fallback' }, platform: 'win32' }),
+    win32.join(windowsHome, '.deskuptime', 'state.json'),
+  );
+  assert.equal(
+    getStateFile({ env: { USERPROFILE: windowsHome, HOME: '/fallback' }, platform: 'linux' }),
+    join('/fallback', '.deskuptime', 'state.json'),
+  );
+});
+
+test('watch status transitions use healthy and preserve DOWN across saved passes', async (t) => {
+  const url = 'http://watch.test/status';
+  const home = mkdtempSync(join(tmpdir(), 'deskuptime-transitions-'));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  const options = { env: { HOME: home, USERPROFILE: home } };
+  let state = watchState(url);
+  const responses = [
+    watchResult(),
+    watchResult({ reachable: false, healthy: false, statusCode: 500, content: null, error: 'HTTP 500' }),
+    watchResult(),
+    watchResult({ reachable: false, healthy: false, statusCode: 500, content: null, error: 'HTTP 500' }),
+  ];
+  const passes = [];
+
+  for (const response of responses) {
+    passes.push(await runPass(state, { ...options, check: async () => response, returnResults: true }));
+    state = loadState(options);
+  }
+
+  assert.deepEqual(passes.map(pass => pass.healthy), [true, false, true, false]);
+  assert.deepEqual(passes.map(pass => pass.events.map(event => event.type)), [
+    ['baseline'],
+    ['down'],
+    ['up'],
+    ['down'],
+  ]);
+});
+
+test('watch pass does not mix a concurrent state snapshot into its results', async (t) => {
+  const url = 'http://watch.test/concurrent';
+  const home = mkdtempSync(join(tmpdir(), 'deskuptime-concurrent-'));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  const options = { env: { HOME: home, USERPROFILE: home } };
+  const stateFile = getStateFile(options);
+  const initialEntry = {
+    ...watchState(url).urls[url],
+    wasUp: true,
+    lastStatus: 200,
+    lastHash: 'stable',
+    lastChecked: '2026-09-25T00:00:00.000Z',
+  };
+  mkdirSync(join(home, '.deskuptime'), { recursive: true });
+  writeFileSync(stateFile, JSON.stringify({ urls: { [url]: initialEntry } }));
+
+  const pass = await runOnce([url], {
+    ...options,
+    check: async () => {
+      writeFileSync(stateFile, JSON.stringify({
+        urls: {
+          [url]: {
+            ...initialEntry,
+            wasUp: false,
+            lastStatus: 503,
+            lastChecked: '2099-01-01T00:00:00.000Z',
+          },
+        },
+      }));
+      return watchResult({
+        url,
+        content: { fetched: true, contentLength: 10, hash: 'stable', changed: false },
+      });
+    },
+  });
+
+  const saved = JSON.parse(readFileSync(stateFile, 'utf8')).urls[url];
+  assert.deepEqual(pass.events, []);
+  assert.equal(pass.healthy, true);
+  assert.equal(saved.wasUp, true);
+  assert.equal(saved.lastStatus, 200);
+});
+
+test('watch content transitions are latched to the saved hash', async (t) => {
+  const url = 'http://watch.test/content';
+  const home = mkdtempSync(join(tmpdir(), 'deskuptime-content-'));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  const options = { env: { HOME: home, USERPROFILE: home } };
+  let state = watchState(url);
+  const values = [
+    { hash: 'hash-a', length: 10 },
+    { hash: 'hash-b', length: 20 },
+    { hash: 'hash-b', length: 20 },
+    { hash: 'hash-a', length: 10 },
+  ];
+  const passes = [];
+
+  for (const value of values) {
+    passes.push(await runPass(state, {
+      ...options,
+      check: async (_url, { contentHash }) => watchResult({
+        content: {
+          fetched: true,
+          contentLength: value.length,
+          hash: value.hash,
+          changed: contentHash ? contentHash !== value.hash : null,
+          previousHash: contentHash,
+        },
+      }),
+      returnResults: true,
+    }));
+    state = loadState(options);
+  }
+
+  assert.deepEqual(passes.map(pass => pass.events.map(event => event.type)), [
+    ['baseline'],
+    ['content_changed'],
+    [],
+    ['content_changed'],
+  ]);
+  assert.match(passes[1].events[0].message, /10 → 20 bytes/);
+});
+
+test('watch SSL warnings latch through unavailable checks until recovery', async (t) => {
+  const url = 'https://watch.test/ssl';
+  const home = mkdtempSync(join(tmpdir(), 'deskuptime-ssl-'));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  const options = { env: { HOME: home, USERPROFILE: home } };
+  let state = watchState(url);
+  const values = [14, null, 14, 15, 14];
+  const passes = [];
+
+  for (const validDays of values) {
+    passes.push(await runPass(state, {
+      ...options,
+      check: async () => watchResult({ ssl: validDays == null ? null : { validDays } }),
+      returnResults: true,
+    }));
+    state = loadState(options);
+  }
+
+  const warnings = passes.flatMap(pass => pass.events.filter(event => event.type === 'ssl_warning'));
+  assert.equal(warnings.length, 2);
+  assert.equal(state.urls[url].sslWarned, true);
 });

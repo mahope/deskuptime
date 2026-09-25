@@ -11,10 +11,10 @@
 
 import { checkUrl } from './engine.js';
 import { activateLicense, refreshLicense } from './license.js';
-import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'fs';
-import { join } from 'path';
+import { readFileSync, writeFileSync, mkdirSync, existsSync, renameSync, unlinkSync } from 'fs';
+import { dirname, posix, win32 } from 'path';
 import { homedir } from 'os';
-import { createHash } from 'crypto';
+import { createHash, randomUUID } from 'crypto';
 import { assertValidHttpUrls } from './status.js';
 
 const FREE_URL_LIMIT = 3;
@@ -22,21 +22,53 @@ const FREE_MIN_INTERVAL = 60;
 const PRO_MIN_INTERVAL = 30;
 const LICENSE_RECHECK_MS = 24 * 60 * 60 * 1000;
 
-const STATE_DIR = join(homedir(), '.deskuptime');
-const STATE_FILE = join(STATE_DIR, 'state.json');
+export function getStateFile({ env = process.env, platform = process.platform } = {}) {
+  const home = platform === 'win32'
+    ? env.USERPROFILE || env.HOME || homedir()
+    : env.HOME || homedir();
+  const path = platform === 'win32' ? win32 : posix;
+  return path.join(home, '.deskuptime', 'state.json');
+}
 
-export function loadState() {
-  if (!existsSync(STATE_FILE)) return { urls: {} };
+function emptyState() {
+  return { urls: {} };
+}
+
+function normalizeState(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value) || !value.urls || typeof value.urls !== 'object' || Array.isArray(value.urls)) {
+    return emptyState();
+  }
+  const urls = Object.fromEntries(
+    Object.entries(value.urls).filter(([, entry]) => entry && typeof entry === 'object' && !Array.isArray(entry)),
+  );
+  return { ...value, urls };
+}
+
+function stateFileFrom(options) {
+  return options.stateFile || getStateFile(options);
+}
+
+export function loadState(options = {}) {
+  const stateFile = stateFileFrom(options);
+  if (!existsSync(stateFile)) return emptyState();
   try {
-    return JSON.parse(readFileSync(STATE_FILE, 'utf-8'));
+    return normalizeState(JSON.parse(readFileSync(stateFile, 'utf-8')));
   } catch {
-    return { urls: {} };
+    return emptyState();
   }
 }
 
-export function saveState(state) {
-  mkdirSync(STATE_DIR, { recursive: true });
-  writeFileSync(STATE_FILE, JSON.stringify(state, null, 2));
+export function saveState(state, options = {}) {
+  const stateFile = stateFileFrom(options);
+  mkdirSync(dirname(stateFile), { recursive: true });
+  const temporaryFile = `${stateFile}.${process.pid}.${randomUUID()}.tmp`;
+  try {
+    writeFileSync(temporaryFile, JSON.stringify(state, null, 2), { mode: 0o600 });
+    renameSync(temporaryFile, stateFile);
+  } catch (error) {
+    try { unlinkSync(temporaryFile); } catch {}
+    throw error;
+  }
 }
 
 export function isPro(state) {
@@ -55,47 +87,148 @@ function fmtNow() {
  * One monitoring pass over all tracked URLs.
  * Returns list of change events: [{ url, type: 'up'|'down'|'ssl_warning'|'content_changed', message }]
  */
-export async function runPass(state) {
+export async function runPass(state, opts = {}) {
   const events = [];
   const urls = Object.keys(state.urls);
   assertValidHttpUrls(urls);
+  const check = opts.check || checkUrl;
 
-  await Promise.all(urls.map(async (url) => {
+  const results = await Promise.all(urls.map((url) => {
     const entry = state.urls[url];
+    return check(url, { contentHash: entry.lastHash || null });
+  }));
+
+  for (let index = 0; index < results.length; index++) {
+    const url = urls[index];
+    const entry = state.urls[url];
+    const result = results[index];
     const firstPass = entry.wasUp === null || entry.wasUp === undefined;
-    const prevHash = entry.lastHash || null;
-    const result = await checkUrl(url, { contentHash: prevHash });
 
-    // Status transition (first pass only establishes baseline — no alarm)
-    if (!firstPass) {
-      if (result.healthy && !entry.wasUp) {
-        events.push({ url, type: 'up', message: `is UP (${result.statusCode}) — ${result.responseTimeMs}ms` });
-      } else if (!result.healthy && entry.wasUp) {
-        events.push({ url, type: 'down', message: `is DOWN${result.error ? ' — ' + result.error : ''}` });
-      }
+    if (firstPass) {
+      const status = result.healthy ? 'UP' : 'DOWN';
+      const detail = result.healthy
+        ? ` (${result.statusCode}) — ${result.responseTimeMs}ms`
+        : result.error ? ` — ${result.error}` : '';
+      events.push({ url, type: 'baseline', message: `baseline recorded: ${status}${detail}` });
+    } else if (result.healthy && entry.wasUp === false) {
+      events.push({ url, type: 'up', message: `is UP (${result.statusCode}) — ${result.responseTimeMs}ms` });
+    } else if (!result.healthy && entry.wasUp === true) {
+      events.push({ url, type: 'down', message: `is DOWN${result.error ? ' — ' + result.error : ''}` });
     }
 
-    // SSL expiry warning
-    if (result.ssl?.validDays !== undefined && result.ssl.validDays <= 14) {
-      if (!entry.sslWarned || result.ssl.validDays < entry.sslWarned) {
-        events.push({ url, type: 'ssl_warning', message: `SSL expires in ${result.ssl.validDays} days ⚠️` });
+    const validDays = result.ssl?.validDays;
+    if (Number.isFinite(validDays)) {
+      entry.sslValidDays = validDays;
+      const warningActive = entry.sslWarned === true || typeof entry.sslWarned === 'number';
+      if (validDays <= 14 && !warningActive) {
+        events.push({ url, type: 'ssl_warning', message: `SSL expires in ${validDays} days ⚠️` });
+        entry.sslWarned = true;
+      } else if (validDays > 14) {
+        entry.sslWarned = false;
       }
+    } else {
+      delete entry.sslValidDays;
     }
 
-    // Content changed
     if (result.content?.changed === true) {
-      events.push({ url, type: 'content_changed', message: `content changed (${(result.content.previousLength ?? '?')} → ${result.content.contentLength} bytes)` });
+      events.push({ url, type: 'content_changed', message: `content changed (${entry.lastContentLength ?? '?'} → ${result.content.contentLength} bytes)` });
     }
 
-    entry.lastChecked = result.timestamp;
+    entry.lastChecked = result.timestamp || new Date().toISOString();
     entry.wasUp = result.healthy;
     entry.lastStatus = result.statusCode;
     if (result.content?.hash) entry.lastHash = result.content.hash;
-    if (result.ssl?.validDays !== undefined) entry.sslValidDays = result.ssl.validDays;
-  }));
+    if (Number.isFinite(result.content?.contentLength)) entry.lastContentLength = result.content.contentLength;
+  }
 
-  saveState(state);
-  return events;
+  saveState(state, opts);
+  const pass = {
+    events,
+    results,
+    healthy: results.every(result => result.healthy),
+  };
+  return opts.returnResults ? pass : events;
+}
+
+function eventIcon(type) {
+  return { down: '🚨', up: '✅', baseline: '•', ssl_warning: '⚠️ ', content_changed: '🔄' }[type] || '•';
+}
+
+export function printPass(pass, { alertUnchangedDown = true } = {}) {
+  for (const event of pass.events) {
+    console.log(`[${fmtNow()}] ${eventIcon(event.type)} ${event.url} ${event.message}`);
+  }
+
+  const reported = new Set(pass.events.filter(event => event.type === 'down' || event.type === 'baseline').map(event => event.url));
+  if (!pass.healthy) {
+    for (const result of pass.results) {
+      if (result.healthy || reported.has(result.url)) continue;
+      const message = alertUnchangedDown ? 'is DOWN' : 'remains DOWN';
+      console.log(`[${fmtNow()}] ${alertUnchangedDown ? '🚨' : '·'} ${result.url} ${message}${result.error ? ' — ' + result.error : ''}`);
+    }
+  } else if (pass.events.length === 0) {
+    console.log(`[${fmtNow()}] ✓ all monitored sites OK`);
+  }
+}
+
+export function printStatus(options = {}) {
+  const state = loadState(options);
+  const entries = Object.entries(state.urls);
+  if (entries.length === 0) {
+    console.log('No URLs monitored. Start with: deskuptime watch <url>');
+    return;
+  }
+  console.log(`📋 ${entries.length} monitored URL(s):\n`);
+  for (const [url, entry] of entries) {
+    const status = entry.wasUp === true ? '✅ up' : entry.wasUp === false ? '🚨 down' : '❔ unknown';
+    const ssl = entry.sslValidDays != null ? `, SSL ${entry.sslValidDays}d` : '';
+    const checked = entry.lastChecked ? ` @ ${entry.lastChecked}` : '';
+    console.log(`  ${status}  ${url} (${entry.lastStatus ?? '—'}${ssl})${checked}`);
+  }
+}
+
+function addMonitoredUrls(state, urls, pro) {
+  const limit = pro ? Infinity : FREE_URL_LIMIT;
+  let added = 0;
+  for (const url of urls) {
+    if (state.urls[url]) continue;
+    if (Object.keys(state.urls).length >= limit) {
+      console.log(pro
+        ? `⚠️  Skipping duplicate/extra URL: ${url}`
+        : `⚠️  Free tier monitors ${FREE_URL_LIMIT} URLs. Run "deskuptime activate <key>" for Pro (unlimited). ${url} not added.`);
+      continue;
+    }
+    state.urls[url] = {
+      addedAt: new Date().toISOString(),
+      wasUp: null,
+      lastHash: null,
+      lastContentLength: null,
+      sslWarned: false,
+    };
+    added++;
+  }
+  return added;
+}
+
+function mergePersistedState(state, options) {
+  const persisted = loadState(options);
+  for (const [url, entry] of Object.entries(persisted.urls)) {
+    const current = state.urls[url];
+    if (!current || (entry.lastChecked && (!current.lastChecked || entry.lastChecked > current.lastChecked))) {
+      state.urls[url] = entry;
+    }
+  }
+  if (Object.hasOwn(persisted, 'license')) state.license = persisted.license;
+  return state;
+}
+
+export async function runOnce(urls, opts = {}) {
+  assertValidHttpUrls(urls);
+  const state = loadState(opts);
+  const added = addMonitoredUrls(state, urls, isPro(state));
+  if (Object.keys(state.urls).length === 0) return { events: [], results: [], healthy: false, added, empty: true };
+  const pass = await runPass(state, { ...opts, returnResults: true });
+  return { ...pass, added };
 }
 
 /**
@@ -142,57 +275,42 @@ export async function sendWebhook(webhookUrl, event) {
  */
 export async function startWatch(urls, opts = {}) {
   const { webhookUrl } = opts;
-  const state = loadState();
+  const state = loadState(opts);
   assertValidHttpUrls([...urls, ...Object.keys(state.urls)]);
   let pro = false;
 
-  // Re-validate a stored license. Server outages keep a cached Pro status for 7 days.
   async function recheckLicense() {
     if (!isPro(state)) return false;
-    const r = await refreshLicense(state.license);
-    state.license = r.license;
-    saveState(state);
-    if (!r.pro) console.error(`⚠️  Pro license not active: ${r.reason}`);
-    return r.pro;
+    const result = await refreshLicense(state.license);
+    state.license = result.license;
+    saveState(state, opts);
+    if (!result.pro) console.error(`⚠️  Pro license not active: ${result.reason}`);
+    return result.pro;
   }
   pro = await recheckLicense();
   let lastLicenseCheck = Date.now();
 
-  // Optional license activation: deskuptime watch <url> --activate KEY
   if (opts.activateKey && !pro) {
     console.log('🔑 Activating license...');
-    const res = await activateLicense(opts.activateKey);
-    if (res.valid) {
-      state.license = { key: res.key, instance: res.deviceId, plan: res.meta.plan, validatedAt: new Date().toISOString() };
-      saveState(state);
+    const result = await activateLicense(opts.activateKey);
+    if (result.valid) {
+      state.license = { key: result.key, instance: result.deviceId, plan: result.meta.plan, validatedAt: new Date().toISOString() };
+      saveState(state, opts);
       pro = true;
       console.log('✅ Pro activated.');
     } else {
-      console.error(`❌ Activation failed: ${res.error}`);
+      console.error(`❌ Activation failed: ${result.error}`);
     }
   }
 
   const minInterval = pro ? PRO_MIN_INTERVAL : FREE_MIN_INTERVAL;
   const interval = Math.max(opts.interval || 300, minInterval);
-  const urlLimit = pro ? Infinity : FREE_URL_LIMIT;
-
-  let added = 0;
-  for (const url of urls) {
-    if (state.urls[url]) continue;
-    if (Object.keys(state.urls).length >= urlLimit) {
-      console.log(pro
-        ? `⚠️  Skipping duplicate/extra URL: ${url}`
-        : `⚠️  Free tier monitors ${FREE_URL_LIMIT} URLs. Run "deskuptime activate <key>" for Pro (unlimited). ${url} not added.`);
-      continue;
-    }
-    state.urls[url] = { addedAt: new Date().toISOString(), wasUp: null, lastHash: null };
-    added++;
-  }
+  const added = addMonitoredUrls(state, urls, pro);
   if (added === 0 && Object.keys(state.urls).length === 0) {
-    console.error('❌ No URLs to monitor.');
-    process.exit(1);
+    throw new Error('No URLs to monitor.');
   }
-  saveState(state);
+  mergePersistedState(state, opts);
+  saveState(state, opts);
 
   console.log(`\n👀 Monitoring ${Object.keys(state.urls).length} URL(s), every ${interval}s.${pro ? ' [Pro]' : ' [free tier]'}.${webhookUrl ? ' Webhook alerts on.' : ''} Ctrl+C to stop.\n`);
 
@@ -203,23 +321,20 @@ export async function startWatch(urls, opts = {}) {
 
   // eslint-disable-next-line no-constant-condition
   while (true) {
+    mergePersistedState(state, opts);
     if (Date.now() - lastLicenseCheck >= LICENSE_RECHECK_MS) {
       lastLicenseCheck = Date.now();
       pro = await recheckLicense();
     }
-    const events = await runPass(state);
-    if (events.length === 0) {
-      console.log(`[${fmtNow()}] ✓ all monitored sites OK`);
-    } else {
-      for (const ev of events) {
-        const icon = { down: '🚨', up: '✅', ssl_warning: '⚠️ ', content_changed: '🔄' }[ev.type] || '•';
-        console.log(`[${fmtNow()}] ${icon} ${ev.url} ${ev.message}`);
-        if (pro) {
-          await notify('DeskUptime', `${ev.url} ${ev.message}`);
-          if (webhookUrl) await sendWebhook(webhookUrl, ev);
-        }
+    const pass = await runPass(state, { ...opts, returnResults: true });
+    printPass(pass, { alertUnchangedDown: false });
+    if (pro) {
+      for (const event of pass.events) {
+        if (event.type === 'baseline') continue;
+        await notify('DeskUptime', `${event.url} ${event.message}`);
+        if (webhookUrl) await sendWebhook(webhookUrl, event);
       }
     }
-    await new Promise(r => setTimeout(r, interval * 1000));
+    await new Promise(resolve => setTimeout(resolve, interval * 1000));
   }
 }

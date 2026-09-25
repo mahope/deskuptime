@@ -6,14 +6,14 @@
  * Usage:
  *   deskuptime check <url> [url2 url3 ...]
  *   deskuptime headers <url>          Redirect chain + security headers
- *   deskuptime watch <url>            (stub for Pro)
+ *   deskuptime watch <url> [--interval 300] [--webhook URL]  Monitor URLs
  *   deskuptime --version
  *   deskuptime --help
  */
 
 import { checkUrls, summarize } from './engine.js';
-import { startWatch, loadState, saveState } from './watch.js';
-import { readFileSync, writeFileSync, existsSync } from 'fs';
+import { startWatch, runOnce, printStatus, printPass, loadState, saveState } from './watch.js';
+import { readFileSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { invalidHttpUrls } from './status.js';
@@ -35,6 +35,8 @@ USAGE:
   deskuptime check <urls...> [--json] [--timeout ms]  Check one or more URLs
   deskuptime headers <url>      Redirect chain, HTTPS enforcement + security headers
   deskuptime watch <url> [--interval 300] [--webhook URL]  Monitor in background (free: up to 3 URLs)
+  deskuptime watch <url> --once                      Run one monitoring pass and exit
+  deskuptime watch --status                         Show status without network checks
   deskuptime activate <key>     Unlock Pro with your license key
   deskuptime deactivate         Free this machine's Pro seat (3 machines per license)
   deskuptime status             Show license + monitored URLs
@@ -45,6 +47,8 @@ EXAMPLES:
   deskuptime check https://example.com
   deskuptime check https://site1.com https://site2.com
   deskuptime watch https://mystore.com --interval 300
+
+  watch --once exits 0 when all URLs are healthy, 2 when any is DOWN, and 1 for invalid usage.
 
 FEATURES:
   • Uptime check (HTTP status code + response time)
@@ -275,30 +279,122 @@ if (command === 'deactivate') {
   }
 }
 
+function watchOptionValue(raw, index, name) {
+  const value = raw[index + 1];
+  if (value === undefined || (name !== '--interval' && value.startsWith('-'))) {
+    console.error(`❌ Error: ${name} requires a value`);
+    process.exit(1);
+  }
+  return value;
+}
+
+function parseWatchArgs(raw) {
+  const options = {
+    urls: [],
+    interval: 300,
+    intervalProvided: false,
+    activateKey: null,
+    webhookUrl: null,
+    once: false,
+    status: false,
+  };
+
+  for (let index = 0; index < raw.length; index++) {
+    const value = raw[index];
+    if (!value.startsWith('-')) {
+      options.urls.push(value);
+      continue;
+    }
+
+    switch (value) {
+      case '--once':
+        options.once = true;
+        break;
+      case '--status':
+        options.status = true;
+        break;
+      case '--interval': {
+        if (options.intervalProvided) {
+          console.error('❌ Error: --interval may only be provided once');
+          process.exit(1);
+        }
+        const interval = Number(watchOptionValue(raw, index, '--interval'));
+        if (!Number.isInteger(interval) || interval < 1) {
+          console.error('❌ Error: --interval must be a positive integer');
+          process.exit(1);
+        }
+        options.interval = interval;
+        options.intervalProvided = true;
+        index++;
+        break;
+      }
+      case '--activate':
+        options.activateKey = watchOptionValue(raw, index, '--activate');
+        index++;
+        break;
+      case '--webhook':
+        options.webhookUrl = watchOptionValue(raw, index, '--webhook');
+        index++;
+        break;
+      default:
+        console.error(`❌ Error: Unknown option: ${value}`);
+        process.exit(1);
+    }
+  }
+
+  if (options.once && options.status) {
+    console.error('❌ Error: --once and --status cannot be combined');
+    process.exit(1);
+  }
+  if (options.status && (options.urls.length > 0 || options.activateKey || options.webhookUrl || options.intervalProvided)) {
+    console.error('❌ Error: --status does not accept URLs or monitoring options');
+    process.exit(1);
+  }
+  if (options.once && (options.activateKey || options.webhookUrl || options.intervalProvided)) {
+    console.error('❌ Error: --once cannot be combined with monitoring options');
+    process.exit(1);
+  }
+  return options;
+}
+
 // ── Watch (background monitoring) ──
 if (command === 'watch') {
-  const raw = args.slice(1);
-  const intervalArg = raw.indexOf('--interval');
-  let interval = intervalArg !== -1 ? parseInt(raw[intervalArg + 1], 10) : 300;
-  const activateArg = raw.indexOf('--activate');
-  const activateKey = activateArg !== -1 ? raw[activateArg + 1] : null;
-  const hookArg = raw.indexOf('--webhook');
-  const webhookUrl = hookArg !== -1 ? raw[hookArg + 1] : null;
-  const urls = raw.filter((a, i) =>
-    !a.startsWith('--') &&
-    !(intervalArg !== -1 && i === intervalArg + 1) &&
-    !(activateArg !== -1 && i === activateArg + 1) &&
-    !(hookArg !== -1 && i === hookArg + 1)
-  );
-
-  if (urls.length === 0 && !existsSync(join(process.env.HOME || '', '.deskuptime', 'state.json'))) {
-    console.error('❌ Error: at least one URL required');
-    console.error('Usage: deskuptime watch <url> [--interval 300]');
-    console.error('       deskuptime watch            (resume previously monitored URLs)');
+  const options = parseWatchArgs(args.slice(1));
+  const invalidUrls = invalidHttpUrls(options.urls);
+  if (invalidUrls.length > 0) {
+    for (const url of invalidUrls) {
+      console.error(`❌ Error: Invalid URL: ${url}`);
+    }
     process.exit(1);
   }
 
-  await startWatch(urls, { interval, activateKey, webhookUrl });
+  if (options.status) {
+    printStatus();
+    process.exitCode = 0;
+  } else if (options.once) {
+    const pass = await runOnce(options.urls, { interval: options.interval });
+    if (pass.empty) {
+      console.error('❌ Error: at least one URL required');
+      console.error('Usage: deskuptime watch <url> --once');
+      process.exitCode = 1;
+    } else {
+      printPass(pass);
+      process.exitCode = pass.healthy ? 0 : 2;
+    }
+  } else {
+    const state = loadState();
+    if (options.urls.length === 0 && Object.keys(state.urls).length === 0) {
+      console.error('❌ Error: at least one URL required');
+      console.error('Usage: deskuptime watch <url> [--interval 300]');
+      console.error('       deskuptime watch            (resume previously monitored URLs)');
+      process.exit(1);
+    }
+    await startWatch(options.urls, {
+      interval: options.interval,
+      activateKey: options.activateKey,
+      webhookUrl: options.webhookUrl,
+    });
+  }
 }
 
 // ── Status ──
@@ -324,7 +420,7 @@ if (command === 'status') {
 // check/headers/activate/deactivate fall through here after setting process.exitCode instead of calling
 // process.exit(): exiting while an undici fetch handle is still closing trips a libuv
 // assertion on Windows (src/win/async.c), so the event loop must drain naturally.
-if (!['check', 'headers', 'activate', 'deactivate'].includes(command)) {
+if (!['check', 'headers', 'activate', 'deactivate', 'watch'].includes(command)) {
   console.error(`Unknown command: "${command}"`);
   console.error('Run "deskuptime --help" for usage.');
   process.exit(1);
