@@ -2,8 +2,8 @@
 
 STATUS: I GANG
 Iteration: 5 — 2026-09-25
-Arbejdsgren: `ceo/watch-truth`
-Næste handling: P0-4 er markeret `I GANG` på `ceo/watch-truth`; implementér one-shot/read-only watch-semantik og SSL-begivenheder.
+Arbejdsgren: `main` via `ceo/watch-truth`
+Næste handling: P0-4 er færdig i `364ae0d` + `4e685df` og mergeret kl. 2026-09-25T14:26:12Z; næste iteration starter P0-5.
 
 ## Mission
 
@@ -25,7 +25,7 @@ Dette offentlige repo leverer den gratis, fuldt brugbare DeskUptime-CLI (MIT). D
 Den aktuelle gate-definition er registreret her:
 
 - Root: `npm ci --ignore-scripts` skal lykkes med den committede lockfil.
-- Root: `npm test` (32 tests, 32 passed på Node 24 efter P0-3).
+- Root: `npm test` (45 tests, 45 passed på Node 24 efter P0-4).
 - Root: `npm run audit` skal rapportere 0 sårbarheder.
 - Root: `npm run lint` findes ikke i `package.json`; rapporteres som manglende gate, ikke som grønt.
 - Root: `npm run build` findes ikke i `package.json`; der er ingen JS-build/typecheck-script.
@@ -43,8 +43,9 @@ Den aktuelle gate-definition er registreret her:
 
 - `src/checkers/ping.js` og `src/engine.js` skelnerer nu mellem `reachable` (HTTP-svar modtaget) og `healthy` (final status 200–399); timeouts og connection refusal har strukturerede `errorType`.
 - `src/cli.js` afviser nu alle URLs før første request, hvis blot én er ugyldig, og understøtter `--timeout` til deterministiske fejltests.
-- `src/watch.js:67-93,172-220` undertrykker første DOWN som “baseline”, gentager SSL-advarsler, og beregner Pro-begrænsninger kun ved start.
-- `src/watch.js:119-135` har webhook uden timeout/retry/outbox, og README/help lover email/Slack/push, som ikke findes i koden.
+- `watch --once` gør én gemt pass med exit 0/2/1, låser state mod samtidige cron-kørsler og afviser configfejl før request; `watch --status` er read-only.
+- `src/watch.js` gemmer DOWN-baseline, latcher SSL-advarsel gennem unavailable checks til recovery over 14 dage og bruger gemt content-hash ved næste pass.
+- `src/watch.js` har webhook uden timeout/retry/outbox, og README/help lover email/Slack/push, som ikke findes i koden.
 - Desktopparitet, IPC- og UI-fund er overført til `mahope/deskuptime-desktop`; de skal ikke genåbnes i dette offentlige CLI-repo.
 - `src/license.js:14,40-42` bruger `os.hostname()`, mens Rust bruger `COMPUTERNAME` på Windows. På berørte maskiner kan CLI og desktop derfor bruge to licenspladser. Gemte `license.instance`/`instance_id` migrerer ikke automatisk ved en generatorændring.
 - `tools/make_tarball.sh:14` udelader `src/checkers/headers.js`; `tools/install.sh:6` er fastsat til 0.1.4; npm/tarball/desktop-versioner er ikke synkroniserede.
@@ -114,7 +115,7 @@ Den aktuelle gate-definition er registreret her:
 
 **Status 2026-09-25:** Færdig i `5f8ff4c` på `ceo/status-semantics`. Lokale fixtures dækker 200, 204, redirect-til-200, 400, 404, 410, 500, redirect-til-500, timeout og connection refusal. CLI JSON/human/exit, watch-state og Action `down-count` bruger samme `healthy`-beslutning; CLI, engine og watch validerer hele batchen før request. Headers-fejl efter redirect bevarer origin-schema og er strukturerede. Node 24-gate: 32/32 tests, audit 0/0, syntax/diff grøn; fresh review fandt ingen P0/P1. Desktop Rust-pariteten følger i `mahope/deskuptime-desktop`.
 
-### P0-4 — I GANG — Gør watch-kommandoerne ægte
+### P0-4 — FÆRDIG — Gør watch-kommandoerne ægte
 
 **Begrundelse:** README's cron-opskrift `watch --once` og statusvisning `watch --status` er aktive, men regressionen kan efterlade cron-processer kørende.
 
@@ -126,6 +127,8 @@ Den aktuelle gate-definition er registreret her:
 4. Tre ens SSL-under-tærskel-pass giver én SSL-begivenhed; recovery og senere ny krydsning resetter korrekt.
 5. Content- og status-transitionsekvenser er dækket af isolerede temp-HOME-tests.
 6. `HOME`/`USERPROFILE` håndteres på Windows, og `--help` matcher README.
+
+**Status 2026-09-25:** Færdig i `364ae0d` + `4e685df` på `ceo/watch-truth`. `watch URL --once` laver én pass, persisterer atomisk state og bruger exit 0/2/1; samtidige one-shot-processer afvises med exit 1 uden state-skrivning. `watch --status` laver nul requests og ændrer ikke state. Temp-HOME-tests dækker baseline DOWN, UP/DOWN-sekvenser, gemt content-hash, SSL 14 → unavailable → 14 → 15 → 14, fri URL-kapacitet, tomme flagværdier og intervalgrænse. Node 24.21.0: `npm ci --ignore-scripts`, 45/45 tests, audit 0/0, JavaScript-syntax og diff-check er grønne. Fresh review fandt to P1, tre P2 og ét P3; P1 race/flagfund samt free-limit/intervalfund blev rettet. Korrupt state håndteres fortsat som tom state og følger P0-7's valideringskrav; kanalclaim-pariteten følger P0-5.
 
 ### P0-5 — TODO — Skriv Pro-spec og gør produktobne ærlige
 
@@ -254,7 +257,8 @@ Den aktuelle gate-definition er registreret her:
 
 - `2026-09-25`: Node-runtime `>=18` → `>=24`, den aktive LTS. Verificeret med Node 24.21.0; ingen application-kodeændring udover help-tekst var nødvendig.
 - `2026-09-25`: Nul runtime-/dev-dependencies bevaret; `package-lock.json` v3 tilføjet. `npm ci --ignore-scripts` og `npm run audit` er grønne med 0 sårbarheder.
-- `2026-09-25`: `npm test` er grøn med 32/32 efter P0-3; `npm run lint` og `npm run build` findes ikke.
+- `2026-09-25`: `npm test` er grøn med 45/45 efter P0-4; `npm run lint` og `npm run build` findes ikke.
+- `2026-09-25`: P0-4 tilføjede 13 isolerede watch/state-tests. Node 24.21.0, `npm ci --ignore-scripts`, audit 0/0, JavaScript-syntax og diff-check er grønne; fresh review-fund blev triageret og rettet eller eksplicit flyttet til P0-5/P0-7.
 - `2026-09-25`: P0-3 tilføjede seks lokale status-/Action-/headers-/preflight-tests. Node 24.21.0, `npm ci --ignore-scripts`, audit 0/0, JavaScript-syntax og diff-check er grønne; fresh review fandt ingen P0/P1.
 - `2026-09-25`: Actions-størrelserne 4 → 7 ligger i rene Dependabot PR #2 og #3 og udskydes til separate P0-10/P0-11-commits.
 - `2026-09-25`: Fjern-CI `36105085970` på `ee8e8ab` passerede alle steps. Annotations advarer om eksisterende Actions v4 Node 20-runtime og fremtidig `ubuntu-latest`-migration; ingen ny blocker.
@@ -288,3 +292,4 @@ Den aktuelle gate-definition er registreret her:
 - **Iteration 2 (P0-1, historisk):** Desktopbridge, lokal CSS/CSP, IPC-DTO, URL-validering, sikker DOM-rendering og redigeret licens-state blev implementeret og reviewet i commits `c63a52e` og `f0d4fa7`. Dengang var `npm test` 32/32, `cargo check --locked`, `cargo test --locked` 10/10 og `cargo tauri build --debug` på macOS grønne. Desktopkilden blev siden flyttet til det private repo; ubekræftet Windows-/interaktiv smoke overføres dertil.
 - **Iteration 3 (P0-2):** Commit `6b81803` kræver Node 24 på tværs af CLI, workflows, Action og dokumentation, tilføjer lockfil/audit og afslutter den offentlige desktop-rekonciliering. Merge til `main` og push af begge grene skete 2026-09-25T06:54:55Z. Node 24.21.0, 26/26 tests, audit 0/0, YAML/shell/syntax/diff og to reviewpass er grønne; næste opgave er P0-3.
 - **Iteration 4 (P0-3):** Commit `5f8ff4c` gør 4xx/5xx, redirects til fejl, timeout og connection refusal konsekvent DOWN i CLI, JSON, watch-status og GitHub Action, mens `reachable` fortsat betyder modtaget HTTP-svar. Batch-validering, strukturerede headers-fejl og seks lokale tests er tilføjet. Node 24.21.0, 32/32 tests, audit 0/0, syntax/diff og fresh review uden P0/P1 er grønne. Fast-forward-merge til `main` skete 2026-09-25T09:24:49Z; næste opgave er P0-4.
+- **Iteration 5 (P0-4):** Commits `364ae0d` og `4e685df` gør `watch --once` single-pass, persisterende og exit-korrekt, gør `watch --status` read-only, latcher DOWN/SSL/content-begivenheder korrekt og forhindrer samtidige state-tab med et kortlevende process-lock. Temp-HOME- og CLI-tests dækker de seks acceptkriterier samt reviewfund. Node 24.21.0, 45/45 tests, audit 0/0, syntax/diff er grønne. Fast-forward-merge til `main` skete 2026-09-25T14:26:12Z; næste opgave er P0-5.
