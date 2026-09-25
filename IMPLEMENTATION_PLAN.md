@@ -2,8 +2,8 @@
 
 STATUS: I GANG
 Iteration: 10 — 2026-09-25
-Arbejdsgren: `main` via `ceo/actions-setup-node-v7`
-Næste handling: P0-11 er færdig og mergeret 2026-09-25 (`6761f26`, CI-run `36174538867` grøn). Næste iteration tager P0-9 (release- og distributionsvejen) — den kræver beslutninger om version og checksum, så læs dens acceptkriterier først.
+Arbejdsgrene: `ceo/actions-setup-node-v7` (P0-11) og `ceo/tarball-completeness` (P0-9a)
+Næste handling: P0-11 (`6761f26`) og P0-9a (`4defd8d`) er mergeret 2026-09-25. Næste iteration tager **P0-9b**: installér skal finde den nyeste publicerede `v*-cli`-release og verificere checksum før udpakning. Versionsdriften er målt og dokumenteret nedenfor — læs P0-9b's fund, før du ændrer install.sh.
 
 ## Mission
 
@@ -25,7 +25,7 @@ Dette offentlige repo leverer den gratis, fuldt brugbare DeskUptime-CLI (MIT). D
 Den aktuelle gate-definition er registreret her:
 
 - Root: `npm ci --ignore-scripts` skal lykkes med den committede lockfil.
-- Root: `npm test` (82 tests, 82 passed på Node 26 efter P0-7).
+- Root: `npm test` (96 tests, 96 passed på Node 26 efter P0-9a: 87 + 9 tarballtests).
 - Root: `npm run audit` skal rapportere 0 sårbarheder.
 - Root: `npm run lint` findes ikke i `package.json`; rapporteres som manglende gate, ikke som grønt.
 - Root: `npm run build` findes ikke i `package.json`; der er ingen JS-build/typecheck-script.
@@ -244,9 +244,11 @@ Den aktuelle gate-definition er registreret her:
 4. Node/Rust conformance fixtures giver identisk hash- og ændringsbeslutning.
 5. URL-fejl/timeouts kan ikke låse monitorloopen.
 
-### P0-9 — TODO — Ret release- og distributionsvejen
+### P0-9 — I GANG (del A færdig) — Ret release- og distributionsvejen
 
 **Begrundelse:** Nuværende curl-tarball mangler `headers`, installer peger på 0.1.4, og versionerne `0.2.8`/`0.2.7`/`0.1.4`/`v0.1` er modstridende.
+
+**Målt fund 2026-09-25 (del A):** `bash tools/make_tarball.sh` **fejlede i sin egen self-check** — `SELF-CHECK FAILED: --version output wrong`, fordi den håndlavne filliste manglede `src/status.js` (statisk importeret af `engine.js`, `watch.js` og `cli.js`) og `src/checkers/headers.js` (dynamisk importeret af `headers`-kommandoen). Konsekvenser: (1) `release-cli.yml`'s build-step ville være rødt, så der **kan ikke skæres en ny `v*-cli`-release**; (2) en allerede installeret kopi døde med `ERR_MODULE_NOT_FOUND` på *første* kommando; (3) curl- og brew-stien var dermed døde. Versionsdrift målt: `package.json` 0.2.8, nyeste publicerede `v*-cli` er **v0.2.5-cli** (udgivet 2026-08-26), `tools/install.sh` peger på **0.1.4**, seneste npm-release er v0.2.8 (2026-09-07). `v0.1.4-cli` findes, så installeren 404'er ikke — den installerer bare en version, der ligger tre minorer under npm-versionen.
 
 **Acceptkriterier:**
 
@@ -256,6 +258,17 @@ Den aktuelle gate-definition er registreret her:
 4. Checksum publiceres og verificeres før install; Node-versionstjek matcher `engines`.
 5. CI/release-triggerne har én owner pr. tagtype; ingen release/publish udføres af agenten.
 6. npm-pakken, curl-stien og Homebrew-formlen dokumenteres med samme version og Stripe-link.
+
+**Del A — FÆRDIG 2026-09-25 (`4defd8d`, `ceo/tarball-completeness`):**
+
+- `tools/make_tarball.sh` kopierer nu hele `src/`-træet i stedet for en håndlavet filliste, så dynamiske og statiske imports ikke kan komme uden for pakken. De tre defensive `mv`-linjer, der var no-ops, er væk.
+- Self-checken kører nu også `headers --json` og `watch --once` (de importerer checkere dovent) og skriver `deskuptime-<ver>.tar.gz.sha256` ved siden af tarballen.
+- `test/tarball.test.js` (9 tests) kører det rigtige script mod en **lokal HTTP-server** — ingen `example.com`-afhængighed — og kører derefter den udpakkede kopi: `--version`, `check --json`, `headers --json`, `watch --once` + read-only `watch --status`, `--help` med Pro-vejledning, src-træ-paritet og checksum-sidecar. Springes på Windows (kræver sh/tar/gzip); `license-windows`-jobbet kører kun licenstestene.
+- Scriptet kan skrive til en temp-mappe (`DESKUPTIME_TARBALL_DIR`) og self-checke mod en given URL (`DESKUPTIME_SELFCHECK_URL`), så tests ikke smider artefakter i repoet.
+- `.gitignore` ignorerer nu `deskuptime-*.tar.gz` og `.sha256`, så byggeartefakter ikke kan committes ved et uheld.
+- **Bevis:** før rettelsen fejlede scriptets egen self-check med `ERR_MODULE_NOT_FOUND … /src/status.js`; efter rettelsen er `npm test` grøn med **96/96** (87 + 9 nye), `npm run audit` 0/0, `node --check` og `git diff --check` grønne på Node 26.7.0.
+
+**Del B — TODO (næste iteration):** se P0-9b.
 
 ### P0-10 — FÆRDIG — Opgrader actions/checkout 4 → 7 i en commit
 
@@ -296,6 +309,22 @@ Den aktuelle gate-definition er registreret her:
 
 **Status 2026-09-25:** Færdig i `6761f26` på `ceo/actions-setup-node-v7`, fast-forward-merget til `main` og pushet. Fem pin-bumps (`ci.yml` ×2, `publish.yml`, `release-cli.yml`, `self-monitor.yml`) — identiske med Dependabot PR #2's filer — plus README's forbruger-snippet, som PR #2 ikke rører, så kopieringsstien ikke længere peger på den deprecated runtime. **Brydende ændringer siden v4, gennemgået:** v5 slår automatisk cache til, når `package.json` har et gyldigt `packageManager`-felt — dette repo **har intet sådant felt** (verificeret), så ingen caching-adfærd ændres; v6 begrænser automatisk caching til npm — irrelevant uden `packageManager`; v7 fjerner den dummy-`NODE_AUTH_TOKEN`-eksport. `publish.yml` sætter selv `NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}` i sit publish-step (publish.yml:52-55), så fjernelsen er tryg og kun fjerner en tom streng, der ellers kun kan forvirke `npm publish`. Der bruges ingen `cache:`-input nogen steder, og ingen `uses:` i `action.yml` rammes. Node 26.7.0: `npm ci --ignore-scripts`, **87/87** tests, `npm run audit` 0/0, YAML-parse af alle fire workflows, ingen tabs, `git diff --check` grønne. CI-run `36174538867` på `6761f26` grøn i begge jobs (`test` på ubuntu, `license-windows` på windows-latest) med `setup-node@v7`. Dependabot PR #2 er nu overflødig; agenten foretager ingen writes mod PR'er.
 
+### P0-9b — TODO — Én version i installér og verificeret checksum
+
+**Begrundelse:** Del A gjorde tarballen komplet, men to huller lukkes ikke af sig selv, og begge rammer den kurve, der installerer med `curl | bash`. Målt 2026-09-25: `tools/install.sh:6` har `VERSION="0.1.4"`, mens `package.json` er 0.2.8 og den nyeste publicerede `v*-cli` er v0.2.5-cli. Installéreren kan altså ikke få den version, README's curl-sti ligner på, og ingen published checksum verificeres før udpakning (AC4 i P0-9).
+
+**Beslutning at træffe (eller kør den åbenlyst):** hard-pinned version med en driftstest mod `package.json` (simpelt, men drifter igen ved næste release) **eller** opløsning af den nyeste publicerede `v*-cli`-release via GitHub-releases-API med hardcoded fallback (selvopdaterende, men afhænger af et read-only API-kald; der må ikke bruges tokens). Uanset valg skal `release-cli.yml` uploade `.sha256` sammen med tarballen, ellers kan installéreren ikke verificere noget.
+
+**Acceptkriterier:**
+
+1. `install.sh` installerer en version, der faktisk findes som `v*-cli`-release, og siger tydeligt hvilken version den fik.
+2. Checksum verificeres mod den publicerede `.sha256` **før** udpakning; en afvigende sum giver en deterministisk fejl og intet installeres.
+3. Node-versionstjekket i installéreren matcher `engines` (`>=24`) — i dag to hårdkodede beskeder, der skal stamme fra én kilde.
+4. `release-cli.yml` uploader `deskuptime-<ver>.tar.gz` **og** `.sha256` i samme step, så AC2 er opfyldt uden manuel handling.
+5. En deterministisk test dækker installationsstien (versionsopløsning og checksum-verifikation) uden netværksafhængighed; den må fejle mod en manipulér sum.
+6. `brew`-formlen, npm-pakken og README's curl-sti peger på samme version, og ingen release/publish udføres af agenten.
+7. Bemærk til P2: det committede `deskuptime-0.1.3.tar.gz` i repo-roden er et gammelt byggeartefakt (10 KB gammel kildekode i det offentlige repo). Bør fjernes — ikke gjort her, da det er et unlink uden for denne opgaves omfang.
+
 ### P1-1 — TODO — Hæd dokumentation, konvertering og åben kerne
 
 **Begrundelse:** Kunder skal kunne forstå gratis/Pro, købe med ét link og bruge den samme truthful beskrivelse på README, CLI-help, npm, desktop og site.
@@ -335,6 +364,8 @@ Den aktuelle gate-definition er registreret her:
 ## Dependency- og opgraderingslog
 
 ### Aktuel offentlig CLI
+
+- `2026-09-25`: P0-9a (del A af P0-9) repaired the **brudde release-build**: `make_tarball.sh` fejlede sin egen self-check, fordi den håndlavne filliste manglede `src/status.js` and `src/checkers/headers.js`, så ingen ny `v*-cli`-tag kunne skæres, og curl-/brew-install var døde på første kommando. Hele `src/`-træet pakkes nu, self-checken kører også `headers --json` og `watch --once`, og der skrives en `.sha256`-sidecar. Ny `test/tarball.test.js` (9 tests) bygger tarballen mod en lokal HTTP-server og kører den udpakkede CLI. `npm test` er grøn med **96/96**; `npm run audit` 0/0; `node --check` og `git diff --check` grønne på Node 26.7.0. Ingen afhængighed ændret; `.gitignore` udelukker nu tarball-artefakter.
 
 - `2026-09-25`: P0-11 opgraderede `actions/setup-node` v4 → v7 i alle fire workflows (fem pin-bumps, identiske med Dependabot PR #2) og i README's forbruger-snippet. Ren pin-bump, ingen kodeændring. `npm test` 87/87, audit 0/0, YAML grøn; CI-run `36174538867` grøn i begge jobs. Dependabot PR #2 er nu overflødig og kan lukkes af Mads — agenten foretager ingen writes mod GitHub-PR'er. Sammen med P0-10 ligger alle `actions/*`-pins nu på v7.
 - `2026-09-25`: P0-13 rettede **falsk DOWN** på routes, der ikke svarer på `HEAD` (Cloudflare Workers m.fl.). 5 nye tests; `npm test` er grøn med 87/87; `npm run audit` 0 sårbarheder. Node 26.7.0, `npm ci --ignore-scripts`, `node --check` og `git diff --check` grønne. Verificeret mod den rigtige worker: 404 → 200.
@@ -387,4 +418,5 @@ Den aktuelle gate-definition er registreret her:
 - **Iteration 7 (P0-12 forsøgt + P0-6):** P0-12 blev undersøgt og fundet uudførlig her — sitens kilder er uden for repoet og uden for agentens `external_directory`-adgang, så opgaven er markeret `BLOCKED` med evidens, de fem konkrete site-ændringer og en verificeret måling af, at `/da/`-siden ingen email-claim har. Herefter blev P0-6 færdig i `e344531`: `getDeviceId` bruger ikke-tom `COMPUTERNAME` på native Windows, så én maskine ikke længre bruger to af tre Pro-pladser. Scheme'et låses i `test/fixtures/device-id.golden.json` (12 tilfælde, version 1) til deling med Rust-siden, og et nyt CI-job kører licenstestene på `windows-latest` med Node 24. Mutationstest bekræfter testenes dækning. Node 26.7.0, `npm ci --ignore-scripts`, 59/59 tests, audit 0/0, `node --check`, YAML/JSON og diff-check grønne. Fast-forward-merge til `main` og push af begge grene 2026-09-25. Næste iteration starter P0-7.
 - **Iteration 8 (P0-7):** Licenslifecycle hærdet på `ceo/license-lifecycle`. Ethvert HTTP 200 uden gyldigt verdikt (`malformed`) er nu transient i stedet for permanent, så en Cloudflare-side ikke længere kan låse en betalende kunde ude; `408/425/429` er transient; hvert kald har 10 s hard timeout. `isPro()` respekterer nu `status: 'invalid'`, så en tilbagekaldt nøgle mister ubegrænsede URL'er og 30 s interval med det samme. State skrives `0600` i `0700`-mappe, licensrecordet valideres ved indlæsning, og `redactSecrets()` filtrerer nøgler og device-id'er ud af alle fejlstrenge. `deskuptime status` viser `active`/`cached/offline`/`invalid`/`free` med forklaring i stedet for "nøgle fundet". `docs/license-lifecycle.md` dokumenterer reglerne og stiller de Rust-krav, der ikke kan løses her. 23 nye tests; Node 26.7.0, `npm ci --ignore-scripts`, 82/82 tests, audit 0/0, `node --check` og `git diff --check` grønne; CLI'en kørt manuelt i alle fire tilstande; live-`validate` mod licensserveren bekræfter 404-klassificeringen. Merge til `main` og push af begge grene 2026-09-25. Næste iteration: P0-10, derefter P0-11.
 - **Iteration 9 (P0-10 + P0-13):** To opgaver i samme iteration, begge små og begge committet. P0-10: `actions/checkout` 4 → 7 i alle fire workflows i `b27ba35` (ren pin-bump, ingen inputs bruges, eneste brydende v7-adfærd er relateret til triggere repoet ikke bruger); CI grøn. Derefter fandt en læsning af den røde selvmonitorering, at `eucomply-scan/stats` meldte DOWN med HTTP 404, mens curl og node-fetch svarede 200 — årsagen var, at reachability-checket kun sendte HEAD, og Workers matcher ikke HEAD-routes. P0-13 (`1d19697`) tilføjer én GET-retry ved 404/405/501 med GET som dominerende svar, delt `--timeout`-budget, annulleret GET-body og fem deterministiske tests; 87/87 tests, audit 0/0, Node 26.7.0, `node --check` og `git diff --check` grønne; den rigtige worker giver nu 200 UP med exit 0. Næste iteration: P0-11 (`actions/setup-node` 4 → 7), derefter P0-9.
+- **Iteration 10 (P0-11 + P0-9a):** To opgaver, begge committet og mergeret. P0-11 (`6761f26`): `actions/setup-node` 4 → 7 i fire workflows plus README-snippet, ren pin-bump, CI-run `36174538867` grøn. Derefter faldt målingen af P0-9's releasevej, og den var værre end forventet: **bygget af tarballen var brudt** — `make_tarball.sh` fejlede sin egen self-check, fordi fillisten manglede `src/status.js` og `src/checkers/headers.js`, så ingen ny `v*-cli`-release kunne skæres, og installerede kopier døde med `ERR_MODULE_NOT_FOUND` på første kommando. P0-9a (`4defd8d`) pakker hele `src/`-træet, udvider self-checken til de dovent importerende kommandoer, skriver en `.sha256`-sidecar og tilføjer 9 tests, der bygger tarballen mod en lokal server og kører den udpakkede CLI. Versionsdrift målt samtidig: package 0.2.8 / nyeste `v*-cli` v0.2.5 / install.sh 0.1.4 — udskudt til P0-9b med en dokumenteret beslutningsmulighed. `npm ci --ignore-scripts`, 96/96 tests, audit 0/0, `node --check` og `git diff --check` grønne. Begge grene fast-forward-merget til `main` og pushet 2026-09-25. Næste iteration: P0-9b.
 - **Iteration 10 (P0-11):** `actions/setup-node` 4 → 7 i alle fire workflows i `6761f26` (fem pin-bumps) plus README's forbruger-snippet, som Dependabot PR #2 ikke rører. Gennemgået før merge: v5/v6's automatiske caching kræver et `packageManager`-felt, som repoet ikke har; v7 fjerner dummy-`NODE_AUTH_TOKEN`, og `publish.yml` sætter selv token fra secrets, så publish er upåvirket. `npm ci --ignore-scripts`, 87/87 tests, `npm run audit` 0/0, YAML-parse, ingen tabs og `git diff --check` grønne; CI-run `36174538867` grøn i begge jobs. Fast-forward-merge til `main` og push af begge grene 2026-09-25. Næste iteration: P0-9.
