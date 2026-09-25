@@ -3,7 +3,7 @@
 STATUS: I GANG
 Iteration: 4 — 2026-09-25
 Arbejdsgren: `ceo/status-semantics`
-Næste handling: P0-3 er I GANG; gør 4xx/5xx, timeouts og connection refusal ensartede i CLI, GitHub Action og JSON.
+Næste handling: P0-3 er færdig i `5f8ff4c`; efter merge/push skal næste iteration starte P0-4.
 
 ## Mission
 
@@ -25,7 +25,7 @@ Dette offentlige repo leverer den gratis, fuldt brugbare DeskUptime-CLI (MIT). D
 Den aktuelle gate-definition er registreret her:
 
 - Root: `npm ci --ignore-scripts` skal lykkes med den committede lockfil.
-- Root: `npm test` (26 tests, 26 passed ved aktuel baseline).
+- Root: `npm test` (32 tests, 32 passed på Node 24 efter P0-3).
 - Root: `npm run audit` skal rapportere 0 sårbarheder.
 - Root: `npm run lint` findes ikke i `package.json`; rapporteres som manglende gate, ikke som grønt.
 - Root: `npm run build` findes ikke i `package.json`; der er ingen JS-build/typecheck-script.
@@ -98,7 +98,7 @@ Den aktuelle gate-definition er registreret her:
 
 **Status 2026-09-25:** Færdig på `ceo/runtime-audit`. Node 24.21.0, `npm ci --ignore-scripts`, 26/26 tests og `npm run audit` med 0 sårbarheder er grønne; YAML, shell, JavaScript-syntax og diff-check er grønne. Fresh review fandt ingen P0/P1; sidste P2-planfund blev rettet.
 
-### P0-3 — I GANG — Gør uptime-status og fejlhåndtering sand
+### P0-3 — FÆRDIG — Gør uptime-status og fejlhåndtering sand
 
 **Begrundelse:** En 404/500 må ikke rapporteres som UP; det er den mest konkrete fejl i købs- og CI-flowet.
 
@@ -111,6 +111,8 @@ Den aktuelle gate-definition er registreret her:
 3. CLI JSON, human output, exit codes og Action `down-count` er enige for hver fixture. Desktop UI/notification-pariteten følger i `mahope/deskuptime-desktop`, efter at desktopkilden blev flyttet ud af dette offentlige repo.
 4. Én ugyldig URL i en fler-URL-kørsel fejler konfigurationskørslen i stedet for at blive sprunget over.
 5. `headers`-fejl returnerer et struktureret resultat og kan ikke crashinge output/loop.
+
+**Status 2026-09-25:** Færdig i `5f8ff4c` på `ceo/status-semantics`. Lokale fixtures dækker 200, 204, redirect-til-200, 400, 404, 410, 500, redirect-til-500, timeout og connection refusal. CLI JSON/human/exit, watch-state og Action `down-count` bruger samme `healthy`-beslutning; CLI, engine og watch validerer hele batchen før request. Headers-fejl efter redirect bevarer origin-schema og er strukturerede. Node 24-gate: 32/32 tests, audit 0/0, syntax/diff grøn; fresh review fandt ingen P0/P1. Desktop Rust-pariteten følger i `mahope/deskuptime-desktop`.
 
 ### P0-4 — TODO — Gør watch-kommandoerne ægte
 
@@ -252,8 +254,8 @@ Den aktuelle gate-definition er registreret her:
 
 - `2026-09-25`: Node-runtime `>=18` → `>=24`, den aktive LTS. Verificeret med Node 24.21.0; ingen application-kodeændring udover help-tekst var nødvendig.
 - `2026-09-25`: Nul runtime-/dev-dependencies bevaret; `package-lock.json` v3 tilføjet. `npm ci --ignore-scripts` og `npm run audit` er grønne med 0 sårbarheder.
-- `2026-09-25`: `npm test` var grøn med 30/30 før P0-3; `npm run lint` og `npm run build` findes ikke.
-- `2026-09-25`: P0-3 tilføjede seks lokale status-/Action-/headers-/preflight-tests og udvidede den samlede CLI-gate; den endelige test-/audit-status noteres ved merge.
+- `2026-09-25`: `npm test` er grøn med 32/32 efter P0-3; `npm run lint` og `npm run build` findes ikke.
+- `2026-09-25`: P0-3 tilføjede seks lokale status-/Action-/headers-/preflight-tests. Node 24.21.0, `npm ci --ignore-scripts`, audit 0/0, JavaScript-syntax og diff-check er grønne; fresh review fandt ingen P0/P1.
 - `2026-09-25`: Actions-størrelserne 4 → 7 ligger i rene Dependabot PR #2 og #3 og udskydes til separate P0-10/P0-11-commits.
 - `2026-09-25`: Fjern-CI `36105085970` på `ee8e8ab` passerede alle steps. Annotations advarer om eksisterende Actions v4 Node 20-runtime og fremtidig `ubuntu-latest`-migration; ingen ny blocker.
 
@@ -285,3 +287,4 @@ Den aktuelle gate-definition er registreret her:
 - **Iteration 1 (research):** Planen manglede ved start. Repoet, missionen, Stripe-/licenskontrakten, CLI/desktoparkitekturen, tests, releasefiler og dependency-status blev undersøgt. Ingen kode blev ændret ud over denne plan. Gate-baseline og prioriteret kø er registreret ovenfor.
 - **Iteration 2 (P0-1, historisk):** Desktopbridge, lokal CSS/CSP, IPC-DTO, URL-validering, sikker DOM-rendering og redigeret licens-state blev implementeret og reviewet i commits `c63a52e` og `f0d4fa7`. Dengang var `npm test` 32/32, `cargo check --locked`, `cargo test --locked` 10/10 og `cargo tauri build --debug` på macOS grønne. Desktopkilden blev siden flyttet til det private repo; ubekræftet Windows-/interaktiv smoke overføres dertil.
 - **Iteration 3 (P0-2):** Commit `6b81803` kræver Node 24 på tværs af CLI, workflows, Action og dokumentation, tilføjer lockfil/audit og afslutter den offentlige desktop-rekonciliering. Merge til `main` og push af begge grene skete 2026-09-25T06:54:55Z. Node 24.21.0, 26/26 tests, audit 0/0, YAML/shell/syntax/diff og to reviewpass er grønne; næste opgave er P0-3.
+- **Iteration 4 (P0-3):** Commit `5f8ff4c` gør 4xx/5xx, redirects til fejl, timeout og connection refusal konsekvent DOWN i CLI, JSON, watch-status og GitHub Action, mens `reachable` fortsat betyder modtaget HTTP-svar. Batch-validering, strukturerede headers-fejl og seks lokale tests er tilføjet. Node 24.21.0, 32/32 tests, audit 0/0, syntax/diff og fresh review uden P0/P1 er grønne; næste opgave er P0-4.
