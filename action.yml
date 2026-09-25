@@ -54,6 +54,8 @@ runs:
           exit 1
         fi
 
+        node -e 'if (Number(process.versions.node.split(".")[0]) < 24) { console.error("::error::Node.js 24+ is required"); process.exit(1); }'
+
         # Normalize input to a space-separated URL list
         URLS=$(echo "$DU_URLS" | tr '\n' ' ')
         echo "Checking URLs: $URLS"

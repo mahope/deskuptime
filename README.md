@@ -115,6 +115,9 @@ jobs:
   check:
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
       - uses: mahope/deskuptime@v0
         with:
           urls: |
@@ -139,6 +142,8 @@ Outputs: `json` (full results array) and `down-count`.
 Exit codes: `0` all up · `2` one or more down · `3` SSL expiring/invalid.
 
 ## Install
+
+Requires Node.js 24 or newer.
 
 **Homebrew (macOS/Linux):**
 

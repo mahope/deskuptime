@@ -8,7 +8,11 @@ PREFIX="${HOME}/.local"
 BIN_DIR="$PREFIX/bin"
 
 command -v node >/dev/null 2>&1 || {
-  echo "error: Node.js 16+ is required (https://nodejs.org)" >&2
+  echo "error: Node.js 24+ is required (https://nodejs.org)" >&2
+  exit 1
+}
+node -e 'if (Number(process.versions.node.split(".")[0]) < 24) process.exit(1)' || {
+  echo "error: Node.js 24+ is required (https://nodejs.org)" >&2
   exit 1
 }
 

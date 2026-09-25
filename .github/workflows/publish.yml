@@ -25,15 +25,17 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24
           registry-url: https://registry.npmjs.org
 
       - name: Install
-        run: |
-          if [ -f package-lock.json ]; then npm ci; else npm install; fi
+        run: npm ci --ignore-scripts
 
       - name: Test
         run: npm test --if-present
+
+      - name: Audit
+        run: npm run audit
 
       - name: Refuse to publish if the tag does not match package.json
         run: |

@@ -1,6 +1,6 @@
 /**
  * HTTP/HTTPS reachability checker
- * Uses native fetch (Node 18+) — no external dependencies.
+ * Uses native fetch (Node 24+) — no external dependencies.
  */
 
 export async function checkReachability(url) {

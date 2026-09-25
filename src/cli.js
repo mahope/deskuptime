@@ -50,7 +50,7 @@ FEATURES:
   • SSL certificate validation + expiry countdown
   • Content change detection (SHA-256 hash)
   • JSON output with --json for scripting/CI
-  • Zero dependencies — Node 18+, any OS
+  • Zero dependencies — Node 24+, any OS
 
 PRO FEATURES (license key):
   • Webhook alerts: deskuptime watch <url> --webhook https://hooks.example.com/xyz

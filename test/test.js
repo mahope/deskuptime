@@ -38,6 +38,8 @@ test('cli: --help lists commands and does not leak template bugs', async () => {
   const { stdout } = await run(process.execPath, [CLI, '--help']);
   assert.match(stdout, /check <urls/);
   assert.match(stdout, /watch <url>/);
+  assert.match(stdout, /Node 24\+/);
+  assert.doesNotMatch(stdout, /Node 18\+/);
   // regression: literal $(...) must never appear in rendered help
   assert.ok(!stdout.includes('$('));
 });
