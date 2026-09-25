@@ -1,9 +1,9 @@
 # IMPLEMENTATION_PLAN.md
 
 STATUS: I GANG
-Iteration: 14 — 2026-09-25
-Arbejdsgrene: `ceo/deterministic-tests` (P2-1 del A)
-Næste handling: P2-1 del A er færdig inkl. den hermetiske CI-smoke (lokal fixture, og jq skal kunne fejle på en DOWN-Assertion) — ingen live-netværk i `test/test.js` (HTTP + genereret TLS-fixture), vakuum-assertionen i watch-testen er død, Action'en verificerer sit payload før den tæller, og en **reel P0-fejl er fundet undervejs**: `ssl.js` sendte SNI som IP-literal, hvilket Node 24+ afviser, så intet HTTPS-site overvåget på IP-adresse fik SSL-dage. Næste iteration tager **P1-2 del A** (spec i `docs/` for bureau-rapport/status-side) eller P2-1 del B (body-size-, webhook- og licens-retrytests). P1-1 AC3 (sitekilder) er `BLOCKED` på ❓ 8, AC5 afventer Mads' svar på ❓ 1–3.
+Iteration: 15 — 2026-09-26
+Arbejdsgrene: `ceo/agency-report` (P1-2 del A + del B)
+Næste handling: **P1-2 del A + del B er færdig**: bureau-rapporten `deskuptime report` (Markdown + JSON, Pro, read-only, ingen konto) med spec i `docs/agency-report.md`, uptime-tællere skrevet af `recordPass()` i den rigtige `runPass`, matrix-rækken `status-page` flippet til `implemented: true` (README/help/npm regenereret), og 12 nye tests. Næste iteration tager **P1-2 del C** (30-dages historik per URL + planlagt rapport, kræver ❓ 3) eller **P2-1 del B** (body-size- og licens-retrytests). P1-1 AC3 (sitekilder) er `BLOCKED` på ❓ 8, AC5 afventer Mads' svar på ❓ 1–3.
 
 ## Mission
 
@@ -369,17 +369,31 @@ Den aktuelle gate-definition er registreret her:
 - **Ét købsflow pr. side er nu en test:** alle `buy.stripe.com`-links i README, `docs/pro-alerts.md`, `src/features.js`, `src/watch.js` og `package.json` skal være kontraktens link, og de overflader, der skal kunne købe (README, spec, `--help`), skal have mindst ét. Målt før: 12 forekomster af kontraktens link, 0 af andre — intet at rette, kun nu låst.
 - **Test:** +5 (`test/license.test.js` 4 nye, `test/matrix.test.js` 2 nye, `test/status.test.js` 1 udvidet) → **118/118**. Mutationstest: at skrive `UNVERIFIED` tilbage som `INVALID` i `refreshLicense` giver 1 fejl i licenstesten (og CLI-testen). `docs/license-lifecycle.md` §2 er skrevet om til fem tilstande med begrundelsen og Rust-kravet.
 
-### P1-2 — TODO — Byg dokumenteret Pro-værdi for bureauer
+### P1-2 — I GANG (del A + del B færdig) — Byg dokumenteret Pro-værdi for bureauer
 
 **Begrundelse:** Efter korrekt grundfunktionalitet er batch/status-side, flere lokationer, kunderapport og prioriteret support de næste tydelige betalingsmotiver.
 
 **Acceptkriterier:**
 
-1. Spec i `docs/` beskriver målgruppe, datamodel, privacy, report-format, eksport og pris/entitlement.
-2. En minimal rapport/status-side kan genereres fra eksisterende checks og deles uden konto.
-3. Batch/automatisering har idempotente jobs, tydelig kørselstatus og testbare grænser.
-4. Rapporter, webhook-events og kundelinks har dokumenterede retention-/redaction-regler.
-5. Ingen betalt fil eller privat kundedata committes til dette offentlige repo.
+1. Spec i `docs/` beskriver målgruppe, datamodel, privacy, report-format, eksport og pris/entitlement. — **Del A færdig** (`docs/agency-report.md`)
+2. En minimal rapport/status-side kan genereres fra eksisterende checks og deles uden konto. — **Del B færdig** (`deskuptime report`)
+3. Batch/automatisering har idempotente jobs, tydelig kørselstatus og testbare grænser. — **TODO (del C, kræver ❓ 3)**
+4. Rapporter, webhook-events og kundelinks har dokumenterede retention-/redaction-regler. — **Del A færdig for rapporten** (spec §3: ingen licensnøgle, intet indhold, ingen upload); webhook-reglerne lå allerede i `docs/pro-alerts.md` §4
+5. Ingen betalt fil eller privat kundedata committes til dette offentlige repo. — **Del A + B færdig** (kun kode + spec; rapporten genereres lokalt og committes aldrig)
+
+**Del A + del B — FÆRDIG 2026-09-26 (`ceo/agency-report`):**
+
+- **Hvorfor denne opgave først:** den gratis CLI kunne ikke levere noget, et bureau kan sende til en kunde. Uptime-tal lå i `state.json` uden nogen måde at vise dem, og matrixen lovede "delelig status-side / kunderapport" som *Planlagt* — altså et betalingsmotiv der ikke fandtes. Konverteringsprioriteten (ét købsflow pr. side) og Pro-værdien pegede i samme retning.
+- **`src/report.js` (ny):** `buildReport(state)` læser **kun** `state.urls` — `state.license` er ikke læst, så licensnøglen kan ikke nå en fil, der forlader maskinen. `renderReportMarkdown()` giver en kundetabel (Site/Status/Uptime/Response/SSL/Last check) med **DOWN-sites først**, `renderReportJson()` ren JSON til CI. `recordPass()` er skriveren, `uptimePercent()` er læseren, og de to kan ikke blive uvede om definitionen.
+- **Uptime er ærlig:** `checksUp / checks`, defineret ét sted. **Ingen gennemførte passes giver `null` → `—`, aldrig 100 %.** En håndskrevet eller halvskrevet state (`checks: "many"`, `checks: -3`) giver `null`/0, ikke `NaN`.
+- **To heltal pr. URL** (`checks`, `checksUp`) + `lastResponseMs`, skrevet i den rigtige `runPass` — state-filen kan altså ikke vokse med overvågningshistorikken. Før dette viste ingen overflade disse tal.
+- **Reel fejl fundet af min egen test:** `cell()` escaped pipes og `<>`, men ikke **newlines** — en URL med et newline i sig (f.eks. fra en skrapet konfiguration) sprængte Markdown-tabellen i to rækker og kunne indsætte en falsk tabelrække i en kunderapport. Nu flades alle linjeskift, og testen fanger det.
+- **Pro-gate med ét købsflow:** `report` kræver `isPro(state)` (samme allow-liste som resten, så `unverified`/`invalid` aldrig får rapport — testet for begge). Uden licens skriver kommandoen **intet** på stdout og peger på kontraktens købslink. Gratisbrugere beholder `watch --once` og `status` som tekst.
+- **Matrixen låst:** rækken `status-page` er `implemented: true` / Pro-only, så `npm run matrix` skrev den ind i README, `docs/pro-alerts.md`, `--help` **og** npm-beskrivelsen (nu 196 tegn, under de 200 kravet). En kanal der ikke er bygget kan dermed ikke længere være "Planlagt" i README, og en bygget kan ikke forblive det.
+- **Test (12 nye, `test/report.test.js`):** uptime-matematik inkl. nul/ugyldige tællere, `recordPass` på legacy-state, den **rigtige** `runPass` med fire stubbede passes (75 %), problem-first-sortering, at `|`/`<script>`/newline i en URL ikke kan ødelægge tabellen, at licensnøglen hverken kan nå Markdown eller JSON (inkl. at ingen rapportfelt ligner licensdata), fri bruger → exit 1 + købslink + tom stdout, `unverified`/`invalid` → ingen rapport, `--json`/`--title`/tom state/ugyldige flag, og titelflatning.
+- **Mutationstest:** at slette `recordPass(entry, result)` fra `runPass` giver 1 fejl i 12 (tællertesten); at gøre Pro-gaten væk giver fejl i gaten.
+- **Bevis:** Node 26.7.0 — `npm ci --ignore-scripts`, **`npm test` grøn med 136/136** (124 + 12), `npm run audit` 0/0, `node --check` alle JS-filer, `node tools/matrix.mjs --check`, `git diff --check` grønne. Ingen afhængighed ændret.
+- **Ikke bygget (bevidst, i spec §7):** hostet status-side med offentligt URL (kræver server + domæne + ❓ 3), 30-dages historik, fakturalayout/logo, dansk rapporttekst, planlagte rapporter.
 
 ### P2-1 — I GANG (del A færdig) — Hæd deterministiske tests og drift
 
@@ -410,6 +424,8 @@ Den aktuelle gate-definition er registreret her:
 ## Dependency- og opgraderingslog
 
 ### Aktuel offentlig CLI
+
+- `2026-09-26`: P1-2 del A + del B byggede bureau-rapporten `deskuptime report` (Markdown + JSON, Pro, read-only, uden konto) med spec i `docs/agency-report.md`. Uptime-tællere (`checks`/`checksUp`) skrives nu i den rigtige `runPass` via `recordPass()`, så de er bundet til de passes der faktisk kørte. Matrix-rækken `status-page` flippet til implementeret, hvilket regenererede README, `docs/pro-alerts.md`, `--help` og npm-beskrivelsen (196 tegn). **Reel fejl fundet undervejs:** rapportens Markdown-cell escaped pipes og `<>` men ikke newlines, så en URL med linjeskift sprængte kundetabellen i to rækker. +12 tests → **136/136**; `npm run audit` 0/0; `node --check`, `matrix --check` og `git diff --check` grønne på Node 26.7.0. Mutationstest bekræfter tæller- og gatedækningen. Ingen afhængighed ændret.
 
 - `2026-09-25`: CI-smoke-steppet i `ci.yml` kørte mod `https://example.com`, altså kunne et tredjeparts-site gøre repoets egen gate rød, og det assertede kun den sunde side. Det kører nu mod en lokal HTTP-fixture med en 200- og en 500-route og fire `jq -e`-assertions, så tællingen kan fejle på begge sider. Ingen afhængighed ændret.
 
@@ -461,6 +477,8 @@ Den aktuelle gate-definition er registreret her:
 10. **Skal der skæres en ny `v0.2.9-cli`-release?** P0-9b gør curl-stien væsentligt bedre, men *kun* en release med et publiceret `.sha256` gør checksum-verificeringen obligatorisk; lige nu advarer installeren om 0.2.5, fordi ingen af de 12 releases har en sidecar. Release-workflowen uploader automatisk sidecaren, så det eneste arbejde er `git tag v0.2.9-cli && git push --tags` (det gør Mads — agenten laver aldrig tags) og `npm publish` af 0.2.9. Samme release synkroniserer Homebrew-formlen, som stadig peger på en ældre version i det eksterne tap-repo.
 11. Er `v1`-tagget (2026-08-26) med gamle 0.1.3-tarballs og 0.1.4/0.2.6-desktopsassets stadig nødvendigt, eller er det et rodet relikvieskilt, der bør slettes eller omdøbes? Det er det eneste release uden versionssuffix, og det ligger lige i installérens kandidatliste (den springes over i dag, fordi der intet `deskuptime-<ver>.tar.gz`-asset passer til `v1`).
 
+- **Release-note P1-2:** matrixen, README, `--help` og npm-beskrivelsen lover nu `deskuptime report`, men kun en build med kode. Gamle installerede CLI'er kender ikke kommandoen og skriver blot `Unknown command` — ingen eksisterende kundeafhængighed brydes ved merge. ❓ 10 (nyt `v0.2.9-cli`-tag) er stadig det, der gør curl-stien komplet.
+
 ## Deploy-/release-noter
 
 - Dette offentlige repo er en npm-/GitHub-CLI og har ingen live-deploytarget. `STATUS.md` noterer 24/9, at `deskuptime.com` ikke er købt; derfor oprettes ingen `VERIFICÉR DEPLOY`-note for CLI-merges.
@@ -469,6 +487,8 @@ Den aktuelle gate-definition er registreret her:
 - Merge til `main` deployer ikke; npm, GitHub Releases og Homebrew må kun publiceres af Mads via de eksisterende tag-workflows.
 
 ## Iterationslog
+
+- **Iteration 15 (P1-2 del A + del B):** Den første rigtige bureau-rapport kom denne iteration. `docs/agency-report.md` er spec (målgruppe, datamodel, privacy, format, entitlement, og hvad der bevidst ikke er bygget), og `deskuptime report` er implementeret: Markdown med DOWN-sites først til en kunde, ren JSON til CI, `--title` til branding, read-only og uden konto. Uptime (`checksUp / checks`) defineres ét sted og viser `—`, ikke 100 %, når ingen pass er kørt. Matrix-rækken `status-page` gik fra *Planlagt* til implementeret, så README, `--help`, spec og npm-listen nu alle sælger den samme ting. Min egen test fandt en reel fejl undervejs: en URL med newline sprængte Markdown-tabellen, fordi `cell()` ikke fladede linjeskift. Pro-gaten bruger `isPro()`, så `unverified`/`invalid` aldrig får en rapport. Node 26.7.0: `npm ci --ignore-scripts`, **136/136** tests, `npm run audit` 0/0, `node --check`, `matrix --check`, `git diff --check` grønne. Næste iteration: P1-2 del C (30-dages historik, planlagt rapport — kræver ❓ 3) eller P2-1 del B (body-size-/licens-retrytests).
 
 - **Iteration 1 (research):** Planen manglede ved start. Repoet, missionen, Stripe-/licenskontrakten, CLI/desktoparkitekturen, tests, releasefiler og dependency-status blev undersøgt. Ingen kode blev ændret ud over denne plan. Gate-baseline og prioriteret kø er registreret ovenfor.
 - **Iteration 2 (P0-1, historisk):** Desktopbridge, lokal CSS/CSP, IPC-DTO, URL-validering, sikker DOM-rendering og redigeret licens-state blev implementeret og reviewet i commits `c63a52e` og `f0d4fa7`. Dengang var `npm test` 32/32, `cargo check --locked`, `cargo test --locked` 10/10 og `cargo tauri build --debug` på macOS grønne. Desktopkilden blev siden flyttet til det private repo; ubekræftet Windows-/interaktiv smoke overføres dertil.

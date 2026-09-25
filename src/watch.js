@@ -18,6 +18,7 @@ import { dirname, posix, win32 } from 'path';
 import { homedir } from 'os';
 import { createHash, randomUUID } from 'crypto';
 import { assertValidHttpUrls } from './status.js';
+import { recordPass } from './report.js';
 import { FREE, PRO, PRODUCT } from './features.js';
 
 const LICENSE_RECHECK_MS = 24 * 60 * 60 * 1000;
@@ -29,9 +30,9 @@ export const PRO_BUY_URL = PRODUCT.buyUrl;
 
 /**
  * One upgrade path, used wherever a free user hits a Pro-only limit.
- * Kept in sync with docs/pro-alerts.md.
+ * Kept in sync with docs/pro-alerts.md and docs/agency-report.md.
  */
-function upgradeHint(feature) {
+export function upgradeHint(feature) {
   return `Pro unlocks ${feature}: ${PRO_BUY_URL} — then "deskuptime activate <key>".`;
 }
 
@@ -184,6 +185,9 @@ export async function runPass(state, opts = {}) {
     entry.lastChecked = result.timestamp || new Date().toISOString();
     entry.wasUp = result.healthy;
     entry.lastStatus = result.statusCode;
+    // Uptime counters for the client report. Two integers per URL, so the
+    // state file cannot grow with the length of the monitoring history.
+    recordPass(entry, result);
     if (result.content?.hash) entry.lastHash = result.content.hash;
     if (Number.isFinite(result.content?.contentLength)) entry.lastContentLength = result.content.contentLength;
   }

@@ -1,14 +1,14 @@
 {
   "name": "@mahope/deskuptime",
   "version": "0.2.8",
-  "description": "Uptime, SSL expiry and content-change alerts from your terminal or CI. Free MIT CLI — DeskUptime Pro ($19 one-time, 3 machines) adds unlimited URLs, webhook alerts, the desktop app.",
+  "description": "Uptime, SSL expiry and content-change alerts from your terminal or CI. Free MIT CLI — DeskUptime Pro ($19 one-time, 3 machines) adds unlimited URLs, webhook alerts, client reports, the desktop app.",
   "main": "src/engine.js",
   "bin": {
     "deskuptime": "src/cli.js"
   },
   "type": "module",
   "scripts": {
-    "test": "node --test test/test.js test/license.test.js test/status.test.js test/webhook.test.js test/claims.test.js test/matrix.test.js test/tarball.test.js test/install.test.js",
+    "test": "node --test test/test.js test/license.test.js test/status.test.js test/webhook.test.js test/claims.test.js test/matrix.test.js test/report.test.js test/tarball.test.js test/install.test.js",
     "audit": "npm audit",
     "check": "node src/cli.js check https://example.com",
     "release": "node tools/release.mjs",

@@ -12,7 +12,8 @@
  */
 
 import { checkUrls, summarize } from './engine.js';
-import { startWatch, runOnce, printStatus, printPass, loadState, saveState, freeLimitMessage } from './watch.js';
+import { startWatch, runOnce, printStatus, printPass, loadState, saveState, freeLimitMessage, isPro, upgradeHint } from './watch.js';
+import { buildReport, renderReportJson, renderReportMarkdown } from './report.js';
 import { readFileSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
@@ -41,6 +42,7 @@ USAGE:
   deskuptime watch <url> [--interval 300] [--webhook URL]  Monitor in background (free: up to ${FREE.urlLimit} URLs)
   deskuptime watch <url> --once                      Run one monitoring pass and exit
   deskuptime watch --status                         Show status without network checks
+  deskuptime report [--title "Client"] [--json]     Client-ready uptime report (Pro)
   deskuptime activate <key>     Unlock Pro with your license key
   deskuptime deactivate         Free this machine's Pro seat (${PRODUCT.machines} machines per license)
   deskuptime status             Show license state (active/cached/unverified/invalid/free) + monitored URLs
@@ -51,6 +53,7 @@ EXAMPLES:
   deskuptime check https://example.com
   deskuptime check https://site1.com https://site2.com
   deskuptime watch https://mystore.com --interval 300
+  deskuptime report --title "Acme — uptime September" > acme-september.md
 
   watch --once exits 0 when all URLs are healthy, 2 when any is DOWN, and 1 for invalid usage.
 
@@ -439,11 +442,61 @@ if (command === 'status') {
   process.exit(0);
 }
 
+// ── Report (Pro: a client-ready uptime report) ──
+if (command === 'report') {
+  const raw = args.slice(1);
+  const allowedFlags = new Set(['--json', '--title']);
+  const unknownFlag = raw.find(value => value.startsWith('-') && !allowedFlags.has(value));
+  if (unknownFlag) {
+    console.error(`❌ Error: Unknown option: ${unknownFlag}`);
+    process.exit(1);
+  }
+
+  const titleIndex = raw.indexOf('--title');
+  let title;
+  if (titleIndex !== -1) {
+    title = raw[titleIndex + 1];
+    if (!title || title.startsWith('-')) {
+      console.error('❌ Error: --title requires a value');
+      process.exit(1);
+    }
+  }
+  const unexpectedArg = raw.find((value, index) => {
+    if (value === '--json') return false;
+    if (titleIndex !== -1 && (index === titleIndex || index === titleIndex + 1)) return false;
+    return true;
+  });
+  if (unexpectedArg) {
+    console.error(`❌ Error: Unexpected argument: ${unexpectedArg}`);
+    console.error('Usage: deskuptime report [--title "Client name"] [--json]');
+    process.exit(1);
+  }
+
+  const state = loadState();
+  if (!isPro(state)) {
+    // A free user gets the same one upgrade path as everywhere else in the CLI,
+    // and keeps a working alternative: `watch --once` and `status` still print
+    // the same numbers as text.
+    console.error(`❌ Error: the client report needs an active Pro license. ${upgradeHint('a client-ready uptime report you can send to a customer')}`);
+    process.exit(1);
+  }
+
+  if (Object.keys(state.urls).length === 0) {
+    console.error('No monitored URLs. Start with: deskuptime watch <url>');
+    process.exit(1);
+  }
+
+  // Read-only: no request is made, so the report always describes the last
+  // completed pass. Run `deskuptime watch <url> --once` first for a fresh one.
+  const report = buildReport(state, { title });
+  console.log(args.includes('--json') ? renderReportJson(report) : renderReportMarkdown(report));
+}
+
 // ── Unknown command ──
 // check/headers/activate/deactivate fall through here after setting process.exitCode instead of calling
 // process.exit(): exiting while an undici fetch handle is still closing trips a libuv
 // assertion on Windows (src/win/async.c), so the event loop must drain naturally.
-if (!['check', 'headers', 'activate', 'deactivate', 'watch'].includes(command)) {
+if (!['check', 'headers', 'activate', 'deactivate', 'watch', 'report'].includes(command)) {
   console.error(`Unknown command: "${command}"`);
   console.error('Run "deskuptime --help" for usage.');
   process.exit(1);

@@ -23,7 +23,7 @@ kundeflade kan love dem. Redigér claims i `src/features.js`, ikke i tabellerne.
 | Desktop-app: tray, baggrundsloop, aktivitetsoversigt | — | ✅ | Kun Pro — privat desktopapp |
 | Email-alerts | — | — | **Ikke bygget** |
 | Slack / Discord / Teams-kanal | — | — | **Ikke bygget** |
-| Delelig status-side / kunderapport | — | Planlagt | Planlagt — ikke en del af købet |
+| Delelig status-side / kunderapport (`report`, Markdown + JSON) | — | ✅ | Kun Pro |
 | Batch-job, flere lokationer, prioriteret support | — | Planlagt | Planlagt — ikke en del af købet |
 <!-- END GENERATED: matrix -->
 

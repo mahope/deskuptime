@@ -76,6 +76,7 @@ limits and adds alerts that reach you when you are not at the terminal.
 | Webhook alerts on every event (`--webhook`) | — | ✅ | Pro only |
 | Local desktop notification (macOS in the CLI, all platforms in the desktop app) | — | ✅ | Pro only |
 | Desktop app: tray, background loop, activity view | — | ✅ | Pro only — private desktop app |
+| Shareable status page / customer report (`report`, Markdown + JSON) | — | ✅ | Pro only |
 <!-- END GENERATED: matrix -->
 
 Rows for channels that are not built — email, Slack/Discord/Teams, shareable status

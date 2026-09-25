@@ -162,12 +162,12 @@ export const MATRIX = [
   },
   {
     id: 'status-page',
-    en: 'Shareable status page / customer report',
-    da: 'Delelig status-side / kunderapport',
+    en: 'Shareable status page / customer report (`report`, Markdown + JSON)',
+    da: 'Delelig status-side / kunderapport (`report`, Markdown + JSON)',
     free: NO,
-    pro: { en: 'Planned', da: 'Planlagt' },
-    implemented: false,
-    status: PLANNED,
+    pro: YES,
+    implemented: true,
+    status: PRO_ONLY,
   },
   {
     id: 'batch',
@@ -280,6 +280,7 @@ export function renderNpmDescription() {
   const extras = [
     PRO.urlLimit === Infinity ? 'unlimited URLs' : `${PRO.urlLimit} URLs`,
     proOnly.has('webhook') && 'webhook alerts',
+    proOnly.has('status-page') && 'client reports',
     proOnly.has('desktop-app') && 'the desktop app',
   ].filter(Boolean).join(', ');
   return `Uptime, SSL expiry and content-change alerts from your terminal or CI. Free MIT CLI — ${PRODUCT.proName} (${PRODUCT.priceLong}, ${PRODUCT.machines} machines) adds ${extras}.`;
