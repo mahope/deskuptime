@@ -1,9 +1,9 @@
 # IMPLEMENTATION_PLAN.md
 
 STATUS: I GANG
-Iteration: 6 — 2026-09-25
-Arbejdsgren: `main` via `ceo/pro-claims`
-Næste handling: P0-5 er færdig i `4024d08` og mergeret kl. 2026-09-25T15:42:30Z; næste iteration starter P0-12 (live-sitens email-claim) og derefter P0-6.
+Iteration: 7 — 2026-09-25
+Arbejdsgren: `main` via `ceo/device-id-parity`
+Næste handling: P0-12 er `BLOCKED` (sitens kilder ligger uden for dette repo og uden for agentens adgang); P0-6 er færdig i `e344531` og mergeret 2026-09-25. Næste iteration starter P0-7 (hårdgør licenslifecycle), derefter P0-10/P0-11.
 
 ## Mission
 
@@ -50,7 +50,7 @@ Den aktuelle gate-definition er registreret her:
 - `deskuptime.com` er live (HTTP 200 verificeret 2026-09-25) men har ingen desktop-download; det reelle download er GitHub-releasen `desktop-v0.2.7` med macOS/Windows-assets.
 - Den eksterne produktside og Stripe-fulfillment ligger uden for repoet og kan ikke verificeres endeligt her.
 - Desktopparitet, IPC- og UI-fund er overført til `mahope/deskuptime-desktop`; de skal ikke genåbnes i dette offentlige CLI-repo.
-- `src/license.js:14,40-42` bruger `os.hostname()`, mens Rust bruger `COMPUTERNAME` på Windows. På berørte maskiner kan CLI og desktop derfor bruge to licenspladser. Gemte `license.instance`/`instance_id` migrerer ikke automatisk ved en generatorændring.
+- `src/license.js:14,40-42` bruger `os.hostname()`, mens Rust bruger `COMPUTERNAME` på Windows. **Løst i `e344531`:** `getDeviceId` bruger nu ikke-tom `COMPUTERNAME` på native Windows; scheme'et er låst i `test/fixtures/device-id.golden.json`. Gamle gemte `license.instance`/`instance_id` migrerer fortsat ikke automatisk, og det er bevidst overlådt til det private desktoprepo (P0-6, privat follow-up).
 - `tools/make_tarball.sh:14` udelader `src/checkers/headers.js`; `tools/install.sh:6` er fastsat til 0.1.4; npm/tarball/desktop-versioner er ikke synkroniserede.
 
 ## Prioriteret kø
@@ -158,7 +158,7 @@ Den aktuelle gate-definition er registreret her:
 
 **Status 2026-09-25:** Færdig i `4024d08` på `ceo/pro-claims`. `test/claims.test.js` (6 tests) og `test/webhook.test.js` (4 tests) er nye og låser claims, links, payload og timeout. Node 26.7.0: `npm ci --ignore-scripts`, 55/55 tests, audit 0/0, `node --check` og `git diff --check` grønne. Fast-forward-merge til `main` skete 2026-09-25T15:42:30Z. Den eksterne live-side har **sin egen** email-claim og følges i P0-12.
 
-### P0-12 — TODO — Ret email-claimen på den live produktside
+### P0-12 — 🔒 BLOCKED: sitens kilder ligger uden for dette repo og uden for agentens adgang
 
 **Begrundelse:** `https://deskuptime.com/` er verificeret live 2026-09-25 og viser i sammenligningstabellen “Email and webhook alerts — — yes” for Desktop Pro, og skriver “Removes the three-site limit and adds email and webhook alerts.” Ingen email-implementation findes i CLI'en eller i den private desktop-kilde. Det er et køb, der ikke leverer, på den mest synlige kundeflade.
 
@@ -172,7 +172,20 @@ Den aktuelle gate-definition er registreret her:
 4. `llms.txt`, `/da/`-siden og sitemap har samme ærlighed som forsiden.
 5. Hvis email besluttes implementeret, flyttes claimen tilbage samtidig med koden — aldrig før.
 
-### P0-6 — TODO — Ensret Windows device_id i CLI
+**Undersøgelse 2026-09-25 (evidence, første og eneste forsøg):**
+
+- `deskuptime.com` svarer HTTP 200 og serveres via Cloudflare (`server: cloudflare`, `cf-cache-status: DYNAMIC`). Kilden er **ikke** i dette repo: checkout indeholder kun `.github/`, `action.yml`, `BUILD.md`, `DECISION.md`, `STATUS.md`, `docs/`, `package.json`, `src/`, `test/`, `tools/` — ingen site-kilde, ingen `_headers`/Workers-fil.
+- Den eneste sandsynlige kilde er et andet lokalt checkout (`~/Projects/hermes/hermes-passiv` har et `deskuptime/`-underbibliotek). Læsning af den sti er blokkeret af agentens `external_directory`-tilladelse, så **placeringen er et formod, ikke et verificeret fund**. Ingen skrivning til et fremmed repo er udført.
+- **Konklusion:** opgaven er ikke eksekverbar i denne loop og en gentaget iteration ville give samme resultat. Markeret `BLOCKED` efter ét forsøg i stedet for to, fordi evidensen er endelig, ikke blot forsøgt igen. Efter Mads' beslutning eller en tilladelse til det andet repo kan den genåbnes.
+- **Konkrete ændringer, der skal foretages i site-kilden:**
+  1. Sammenligningstabellen: “Email and webhook alerts” → “Webhook alerts” (eller “Webhook alerts + local notifications” for desktoprækken), så den kun hævder det, `docs/pro-alerts.md` §1 tillader.
+  2. Pro-afsnittet: “adds email and webhook alerts” → “adds webhook alerts”.
+  3. `/da/`-siden har i denne måling **ingen** email-claim, så dansk/engelsk er allerede uens; rettelsen skal gøre dem ens, ikke kun tilpasse engelsk.
+  4. `llms.txt` nævner hverken email eller kanaler og er dermed ikke i strid — hold den sådan.
+  5. Købsknappen (`buy.stripe.com/7sY9AS9eX3Iu418fJ5bMQ01`) er korrekt og uændret på den live side (verificeret 2026-09-25); rør den ikke.
+- **Bemærkning til ❓-spørgsmål 2:** dette repo har nu konsekvent fjernet email fra alle overflader. Den eneste afvigelse er den eksterne side, som intet i dette repo kan rette.
+
+### P0-6 — FÆRDIG — Ensret Windows device_id i CLI
 
 **Begrundelse:** Åbent produktpunkt fra 24/9: CLI og privat desktop-app kan tælle én maskine som to pladser. Denne iteration kan kun rette og conformance-teste Node-generatoren.
 
@@ -184,6 +197,10 @@ Den aktuelle gate-definition er registreret her:
 2. Native Windows CI kører licenstest med Node 24.
 3. Et versioneret Node golden fixture giver den tilsigtede id-generator; Rust-golden og fælles maskintest følger i `mahope/deskuptime-desktop`.
 4. En eksisterende installation med et gammelt gemt id kræver en dokumenteret migrerings-/alias-proces i det private repo, før cross-client-opløsning erklæres færdig.
+
+**Status 2026-09-25:** Færdig i `e344531` på `ceo/device-id-parity`. `getDeviceId({platform, env, host})` foretrækker nu en ikke-tom `COMPUTERNAME` på native Windows (tom, blank eller manglende falder tilbage til `os.hostname()`) og trimmer/lowercaser som før. `test/fixtures/device-id.golden.json` er en versioneret fixture (`version: 1`) med 12 tilfælde — Windows-precedence mod 15-tegns NetBIOS, tom/blank/manglende `COMPUTERNAME`, trim/lowercase, darwin/linux-ignore-`COMPUTERNAME`, `unknown`-fallback for begge platforme, 128-tegns afkortning og 128-tegns grænse — som `test/license.test.js` afprøver; Rust-siden skal køre mod samme fil. Ny CI-job `license-windows` kører licenstestene på `windows-latest` med Node 24. **Bevis:** mutationstest — reverteret til den gamle `os.hostname()`-adfærd giver 2 fejl i 16, genindsættet kode giver 16/16. Node 26.7.0: `npm ci --ignore-scripts`, 59/59 tests, audit 0/0, `node --check`, gyldig YAML/JSON og `git diff --check` grønne. Merge til `main` og push af begge grene 2026-09-25.
+
+**Bevidst ikke gjort (til privat repo):** Ingen eksisterende `license.instance` omskrives — `refreshLicense` bruger stadig det gemte id, så ingen installation mister Pro. Acceptkriterium 4 (serverens migrering/alias for gamle id'er) og Rust-golden-pariteten er derfor **åbne** og skal afsluttes i `mahope/deskuptime-desktop`, hvor Rust-kilden ligger.
 
 ### P0-7 — TODO — Hårdgør licenslifecycle
 
@@ -283,6 +300,7 @@ Den aktuelle gate-definition er registreret her:
 
 ### Aktuel offentlig CLI
 
+- `2026-09-25`: P0-6 tilføjede 4 device_id-tests og en 12-sagers golden-fixture; nye CI-job `license-windows` kører licenstestene på native Windows med Node 24. `npm test` er grøn med 59/59; `npm run audit` 0 sårbarheder. Mutationstest bekræfter, at testene fanger den gamle `os.hostname()`-adfærd. Node 26.7.0, `npm ci --ignore-scripts`, `node --check`, YAML/JSON og `git diff --check` grønne.
 - `2026-09-25`: Node-runtime `>=18` → `>=24`, den aktive LTS. Verificeret med Node 24.21.0; ingen application-kodeændring udover help-tekst var nødvendig.
 - `2026-09-25`: Nul runtime-/dev-dependencies bevaret; `package-lock.json` v3 tilføjet. `npm ci --ignore-scripts` og `npm run audit` er grønne med 0 sårbarheder.
 - `2026-09-25`: `npm test` er grøn med 55/55 efter P0-5; `npm run lint` og `npm run build` findes ikke.
@@ -302,12 +320,13 @@ Den aktuelle gate-definition er registreret her:
 ## ❓ Til Mads
 
 1. Hvad er den endelige gratis/Pro-matrix? Skal desktoptray og lokale notifications være gratis, eller kun Pro? README, kode og mission peger i dag i forskellige retninger.
-2. Skal Pro email og Slack/Discord/Teams implementeres nu, eller skal de forblive uden for matrixen, indtil de er bygget? P0-5 har fjernet dem fra alle overflader i dette repo og noteret dem som ikke-implementeret; **live-siten `deskuptime.com` hævder stadig email for Desktop Pro** (se P0-12). Svar på spørgsmålet afgør både næste CLI-opgave og sitens claim.
+2. Skal Pro email og Slack/Discord/Teams implementeres nu, eller skal de forblive uden for matrixen, indtil de er bygget? P0-5 har fjernet dem fra alle overflader i dette repo og noteret dem som ikke-implementeret; **live-siten `deskuptime.com` hævder stadig email for Desktop Pro**, og rettelsen ligger uden for dette repo (P0-12 er `BLOCKED`). Svar på spørgsmålet afgør både næste CLI-opgave og sitens claim.
 3. Hvilken rapport/status-side skal være første bureau-feature, og hvilke data må en kunde-rapport indeholde?
 4. Skal det eksisterende Stripe Payment Link verificeres manuelt for pris, valuta, fulfillment og license-key før næste release? Ingen betaling eller Stripe-write udføres af agenten.
 5. Er der allerede Mahope/Stripe-aktiveringer fra pre-release Windows-builds, der kræver device_id-migration? Det afgør, om minimal generator-fix er nok.
 6. Pro-navne, hvis et nyt brand senere ønskes: **DeskUptime Pro** (trygt og tydeligt), **Uptime Desk** (kortere), **Watchtower** (produktnavn, men bruges ofte) eller **Signal Monitor**. Ingen produkter, der allerede er i Stripe, omdøbes uden Mads' beslutning.
 7. Skal den betalte desktopkilde, som stadig findes i offentlig Git-history før `39c434f`, fjernes via en separat historikskrivning af Mads? Agenten gennemfører aldrig force-push eller historik-rewrite.
+8. **Hvilket repo indeholder kilden til `deskuptime.com`?** P0-12 er `BLOCKED`, fordi sitens HTML ikke ligger i dette repo, og agenten ikke må læse det formodentlige `~/Projects/hermes/hermes-passiv`. Giv enten adgang til det repo, eller lav de fem konkrete rettelser i P0-12 selv. Dette er det mest synlige købs-flow, der i dag lover noget, der ikke findes.
 
 ## Deploy-/release-noter
 
@@ -323,3 +342,4 @@ Den aktuelle gate-definition er registreret her:
 - **Iteration 4 (P0-3):** Commit `5f8ff4c` gør 4xx/5xx, redirects til fejl, timeout og connection refusal konsekvent DOWN i CLI, JSON, watch-status og GitHub Action, mens `reachable` fortsat betyder modtaget HTTP-svar. Batch-validering, strukturerede headers-fejl og seks lokale tests er tilføjet. Node 24.21.0, 32/32 tests, audit 0/0, syntax/diff og fresh review uden P0/P1 er grønne. Fast-forward-merge til `main` skete 2026-09-25T09:24:49Z; næste opgave er P0-4.
 - **Iteration 5 (P0-4):** Commits `364ae0d` og `4e685df` gør `watch --once` single-pass, persisterende og exit-korrekt, gør `watch --status` read-only, latcher DOWN/SSL/content-begivenheder korrekt og forhindrer samtidige state-tab med et kortlevende process-lock. Temp-HOME- og CLI-tests dækker de seks acceptkriterier samt reviewfund. Node 24.21.0, 45/45 tests, audit 0/0, syntax/diff er grønne. Fast-forward-merge til `main` skete 2026-09-25T14:26:12Z; næste opgave er P0-5.
 - **Iteration 6 (P0-5):** Commit `4024d08` gør produktobne ærlige. `docs/pro-alerts.md` er source of truth med kanalmatrix, webhook-payload, timeout/retry, offline-adfærd og privacy. README's email/Slack-claim og hjælpens email/push-claim er væk; `--webhook` uden Pro-licens lyder nu med købslink i stedet for at tie; webhook har 10 s timeout og returnerer status; gratis-grænsen peger på købslinket. Desktop-download peger på den verificerede release `desktop-v0.2.7`, ikke på et domæne uden download. 10 nye tests. Node 26.7.0, 55/55 tests, audit 0/0, syntax/diff grønne. Fast-forward-merge til `main` skete 2026-09-25T15:42:30Z. **Nyt fund:** live-siten `deskuptime.com` (verificeret HTTP 200) hævder stadig email-alerts for Desktop Pro → P0-12; næste iteration starter P0-12 og derefter P0-6.
+- **Iteration 7 (P0-12 forsøgt + P0-6):** P0-12 blev undersøgt og fundet uudførlig her — sitens kilder er uden for repoet og uden for agentens `external_directory`-adgang, så opgaven er markeret `BLOCKED` med evidens, de fem konkrete site-ændringer og en verificeret måling af, at `/da/`-siden ingen email-claim har. Herefter blev P0-6 færdig i `e344531`: `getDeviceId` bruger ikke-tom `COMPUTERNAME` på native Windows, så én maskine ikke længre bruger to af tre Pro-pladser. Scheme'et låses i `test/fixtures/device-id.golden.json` (12 tilfælde, version 1) til deling med Rust-siden, og et nyt CI-job kører licenstestene på `windows-latest` med Node 24. Mutationstest bekræfter testenes dækning. Node 26.7.0, `npm ci --ignore-scripts`, 59/59 tests, audit 0/0, `node --check`, YAML/JSON og diff-check grønne. Fast-forward-merge til `main` og push af begge grene 2026-09-25. Næste iteration starter P0-7.
