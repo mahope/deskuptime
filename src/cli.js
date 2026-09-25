@@ -16,6 +16,7 @@ import { startWatch, loadState, saveState } from './watch.js';
 import { readFileSync, writeFileSync, existsSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
+import { invalidHttpUrls } from './status.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const pkg = JSON.parse(readFileSync(join(__dirname, '..', 'package.json'), 'utf-8'));
@@ -31,7 +32,7 @@ function showHelp() {
 ╚═══════════════════════════════════════════╝
 
 USAGE:
-  deskuptime check <urls...>    Check one or more URLs
+  deskuptime check <urls...> [--json] [--timeout ms]  Check one or more URLs
   deskuptime headers <url>      Redirect chain, HTTPS enforcement + security headers
   deskuptime watch <url> [--interval 300] [--webhook URL]  Monitor in background (free: up to 3 URLs)
   deskuptime activate <key>     Unlock Pro with your license key
@@ -72,9 +73,26 @@ if (!command || command === '--help' || command === '-h') {
   process.exit(0);
 }
 
-// ── Check ──
 if (command === 'check') {
-  const urls = args.slice(1).filter(a => !a.startsWith('--'));
+  const rawArgs = args.slice(1);
+  const allowedFlags = new Set(['--json', '--timeout']);
+  const unknownFlag = rawArgs.find(value => value.startsWith('--') && !allowedFlags.has(value));
+  if (unknownFlag) {
+    console.error(`❌ Error: Unknown option: ${unknownFlag}`);
+    process.exit(1);
+  }
+
+  const timeoutArg = args.indexOf('--timeout');
+  const timeoutValue = timeoutArg !== -1 ? args[timeoutArg + 1] : null;
+  const timeoutMs = timeoutValue == null ? undefined : Number(timeoutValue);
+  if (timeoutArg !== -1 && (!timeoutValue || timeoutValue.startsWith('--') || !Number.isInteger(timeoutMs) || timeoutMs < 1)) {
+    console.error('❌ Error: --timeout must be a positive integer');
+    process.exit(1);
+  }
+
+  const urls = args.slice(1).filter((value, index) =>
+    !value.startsWith('--') && index !== timeoutArg
+  );
 
   if (urls.length === 0) {
     console.error('❌ Error: at least one URL required');
@@ -82,64 +100,58 @@ if (command === 'check') {
     process.exit(1);
   }
 
-  // Validate URLs
-  const validUrls = urls.filter(u => {
-    try {
-      new URL(u);
-      return true;
-    } catch {
-      console.error(`⚠️  Invalid URL skipped: ${u}`);
-      return false;
+  const invalidUrls = invalidHttpUrls(urls);
+  if (invalidUrls.length > 0) {
+    for (const url of invalidUrls) {
+      console.error(`❌ Error: Invalid URL: ${url}`);
     }
-  });
-
-  if (validUrls.length === 0) {
     process.exit(1);
   }
 
   const json = args.includes('--json');
-  const results = await checkUrls(validUrls);
+  const results = await checkUrls(urls, { timeoutMs });
 
   if (json) {
     // Machine-readable output: stdout is pure JSON for piping into jq/CI
     const out = results.map(r => ({
       url: r.url,
       reachable: r.reachable,
+      healthy: r.healthy,
       statusCode: r.statusCode,
       responseTimeMs: r.responseTimeMs,
       sslDaysRemaining: r.ssl?.validDays ?? null,
       sslError: r.ssl?.error ?? null,
       contentLength: r.content?.contentLength ?? null,
       contentHash: r.content?.hash ?? null,
+      errorType: r.errorType,
       error: r.error,
     }));
     console.log(JSON.stringify(out, null, 2));
-    process.exitCode = out.some(r => !r.reachable) ? 2 : 0;
+    process.exitCode = out.some(r => !r.healthy) ? 2 : 0;
   } else {
+    console.log(`🔍 Checking ${urls.length} URL(s)...\n`);
 
-  console.log(`🔍 Checking ${validUrls.length} URL(s)...\n`);
+    for (const result of results) {
+      const summary = summarize(result);
+      const statusSymbol = result.healthy ? '✅' : '❌';
+      const sslEmoji = result.ssl?.validDays <= 14 ? '⚠️' : result.ssl?.validDays > 0 ? '🔒' : result.ssl?.error ? '🔓' : '—';
+      const changedEmoji = result.content?.changed === true ? '🔄' : result.content?.changed === false ? '⏸️' : '—';
+      const httpStatus = result.statusCode || 'N/A';
 
-  for (const result of results) {
-    const summary = summarize(result);
-
-    const statusSymbol = result.reachable ? '✅' : '❌';
-    const sslEmoji = result.ssl?.validDays <= 14 ? '⚠️' : result.ssl?.validDays > 0 ? '🔒' : result.ssl?.error ? '🔓' : '—';
-    const changedEmoji = result.content?.changed === true ? '🔄' : result.content?.changed === false ? '⏸️' : '—';
-
-    console.log(`${statusSymbol} ${result.url}`);
-    console.log(`   Status:   ${result.statusCode || 'N/A'} ${result.statusCode === 200 ? 'OK' : ''}`);
-    console.log(`   Response: ${result.responseTimeMs}ms`);
-    console.log(`   ${sslEmoji} SSL:     ${summary.ssl}`);
-    if (result.content?.fetched) {
-      console.log(`   ${changedEmoji} Content: ${result.content.contentLength.toLocaleString()} bytes`);
+      console.log(`${statusSymbol} ${result.url}`);
+      console.log(`   Status:   ${httpStatus} — ${result.healthy ? 'UP' : 'DOWN'}`);
+      console.log(`   Response: ${result.responseTimeMs}ms`);
+      console.log(`   ${sslEmoji} SSL:     ${summary.ssl}`);
+      if (result.content?.fetched) {
+        console.log(`   ${changedEmoji} Content: ${result.content.contentLength.toLocaleString()} bytes`);
+      }
+      if (result.error) {
+        console.log(`   ⚠️  Error:  ${result.error}`);
+      }
+      console.log('');
     }
-    if (result.error) {
-      console.log(`   ⚠️  Error:  ${result.error}`);
-    }
-    console.log('');
-  }
 
-  process.exitCode = results.some(r => !r.reachable) ? 2 : 0;
+    process.exitCode = results.some(r => !r.healthy) ? 2 : 0;
   }
 }
 
@@ -151,11 +163,51 @@ if (command === 'headers') {
     console.error('Usage: deskuptime headers <url> [--json]');
     process.exit(1);
   }
+  const invalidUrls = invalidHttpUrls([url]);
+  if (invalidUrls.length > 0) {
+    console.error(`❌ Error: Invalid URL: ${url}`);
+    process.exit(1);
+  }
+
+  const rawArgs = args.slice(2);
+  const allowedFlags = new Set(['--json', '--timeout']);
+  const unknownFlag = rawArgs.find(value => value.startsWith('--') && !allowedFlags.has(value));
+  if (unknownFlag) {
+    console.error(`❌ Error: Unknown option: ${unknownFlag}`);
+    process.exit(1);
+  }
+
+  const optionTimeoutIndex = rawArgs.indexOf('--timeout');
+  const unexpectedArg = rawArgs.find((value, index) => {
+    if (value === '--json' || value === '--timeout') return false;
+    if (optionTimeoutIndex !== -1 && index === optionTimeoutIndex + 1) return false;
+    return true;
+  });
+  if (unexpectedArg) {
+    const label = unexpectedArg.startsWith('-') ? 'Unknown option' : 'Unexpected argument';
+    console.error(`❌ Error: ${label}: ${unexpectedArg}`);
+    process.exit(1);
+  }
+
+  const timeoutArg = args.indexOf('--timeout');
+  const timeoutValue = timeoutArg !== -1 ? args[timeoutArg + 1] : null;
+  const timeoutMs = timeoutValue == null ? undefined : Number(timeoutValue);
+  if (timeoutArg !== -1 && (!timeoutValue || timeoutValue.startsWith('--') || !Number.isInteger(timeoutMs) || timeoutMs < 1)) {
+    console.error('❌ Error: --timeout must be a positive integer');
+    process.exit(1);
+  }
+
   const { checkHeaders } = await import('./checkers/headers.js');
-  const r = await checkHeaders(url);
+  const r = await checkHeaders(url, 10, { timeoutMs });
 
   if (args.includes('--json')) {
     console.log(JSON.stringify(r, null, 2));
+    if (!r.healthy) process.exitCode = 2;
+  } else if (r.error) {
+    console.log(`🧭 ${url}`);
+    console.log(`   Final: ${r.finalUrl} (${r.statusCode || 'n/a'})`);
+    console.log(`   ⚠️  Error: ${r.error}`);
+    process.exitCode = 2;
   } else {
   console.log(`🧭 ${url}`);
   for (const s of r.steps) {

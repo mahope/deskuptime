@@ -8,34 +8,43 @@
 import { checkReachability } from './checkers/ping.js';
 import { checkSSL } from './checkers/ssl.js';
 import { checkContentChange } from './checkers/content.js';
+import { assertValidHttpUrls, isHealthyStatus } from './status.js';
 
 /**
  * Run all checks on a single URL
  * @param {string} url
  * @param {object} [opts]
  * @param {string} [opts.contentHash] — optional previous content hash to detect changes
- * @returns {Promise<object>} { url, reachable, statusCode, responseTimeMs, ssl, content, error? }
+ * @returns {Promise<object>} { url, reachable, healthy, statusCode, responseTimeMs, ssl, content, error? }
  */
 export async function checkUrl(url, opts = {}) {
+  assertValidHttpUrls([url]);
   const result = {
     url,
     timestamp: new Date().toISOString(),
     reachable: false,
+    healthy: false,
     statusCode: null,
     responseTimeMs: null,
+    finalUrl: null,
     ssl: null,
     content: null,
+    errorType: null,
     error: null,
   };
 
   // 1. Reachability + response time
   try {
-    const pingResult = await checkReachability(url);
+    const pingResult = await checkReachability(url, { timeoutMs: opts.timeoutMs });
     result.reachable = pingResult.reachable;
+    result.healthy = pingResult.healthy ?? isHealthyStatus(pingResult.statusCode);
     result.statusCode = pingResult.statusCode;
     result.responseTimeMs = pingResult.responseTimeMs;
     result.finalUrl = pingResult.finalUrl;
+    result.errorType = pingResult.errorType;
+    result.error = pingResult.error;
   } catch (err) {
+    result.errorType = 'check_error';
     result.error = `Reachability check failed: ${err.message}`;
     return result;
   }
@@ -50,7 +59,7 @@ export async function checkUrl(url, opts = {}) {
   }
 
   // 3. Content hash (for change detection)
-  if (result.reachable) {
+  if (result.healthy) {
     try {
       const contentResult = await checkContentChange(url, opts.contentHash);
       result.content = contentResult;
@@ -69,6 +78,7 @@ export async function checkUrl(url, opts = {}) {
  * @returns {Promise<object[]>}
  */
 export async function checkUrls(urls, opts = {}) {
+  assertValidHttpUrls(urls);
   return Promise.all(urls.map(url => checkUrl(url, opts)));
 }
 
@@ -78,7 +88,7 @@ export async function checkUrls(urls, opts = {}) {
  * @returns {object} minimal status
  */
 export function summarize(result) {
-  const status = result.reachable ? 'UP' : 'DOWN';
+  const status = result.healthy ? 'UP' : 'DOWN';
 
   let sslStatus = 'N/A';
   if (result.ssl && result.ssl.validDays !== undefined) {

@@ -29,6 +29,9 @@ npx @mahope/deskuptime check https://site1.com https://site2.com
 # Machine-readable output for scripts/CI (exit code 2 if any site is down)
 npx @mahope/deskuptime check https://yoursite.com --json | jq '.[0].sslDaysRemaining'
 
+# Override the 15-second network timeout when needed
+npx @mahope/deskuptime check https://yoursite.com --timeout 30000
+
 # Monitor URLs in the background — alerts on UP/DOWN/SSL/content changes (free, up to 3 URLs)
 npx @mahope/deskuptime watch https://yoursite.com --interval 300
 
@@ -45,6 +48,15 @@ npx @mahope/deskuptime --help
 Watch mode stores state in `~/.deskuptime/state.json` and resumes where it left off.
 It prints a line on every status change: site down 🚨, back up ✅, SSL expiring within
 14 days ⚠️, or content changed 🔄.
+
+## Status policy
+
+A site is **healthy/UP** when a response was received with final HTTP status `200–399`.
+HTTP `400–599`, timeouts, refused connections and other network failures are **DOWN**.
+`reachable` in JSON only means that an HTTP response was received, so a `404` or `500`
+has `reachable: true` but `healthy: false`. Redirects are followed and the final status
+is evaluated. A multi-URL check validates every URL before sending any request; one
+invalid URL fails the complete check with exit code `1`.
 
 ## Pro features (license key — $19 one-time)
 
@@ -133,7 +145,7 @@ Inputs:
 | Input | Default | Description |
 |-------|---------|-------------|
 | `urls` | (required) | Space- or newline-separated URLs |
-| `fail-on-down` | `true` | Fail the step (exit 2) if any URL is unreachable |
+| `fail-on-down` | `true` | Fail the step (exit 2) if any URL returns HTTP 4xx/5xx or has a network error |
 | `fail-on-ssl-expiry-days` | `0` | Also fail if SSL expires within N days (`0` = off) |
 | `summary` | `true` | Write a Markdown table to the job summary |
 

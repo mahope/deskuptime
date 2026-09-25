@@ -6,6 +6,12 @@
  * and which common security headers are present.
  */
 
+import {
+  DEFAULT_TIMEOUT_MS,
+  describeFetchError,
+  isHealthyStatus,
+} from '../status.js';
+
 const SECURITY_HEADERS = [
   'strict-transport-security',
   'content-security-policy',
@@ -14,35 +20,45 @@ const SECURITY_HEADERS = [
   'referrer-policy',
 ];
 
+function emptySecurity() {
+  return Object.fromEntries(SECURITY_HEADERS.map(name => [name, null]));
+}
+
+function errorResult(originalUrl, currentUrl, error) {
+  return {
+    finalUrl: currentUrl,
+    redirected: currentUrl !== originalUrl,
+    steps: [],
+    reachable: false,
+    healthy: false,
+    statusCode: null,
+    forcesHttps: null,
+    startedHttp: originalUrl.startsWith('http://'),
+    server: null,
+    poweredBy: null,
+    security: emptySecurity(),
+    ...describeFetchError(error),
+  };
+}
+
 /**
  * Follow redirects manually so we can record the chain.
  * @param {string} url
  * @param {number} [maxRedirects=10]
  * @returns {Promise<object>} { finalUrl, redirected, steps[], forcesHttps, insecureStart, headers, security }
  */
-export function checkHeaders(url, maxRedirects = 10) {
+export function checkHeaders(url, maxRedirects = 10, options = {}) {
   const steps = [];
   let current = url;
-  let lastRes = null;
 
   return new Promise((resolve) => {
     const follow = (remaining) => {
-      let res;
-      try {
-        // redirect:'manual' lets us see each hop ourselves
-        res = fetch(current, {
-          method: 'GET',
-          redirect: 'manual',
-          signal: AbortSignal.timeout(15000),
-          headers: { 'user-agent': 'deskuptime-headers/0.1 (+https://github.com/mahope/deskuptime)' },
-        });
-      } catch (err) {
-        resolve({ finalUrl: current, redirected: steps.length > 0, steps, error: err.message });
-        return;
-      }
-      res.then((r) => {
-        lastRes = r;
-        // Release the body: an open undici stream at process.exit() trips a libuv assertion on Windows
+      fetch(current, {
+        method: 'GET',
+        redirect: 'manual',
+        signal: AbortSignal.timeout(options.timeoutMs ?? DEFAULT_TIMEOUT_MS),
+        headers: { 'user-agent': 'deskuptime-headers/0.1 (+https://github.com/mahope/deskuptime)' },
+      }).then((r) => {
         if (r.body) r.body.cancel().catch(() => {});
         const loc = r.headers.get('location');
         if (r.status >= 300 && r.status < 400 && loc && remaining > 0) {
@@ -60,8 +76,11 @@ export function checkHeaders(url, maxRedirects = 10) {
           }
         }
         finish(r);
-      }).catch((err) => {
-        resolve({ finalUrl: current, redirected: steps.length > 0, steps, error: err.message });
+      }).catch((error) => {
+        resolve({
+          ...errorResult(url, current, error),
+          steps,
+        });
       });
     };
 
@@ -73,16 +92,21 @@ export function checkHeaders(url, maxRedirects = 10) {
 
       const startIsHttp = url.startsWith('http://');
       const finalIsHttps = current.startsWith('https://');
+      const healthy = isHealthyStatus(r.status);
 
       resolve({
         finalUrl: current,
         redirected: steps.length > 0 || current !== url,
         steps,
+        reachable: true,
+        healthy,
         statusCode: r.status,
-        forcesHttps: startIsHttp ? finalIsHttps : null, // only meaningful if started on http
+        errorType: healthy ? null : 'http_error',
+        error: healthy ? null : `HTTP ${r.status}`,
+        forcesHttps: startIsHttp ? finalIsHttps : null,
         startedHttp: startIsHttp,
         server: h['server'] || null,
-        poweredBy: h['x-powered-by'] || null, // tech fingerprint leak
+        poweredBy: h['x-powered-by'] || null,
         security,
       });
     };

@@ -15,6 +15,7 @@ import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'fs';
 import { join } from 'path';
 import { homedir } from 'os';
 import { createHash } from 'crypto';
+import { assertValidHttpUrls } from './status.js';
 
 const FREE_URL_LIMIT = 3;
 const FREE_MIN_INTERVAL = 60;
@@ -57,6 +58,7 @@ function fmtNow() {
 export async function runPass(state) {
   const events = [];
   const urls = Object.keys(state.urls);
+  assertValidHttpUrls(urls);
 
   await Promise.all(urls.map(async (url) => {
     const entry = state.urls[url];
@@ -66,9 +68,9 @@ export async function runPass(state) {
 
     // Status transition (first pass only establishes baseline — no alarm)
     if (!firstPass) {
-      if (result.reachable && !entry.wasUp) {
+      if (result.healthy && !entry.wasUp) {
         events.push({ url, type: 'up', message: `is UP (${result.statusCode}) — ${result.responseTimeMs}ms` });
-      } else if (!result.reachable && entry.wasUp) {
+      } else if (!result.healthy && entry.wasUp) {
         events.push({ url, type: 'down', message: `is DOWN${result.error ? ' — ' + result.error : ''}` });
       }
     }
@@ -86,7 +88,7 @@ export async function runPass(state) {
     }
 
     entry.lastChecked = result.timestamp;
-    entry.wasUp = result.reachable;
+    entry.wasUp = result.healthy;
     entry.lastStatus = result.statusCode;
     if (result.content?.hash) entry.lastHash = result.content.hash;
     if (result.ssl?.validDays !== undefined) entry.sslValidDays = result.ssl.validDays;
@@ -141,6 +143,7 @@ export async function sendWebhook(webhookUrl, event) {
 export async function startWatch(urls, opts = {}) {
   const { webhookUrl } = opts;
   const state = loadState();
+  assertValidHttpUrls([...urls, ...Object.keys(state.urls)]);
   let pro = false;
 
   // Re-validate a stored license. Server outages keep a cached Pro status for 7 days.

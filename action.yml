@@ -1,8 +1,8 @@
 name: 'DeskUptime Check'
 description: >
   Uptime + SSL + content-change checks for one or more URLs.
-  Fails the job if any URL is down (exit 2), with JSON output
-  and optional GitHub Step Summary report.
+  Fails the job if any URL is unhealthy (HTTP 4xx/5xx or network error),
+  with JSON output and optional GitHub Step Summary report.
 branding:
   icon: 'activity'
   color: 'green'
@@ -12,7 +12,7 @@ inputs:
     description: 'Space- or newline-separated list of URLs to check'
     required: true
   fail-on-down:
-    description: 'Fail the workflow step if any URL is unreachable'
+    description: 'Fail the workflow step if any URL is unhealthy (HTTP 4xx/5xx or network error)'
     required: false
     default: 'true'
   fail-on-ssl-expiry-days:
@@ -29,7 +29,7 @@ outputs:
     description: 'Raw check results as a JSON array'
     value: ${{ steps.check.outputs.json }}
   down-count:
-    description: 'Number of unreachable URLs'
+    description: 'Number of unhealthy URLs (HTTP 4xx/5xx or network error)'
     value: ${{ steps.check.outputs.down }}
 
 runs:
@@ -42,6 +42,7 @@ runs:
         DU_FAIL_ON_DOWN: ${{ inputs.fail-on-down }}
         DU_SSL_DAYS: ${{ inputs.fail-on-ssl-expiry-days }}
         DU_SUMMARY: ${{ inputs.summary }}
+        DU_TIMEOUT: '15000'
       run: |
         set -euo pipefail
 
@@ -57,14 +58,19 @@ runs:
         node -e 'if (Number(process.versions.node.split(".")[0]) < 24) { console.error("::error::Node.js 24+ is required"); process.exit(1); }'
 
         # Normalize input to a space-separated URL list
-        URLS=$(echo "$DU_URLS" | tr '\n' ' ')
-        echo "Checking URLs: $URLS"
+        read -r -a URL_LIST <<< "$(printf '%s' "$DU_URLS" | tr '\n' ' ')"
+        echo "Checking URLs: ${URL_LIST[*]}"
 
         # Run check in --json mode; capture exit code without failing early
         set +e
-        OUT=$(node "$CLI" check $URLS --json)
+        OUT=$(node "$CLI" check "${URL_LIST[@]}" --json --timeout "$DU_TIMEOUT")
         CODE=$?
         set -e
+
+        if [ "$CODE" -ne 0 ] && [ "$CODE" -ne 2 ]; then
+          echo "::error::DeskUptime check failed with exit code $CODE"
+          exit "$CODE"
+        fi
 
         echo "$OUT"
         printf '%s' "$OUT" > deskuptime-results.json
@@ -72,7 +78,7 @@ runs:
         # Parse results with node (no jq dependency on runner)
         DOWN_COUNT=$(node -e '
           const r = JSON.parse(require("fs").readFileSync("deskuptime-results.json","utf8"));
-          console.log(r.filter(x => !x.reachable).length);
+          console.log(r.filter(x => !x.healthy).length);
         ')
         SSL_FAIL_COUNT=$(node -e '
           const days = parseInt(process.env.DU_SSL_DAYS || "0", 10);
@@ -80,7 +86,7 @@ runs:
           let n = 0;
           for (const x of r) {
             if (days > 0 && x.sslDaysRemaining !== null && x.sslDaysRemaining < days) n++;
-            else if (days > 0 && x.reachable && x.url.startsWith("https") && x.sslError) n++;
+            else if (days > 0 && x.healthy && x.url.startsWith("https") && x.sslError) n++;
           }
           console.log(n);
         ')
@@ -100,7 +106,7 @@ runs:
             node -e '
               const r = JSON.parse(require("fs").readFileSync("deskuptime-results.json","utf8"));
               for (const x of r) {
-                const s = x.reachable ? "✅ UP" : "❌ DOWN";
+                const s = x.healthy ? "✅ UP" : "❌ DOWN";
                 const ssl = x.sslDaysRemaining === null ? "—" : String(x.sslDaysRemaining);
                 console.log(`| ${x.url} | ${s} | ${x.statusCode ?? "—"} | ${x.responseTimeMs ?? "—"}ms | ${ssl} |`);
               }
@@ -111,7 +117,7 @@ runs:
 
         # Exit policy
         if [ "$DOWN_COUNT" -gt 0 ] && [ "$DU_FAIL_ON_DOWN" = "true" ]; then
-          echo "::error::$DOWN_COUNT URL(s) are DOWN"
+          echo "::error::$DOWN_COUNT URL(s) are unhealthy"
           exit 2
         fi
         if [ "$SSL_FAIL_COUNT" -gt 0 ]; then

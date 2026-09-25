@@ -1,9 +1,9 @@
 # IMPLEMENTATION_PLAN.md
 
 STATUS: I GANG
-Iteration: 3 — 2026-09-25
-Arbejdsgren: `ceo/runtime-audit`
-Næste handling: start P0-3 og gør 4xx/5xx, timeouts og connection refusal ensartede i CLI, GitHub Action og JSON.
+Iteration: 4 — 2026-09-25
+Arbejdsgren: `ceo/status-semantics`
+Næste handling: P0-3 er I GANG; gør 4xx/5xx, timeouts og connection refusal ensartede i CLI, GitHub Action og JSON.
 
 ## Mission
 
@@ -41,8 +41,8 @@ Den aktuelle gate-definition er registreret her:
 
 ### Korrekthed og brugerrejse
 
-- `src/checkers/ping.js:25-31,55-62` markerer ethvert HTTP-svar som reachable; 404/500 kan derfor blive UP og grønne i CLI/GitHub Action.
-- `src/cli.js:227-250` parser ikke `watch --once` eller `watch --status`, selv om README dokumenterer dem; begge kan hænge i den uendelige loop.
+- `src/checkers/ping.js` og `src/engine.js` skelnerer nu mellem `reachable` (HTTP-svar modtaget) og `healthy` (final status 200–399); timeouts og connection refusal har strukturerede `errorType`.
+- `src/cli.js` afviser nu alle URLs før første request, hvis blot én er ugyldig, og understøtter `--timeout` til deterministiske fejltests.
 - `src/watch.js:67-93,172-220` undertrykker første DOWN som “baseline”, gentager SSL-advarsler, og beregner Pro-begrænsninger kun ved start.
 - `src/watch.js:119-135` har webhook uden timeout/retry/outbox, og README/help lover email/Slack/push, som ikke findes i koden.
 - Desktopparitet, IPC- og UI-fund er overført til `mahope/deskuptime-desktop`; de skal ikke genåbnes i dette offentlige CLI-repo.
@@ -98,15 +98,17 @@ Den aktuelle gate-definition er registreret her:
 
 **Status 2026-09-25:** Færdig på `ceo/runtime-audit`. Node 24.21.0, `npm ci --ignore-scripts`, 26/26 tests og `npm run audit` med 0 sårbarheder er grønne; YAML, shell, JavaScript-syntax og diff-check er grønne. Fresh review fandt ingen P0/P1; sidste P2-planfund blev rettet.
 
-### P0-3 — TODO — Gør uptime-status og fejlhåndtering sand
+### P0-3 — I GANG — Gør uptime-status og fejlhåndtering sand
 
 **Begrundelse:** En 404/500 må ikke rapporteres som UP; det er den mest konkrete fejl i købs- og CI-flowet.
 
+**Statuspolitik:** `reachable` betyder blot, at et HTTP-svar blev modtaget. `healthy` er sand kun for final status 200–399 efter redirects; 400–599, timeout, connection refusal og andre netværksfejl er DOWN. CLI-exit 2 og Action `down-count` følger `healthy`, ikke `reachable`.
+
 **Acceptkriterier:**
 
-1. Der er en dokumenteret statuspolitik, fx `reachable` = svar modtaget og `healthy`/down = final status `>=400`; Node CLI, Action og Rust bruger samme beslutning.
+1. Statuspolitikken er dokumenteret og centraliseret: `reachable` = svar modtaget og `healthy`/DOWN = final status `>=400`; Node CLI og Action bruger samme beslutning. Rust-pariteten følger i det private desktoprepo.
 2. Deterministic lokale fixtures dækker 200, 204, redirect-til-200, 400, 404, 410, 500, timeout og connection refusal.
-3. CLI JSON, human output, exit codes, Action `down-count` og desktop UI/notification er enige for hver fixture.
+3. CLI JSON, human output, exit codes og Action `down-count` er enige for hver fixture. Desktop UI/notification-pariteten følger i `mahope/deskuptime-desktop`, efter at desktopkilden blev flyttet ud af dette offentlige repo.
 4. Én ugyldig URL i en fler-URL-kørsel fejler konfigurationskørslen i stedet for at blive sprunget over.
 5. `headers`-fejl returnerer et struktureret resultat og kan ikke crashinge output/loop.
 
@@ -250,7 +252,8 @@ Den aktuelle gate-definition er registreret her:
 
 - `2026-09-25`: Node-runtime `>=18` → `>=24`, den aktive LTS. Verificeret med Node 24.21.0; ingen application-kodeændring udover help-tekst var nødvendig.
 - `2026-09-25`: Nul runtime-/dev-dependencies bevaret; `package-lock.json` v3 tilføjet. `npm ci --ignore-scripts` og `npm run audit` er grønne med 0 sårbarheder.
-- `2026-09-25`: `npm test` er grøn med 26/26; `npm run lint` og `npm run build` findes ikke.
+- `2026-09-25`: `npm test` var grøn med 30/30 før P0-3; `npm run lint` og `npm run build` findes ikke.
+- `2026-09-25`: P0-3 tilføjede seks lokale status-/Action-/headers-/preflight-tests og udvidede den samlede CLI-gate; den endelige test-/audit-status noteres ved merge.
 - `2026-09-25`: Actions-størrelserne 4 → 7 ligger i rene Dependabot PR #2 og #3 og udskydes til separate P0-10/P0-11-commits.
 - `2026-09-25`: Fjern-CI `36105085970` på `ee8e8ab` passerede alle steps. Annotations advarer om eksisterende Actions v4 Node 20-runtime og fremtidig `ubuntu-latest`-migration; ingen ny blocker.
 

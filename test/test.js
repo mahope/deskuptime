@@ -51,8 +51,11 @@ test('cli: check without URLs exits non-zero', async () => {
   );
 });
 
-test('cli: check skips invalid URLs, errors when none valid', async () => {
-  await assert.rejects(() => run(process.execPath, [CLI, 'check', 'not-a-url']));
+test('cli: check rejects invalid URLs before running', async () => {
+  await assert.rejects(
+    () => run(process.execPath, [CLI, 'check', 'not-a-url']),
+    (error) => error.code === 1 && /Invalid URL: not-a-url/.test(error.stderr)
+  );
 });
 
 // ── Live check against example.com (network required) ──
@@ -70,6 +73,7 @@ test('cli: check --json outputs valid JSON array', { timeout: 30000 }, async () 
   assert.ok(Array.isArray(data));
   assert.equal(data[0].url, 'https://example.com');
   assert.equal(data[0].reachable, true);
+  assert.equal(data[0].healthy, true);
   assert.equal(data[0].statusCode, 200);
 });
 
