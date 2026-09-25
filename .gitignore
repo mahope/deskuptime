@@ -3,6 +3,8 @@ node_modules/
 # Build artifacts
 target/
 dist/
+deskuptime-*.tar.gz
+deskuptime-*.tar.gz.sha256
 
 # Desktop Pro (betalt) ligger i det private repo mahope/deskuptime-desktop
 desktop/
