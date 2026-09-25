@@ -1,6 +1,7 @@
 # Client report (`deskuptime report`) — spec
 
-Status: **del A + del B shippet 2026-09-25** (`ceo/agency-report`). This document
+Status: **del A + del B shippet 2026-09-25** (`ceo/agency-report`), **del C
+(30-dages historik) shippet 2026-09-26** (`ceo/report-history`). This document
 is the source of truth for the report's data model, privacy and format. It also
 records what is deliberately *not* built yet.
 
@@ -36,9 +37,42 @@ skriver og læser aldrig kan blive uvede. Uden en gennemført pass er værdien
 `addedAt` læses fra den eksisterende state, som `watch` allerede skriver.
 
 Rapporten dækker pr. site: `url`, `status` (`up`/`down`/`unknown`),
-`statusCode`, `uptimePercent`, `checks`, `failures`, `responseMs`,
+`statusCode`, `uptimePercent`, `window`, `checks`, `failures`, `responseMs`,
 `sslDaysRemaining`, `contentBytes`, `lastChecked`, `monitoringSince`, og en
 `summary` med antal sites/checks/failures.
+
+### 2b. Historik pr. døgn (del C)
+
+`Uptime (all)` alene er et svagt bevis: en bureau-monitorering, der startede i
+marts, har et "100 % siden start" uden at sige noget om den seneste måned. Derfor
+findes et **dags-bucket pr. URL pr. døgn** i `~/.deskuptime/history.json`, skrevet
+af `src/history.js`.
+
+En bucket er **to heltal**: `checks` og `failures`. En fejlet pass tæller med i
+nævneren — passet kørte, og kunden har ret til at se det. Dags er UTC-døgn, så et
+pass kl. 23:30 og et kl. 00:30 ikke havner i samme bucket.
+
+Filen er **begrænset ved konstruktion** og ikke ved håflighed:
+
+| Grænse | Værdi | Hvorfor |
+| --- | --- | --- |
+| Døgn pr. URL | 35 | 30-dages vinduet plus 5 dages slæk, så vinduet ikke er tomt, fordi et døgn endnu ikke er skrevet |
+| URL'er i filen | 500 | Følger sites, der fjernes igen, kan ikke vokse filen |
+| Pruning | ved skrivning | `pruneHistory()` kører i hvert pass |
+
+Historien skrives for **alle tiers**. Den er to heltal pr. site pr. døgn, og en
+gratisbruger der opgraderer skal ikke starte en 30-dages rapport med en tom
+måned. Det er rapporten — ikke optagelsen — der er Pro.
+
+Historie-filen er en **anden fil** end `state.json`, af to grunde: state skrives
+hvert pass og rummer licensnøglen, og historikken vokser med tiden. Blander man
+dem, bliver state uafgrænset og lander tællere ved siden af nøglen. Begge filer
+skrives `0600` i en `0700`-mappe og atomisk; en halvskrevet historik læses som
+tom, aldrig som en fejl.
+
+`window` i rapporten er `null`, når et site ikke har ét registreret døgn i
+vinduet, og vises som `—`. Det må aldrig vise 100 % fordi der ikke er data —
+samme regel som `uptimePercent`.
 
 ## 3. Privacy og redaktion
 
@@ -58,11 +92,15 @@ Det er her bureauet bliver solgt, og derfor er reglerne hårde:
 
 ## 4. Report-format
 
-`deskuptime report [--title "Client name"] [--json]`
+`deskuptime report [--title "Client name"] [--days N] [--json]`
 
 - Standard: Markdown med titel, genereringstidspunkt, én tabel
-  (Site / Status / Uptime / Response / SSL / Last check) og en resumelinje.
-  DOWN-sites står først, så en kunde ser det vigtigste uden at lede.
+  (Site / Status / Uptime (all) / Uptime (window) / Response / SSL / Last check)
+  og en resumelinje. DOWN-sites står først, så en kunde ser det vigtigste uden
+  at lede.
+- `--days N`: rapportvinduet, 1–35 (hvor meget historik der faktisk er gemt).
+  Uden flag er det 30. Uden for intervallet fejler kommandoen med en besked,
+  der siger hvorfor, i stedet for at ignorere tallet.
 - `--json`: ren JSON på stdout til CI og bureauets egne systemer.
 - `--title` fladtes til én kort linje (maks. 120 tegn) — titlen ender i en fil,
   der videresendes.
@@ -82,6 +120,15 @@ Det er her bureauet bliver solgt, og derfor er reglerne hårde:
 
 ## 6. Bevis og mutationstest
 
+- `test/history.test.js` (17 tests): historikken ligger ved siden af state på
+  alle platforme og følger en omdirigeret state-fil (aldrig til den rigtige
+  home), UTC-dagsbucketting, at en fejlet pass tæller med, at en bucket kun
+  indeholder to heltal (ingen hash/status/fejltekst), 35-dages pruning + 500-URL
+  -loftet, håndskrevet/halvskrevet historik (`failures > checks` kan ikke give
+  negativ uptime), filrettigheder og atomisk skrivning, at en pass der ikke kan
+  skrive historien alligevel fuldføres og gemmer state, at vinduet kun tæller
+  registrerede døgn (aldrig fremtidige), og at `--days` afvises i stedet for at
+  ignoreres.
 - `test/report.test.js`: uptime-matematik inkl. nul-passes, `recordPass`-
   tælling via rigtige `runPass`-kald, at en DOWN-side står først, at
   `|`/`<script>`/newline i en URL ikke kan ødelægge tabellen, at licensnøglen
@@ -95,8 +142,11 @@ Det er her bureauet bliver solgt, og derfor er reglerne hårde:
 - **Hostet status-side** med offentligt URL og flere læsere. Kræver en server,
   et domæne og en driftsaftale — ikke denne iteration, og uden Mads' beslutning
   (❓ 3 i `IMPLEMENTATION_PLAN.md`).
-- **Historik per døgn.** Tællerne er all-time og vokser ikke med tiden; en
-  30-dages tidsserie kræver enten ring-buffer pr. URL eller et separat format.
+- **Dags-tidsserie pr. site** (en linje pr. døgn med antal fejl) og en graf.
+  Buckets er tællere, ikke tidsserier: tidsrummet med forhåndsvisning af
+  hver enkelt pass er ikke bygget, fordi det gemmer mange flere tal pr. URL.
+- **Uptime-tal pr. kalenderperiode** ("august 2026"). Vinduet er rullende
+  `--days N`, ikke en måned.
 - **Faktura/layout, månedstal, logo.** Titlen er den eneste branding i dag.
 - **Dansk rapporttekst.** CLI'en er engelsk; rapporten følger CLI'en. En
   `--lang da`-udgave er en lille, selvstændig opgave.

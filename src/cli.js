@@ -18,6 +18,7 @@ import { readFileSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { invalidHttpUrls } from './status.js';
+import { DEFAULT_WINDOW_DAYS, HISTORY_DAYS, loadHistory } from './history.js';
 import { FREE, PRODUCT, renderHelpPro } from './features.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -42,7 +43,7 @@ USAGE:
   deskuptime watch <url> [--interval 300] [--webhook URL]  Monitor in background (free: up to ${FREE.urlLimit} URLs)
   deskuptime watch <url> --once                      Run one monitoring pass and exit
   deskuptime watch --status                         Show status without network checks
-  deskuptime report [--title "Client"] [--json]     Client-ready uptime report (Pro)
+  deskuptime report [--title "Client"] [--days 30] [--json]  Client-ready uptime report (Pro)
   deskuptime activate <key>     Unlock Pro with your license key
   deskuptime deactivate         Free this machine's Pro seat (${PRODUCT.machines} machines per license)
   deskuptime status             Show license state (active/cached/unverified/invalid/free) + monitored URLs
@@ -54,6 +55,7 @@ EXAMPLES:
   deskuptime check https://site1.com https://site2.com
   deskuptime watch https://mystore.com --interval 300
   deskuptime report --title "Acme — uptime September" > acme-september.md
+  deskuptime report --days 7 --title "Acme — this week" > acme-week.md
 
   watch --once exits 0 when all URLs are healthy, 2 when any is DOWN, and 1 for invalid usage.
 
@@ -445,7 +447,7 @@ if (command === 'status') {
 // ── Report (Pro: a client-ready uptime report) ──
 if (command === 'report') {
   const raw = args.slice(1);
-  const allowedFlags = new Set(['--json', '--title']);
+  const allowedFlags = new Set(['--json', '--title', '--days']);
   const unknownFlag = raw.find(value => value.startsWith('-') && !allowedFlags.has(value));
   if (unknownFlag) {
     console.error(`❌ Error: Unknown option: ${unknownFlag}`);
@@ -461,14 +463,30 @@ if (command === 'report') {
       process.exit(1);
     }
   }
+
+  // The window a client report covers. Clamped to what is actually kept on
+  // disk, so a bigger number can never look like more history than exists.
+  let windowDays = DEFAULT_WINDOW_DAYS;
+  const daysIndex = raw.indexOf('--days');
+  if (daysIndex !== -1) {
+    const value = raw[daysIndex + 1];
+    const days = Number(value);
+    if (value === undefined || value.startsWith('-') || !Number.isInteger(days) || days < 1 || days > HISTORY_DAYS) {
+      console.error(`❌ Error: --days must be a whole number between 1 and ${HISTORY_DAYS} (that is how much history is kept)`);
+      process.exit(1);
+    }
+    windowDays = days;
+  }
+
   const unexpectedArg = raw.find((value, index) => {
     if (value === '--json') return false;
     if (titleIndex !== -1 && (index === titleIndex || index === titleIndex + 1)) return false;
+    if (daysIndex !== -1 && (index === daysIndex || index === daysIndex + 1)) return false;
     return true;
   });
   if (unexpectedArg) {
     console.error(`❌ Error: Unexpected argument: ${unexpectedArg}`);
-    console.error('Usage: deskuptime report [--title "Client name"] [--json]');
+    console.error('Usage: deskuptime report [--title "Client name"] [--days N] [--json]');
     process.exit(1);
   }
 
@@ -488,7 +506,7 @@ if (command === 'report') {
 
   // Read-only: no request is made, so the report always describes the last
   // completed pass. Run `deskuptime watch <url> --once` first for a fresh one.
-  const report = buildReport(state, { title });
+  const report = buildReport(state, { title, history: loadHistory(), windowDays });
   console.log(args.includes('--json') ? renderReportJson(report) : renderReportMarkdown(report));
 }
 

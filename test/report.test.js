@@ -150,8 +150,8 @@ test('a hostile URL cannot break the table or turn into markup', () => {
   }, { now: NOW }));
   const table = rows(markdown);
   assert.equal(table.length, 1, `a URL with pipes and newlines produced ${table.length} rows`);
-  // Six columns means five unescaped pipes; every pipe from the URL is escaped.
-  assert.equal(table[0].split(/(?<!\\)\|/).length, 8);
+  // Seven columns means six unescaped pipes; every pipe from the URL is escaped.
+  assert.equal(table[0].split(/(?<!\\)\|/).length, 9);
   assert.ok(!markdown.includes('<script>'), 'the URL was not escaped and can become markup');
   assert.ok(markdown.includes('&lt;script&gt;'));
   // No response time or SSL day is invented for a pass that never ran.
@@ -167,7 +167,7 @@ test('the license record can never reach the report', () => {
     assert.ok(!text.includes('device_id') && !text.includes('deskuptime-agency'), 'machine identity leaked');
     assert.ok(!text.includes('instance'));
   }
-  assert.deepEqual(Object.keys(built).sort(), ['generatedAt', 'sites', 'summary', 'title', 'tool']);
+  assert.deepEqual(Object.keys(built).sort(), ['generatedAt', 'sites', 'summary', 'title', 'tool', 'windowDays']);
   for (const site of built.sites) {
     for (const key of Object.keys(site)) {
       assert.ok(!/license|key|instance|hash/i.test(key), `unexpected report field: ${key}`);

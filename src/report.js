@@ -8,18 +8,21 @@
  * upload, and nothing that identifies the machine.
  *
  * Privacy rules, enforced by test/report.test.js:
- *   - only `state.urls` is read. The license record (key, device id) is never
- *     passed in, so it cannot leak into a report that leaves the machine;
+ *   - only `state.urls` and the counters in `history` are read. The license
+ *     record (key, device id) is never passed in, so it cannot leak into a
+ *     report that leaves the machine;
  *   - no page content, no response headers, no content hash, no IP addresses;
  *   - nothing is written and no request is made — the report is a read of the
  *     last completed pass, so it works offline and cannot be a health check in
  *     disguise. Run `deskuptime watch <url> --once` for a fresh pass.
  *
- * The counters this renders are two integers per URL (see `recordPass`), so the
- * state file stays bounded no matter how long the watch loop runs.
+ * The counters this renders are two integers per URL (see `recordPass`) plus
+ * two integers per URL per day (`src/history.js`), so neither file can grow
+ * with the length of the monitoring history.
  */
 
 import { PRODUCT } from './features.js';
+import { DEFAULT_WINDOW_DAYS, windowSummary } from './history.js';
 
 export const DEFAULT_REPORT_TITLE = 'Website uptime report';
 const MAX_TITLE_LENGTH = 120;
@@ -81,10 +84,13 @@ export function normalizeTitle(title) {
 }
 
 /**
- * Build the report from state.urls only. `state.license` is not read, not
- * copied and not reachable from the returned object.
+ * Build the report from state.urls and the daily history counters only.
+ * `state.license` is not read, not copied and not reachable from the result.
+ *
+ * `windowDays` is the reporting window (default 30). A site with no recorded
+ * day inside it gets `window: null`, which renders as — and never as 100 %.
  */
-export function buildReport(state, { title, now = new Date() } = {}) {
+export function buildReport(state, { title, now = new Date(), history, windowDays = DEFAULT_WINDOW_DAYS } = {}) {
   const sites = Object.entries(state?.urls ?? {})
     .filter(([url, entry]) => typeof url === 'string' && url && entry && typeof entry === 'object')
     .map(([url, entry]) => {
@@ -95,6 +101,7 @@ export function buildReport(state, { title, now = new Date() } = {}) {
         status: siteStatus(entry),
         statusCode: Number.isInteger(entry.lastStatus) ? entry.lastStatus : null,
         uptimePercent: uptimePercent(entry),
+        window: windowSummary(history, url, { days: windowDays, now, uptimePercent }),
         checks,
         failures: checks - checksUp,
         responseMs: Number.isFinite(entry.lastResponseMs) ? entry.lastResponseMs : null,
@@ -120,6 +127,7 @@ export function buildReport(state, { title, now = new Date() } = {}) {
     generatedAt: now.toISOString(),
     title: normalizeTitle(title),
     tool: `${PRODUCT.proName} (${PRODUCT.name} CLI)`,
+    windowDays,
     summary,
     sites,
   };
@@ -157,14 +165,23 @@ function statusCell(site) {
   return 'not checked yet';
 }
 
-const HEADERS = ['Site', 'Status', 'Uptime', 'Response', 'SSL', 'Last check'];
+function windowCell(site, windowDays) {
+  const window = site.window;
+  if (!window) return `— (no pass in the last ${windowDays} d)`;
+  const failures = window.failures > 0 ? `, ${window.failures} failed` : '';
+  return `${window.uptimePercent}% (${window.days} recorded d, ${window.checks} checks${failures})`;
+}
+
+const HEADERS = ['Site', 'Status', 'Uptime (all)', 'Uptime (window)', 'Response', 'SSL', 'Last check'];
 
 export function renderReportMarkdown(report) {
+  const windowDays = report.windowDays || DEFAULT_WINDOW_DAYS;
   const rows = report.sites.map(site => {
     const cells = [
       cell(site.url),
       cell(statusCell(site)),
       cell(uptimeCell(site)),
+      cell(windowCell(site, windowDays)),
       cell(site.responseMs === null ? '—' : `${site.responseMs} ms`),
       cell(site.sslDaysRemaining === null ? '—' : `${site.sslDaysRemaining} d`),
       cell(shortTime(site.lastChecked)),
@@ -184,11 +201,11 @@ export function renderReportMarkdown(report) {
     '',
     `| ${HEADERS.join(' | ')} |`,
     `|${' --- |'.repeat(HEADERS.length)}`,
-    ...(rows.length > 0 ? rows : ['| _no monitored sites_ | — | — | — | — | — |']),
+    ...(rows.length > 0 ? rows : [`| ${['_no monitored sites_', '—', '—', '—', '—', '—', '—'].join(' | ')} |`]),
     '',
     `**${report.summary.sites} site(s) · ${report.summary.up} up · ${report.summary.down} down · ${report.summary.checks} checks · ${report.summary.failures} failed**`,
     '',
-    `Uptime is the share of completed monitoring passes that answered HTTP 200–399, counted per site${since ? ` since it was added (earliest ${shortTime(since)})` : ''}. A site with no completed pass yet shows — rather than 100%.`,
+    `Uptime is the share of completed monitoring passes that answered HTTP 200–399. "Uptime (all)" counts every pass since the site was added${since ? ` (earliest ${shortTime(since)})` : ''}; "Uptime (window)" counts the passes recorded in the last ${windowDays} days. A site with no completed pass yet shows — rather than 100%.`,
     '',
     `Generated on one machine, without an account: no page content, response headers or license data is included, and nothing was uploaded.`,
   ].join('\n');

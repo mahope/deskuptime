@@ -19,6 +19,7 @@ import { homedir } from 'os';
 import { createHash, randomUUID } from 'crypto';
 import { assertValidHttpUrls } from './status.js';
 import { recordPass } from './report.js';
+import { loadHistory, pruneHistory, recordHistoryPass, saveHistory } from './history.js';
 import { FREE, PRO, PRODUCT } from './features.js';
 
 const LICENSE_RECHECK_MS = 24 * 60 * 60 * 1000;
@@ -140,6 +141,11 @@ export async function runPass(state, opts = {}) {
   const urls = Object.keys(state.urls);
   assertValidHttpUrls(urls);
   const check = opts.check || checkUrl;
+  // Daily counters for the client report's "last 30 days" column. Recorded for
+  // every tier: history is two integers per site per day, and a free user who
+  // upgrades should not start a 30-day report with an empty month.
+  const now = opts.now instanceof Date ? opts.now : new Date();
+  const history = loadHistory(opts);
 
   const results = await Promise.all(urls.map((url) => {
     const entry = state.urls[url];
@@ -188,11 +194,21 @@ export async function runPass(state, opts = {}) {
     // Uptime counters for the client report. Two integers per URL, so the
     // state file cannot grow with the length of the monitoring history.
     recordPass(entry, result);
+    recordHistoryPass(history, url, result, { now });
     if (result.content?.hash) entry.lastHash = result.content.hash;
     if (Number.isFinite(result.content?.contentLength)) entry.lastContentLength = result.content.contentLength;
   }
 
   saveState(state, opts);
+  try {
+    // Pruned on write, so the history file is bounded no matter how long the
+    // loop runs. A failure here must never take down monitoring: the state file
+    // above is the source of truth, and a missing day only costs the report one
+    // column, while a throw here would stop every URL from being checked.
+    saveHistory(pruneHistory(history, { now }), opts);
+  } catch (error) {
+    console.error(`⚠️  Could not write the uptime history: ${error.message}`);
+  }
   const pass = {
     events,
     results,
