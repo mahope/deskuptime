@@ -190,7 +190,7 @@ Den aktuelle gate-definition er registreret her:
 
 ### P0-10 — TODO — Opgrader actions/checkout 4 → 7 i en commit
 
-**Begrundelse:** Dependabot PR #3 er ren og foreslår den aktuelle major; brugerkontrakten kræver én major-opgradering pr. commit.
+**Begrundelse:** CI-run `36105085970` markerer `actions/checkout@v4`s Node 20-runtime som deprecated. Dependabot PR #3 er ren og foreslår major 7; brugerkontrakten kræver én major-opgradering pr. commit.
 
 **Acceptkriterier:**
 
@@ -200,7 +200,7 @@ Den aktuelle gate-definition er registreret her:
 
 ### P0-11 — TODO — Opgrader actions/setup-node 4 → 7 i en commit
 
-**Begrundelse:** Dependabot PR #2 er ren og foreslår den aktuelle major; den skal merge separat efter P0-10.
+**Begrundelse:** CI-run `36105085970` markerer `actions/setup-node@v4`s Node 20-runtime som deprecated. Dependabot PR #2 er ren og foreslår major 7; den skal merge separat efter P0-10.
 
 **Acceptkriterier:**
 
@@ -252,6 +252,7 @@ Den aktuelle gate-definition er registreret her:
 - `2026-09-25`: Nul runtime-/dev-dependencies bevaret; `package-lock.json` v3 tilføjet. `npm ci --ignore-scripts` og `npm run audit` er grønne med 0 sårbarheder.
 - `2026-09-25`: `npm test` er grøn med 26/26; `npm run lint` og `npm run build` findes ikke.
 - `2026-09-25`: Actions-størrelserne 4 → 7 ligger i rene Dependabot PR #2 og #3 og udskydes til separate P0-10/P0-11-commits.
+- `2026-09-25`: Fjern-CI `36105085970` på `ee8e8ab` passerede alle steps. Annotations advarer om eksisterende Actions v4 Node 20-runtime og fremtidig `ubuntu-latest`-migration; ingen ny blocker.
 
 ### Historisk desktop-iteration før repoopdelingen
 
