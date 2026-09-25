@@ -1,9 +1,9 @@
 # IMPLEMENTATION_PLAN.md
 
 STATUS: I GANG
-Iteration: 5 — 2026-09-25
-Arbejdsgren: `main` via `ceo/watch-truth`
-Næste handling: P0-4 er færdig i `364ae0d` + `4e685df` og mergeret kl. 2026-09-25T14:26:12Z; næste iteration starter P0-5.
+Iteration: 6 — 2026-09-25
+Arbejdsgren: `main` via `ceo/pro-claims`
+Næste handling: P0-5 er færdig i `4024d08` og mergeret kl. 2026-09-25T15:42:30Z; næste iteration starter P0-12 (live-sitens email-claim) og derefter P0-6.
 
 ## Mission
 
@@ -25,7 +25,7 @@ Dette offentlige repo leverer den gratis, fuldt brugbare DeskUptime-CLI (MIT). D
 Den aktuelle gate-definition er registreret her:
 
 - Root: `npm ci --ignore-scripts` skal lykkes med den committede lockfil.
-- Root: `npm test` (45 tests, 45 passed på Node 24 efter P0-4).
+- Root: `npm test` (55 tests, 55 passed på Node 26 efter P0-5).
 - Root: `npm run audit` skal rapportere 0 sårbarheder.
 - Root: `npm run lint` findes ikke i `package.json`; rapporteres som manglende gate, ikke som grønt.
 - Root: `npm run build` findes ikke i `package.json`; der er ingen JS-build/typecheck-script.
@@ -45,11 +45,13 @@ Den aktuelle gate-definition er registreret her:
 - `src/cli.js` afviser nu alle URLs før første request, hvis blot én er ugyldig, og understøtter `--timeout` til deterministiske fejltests.
 - `watch --once` gør én gemt pass med exit 0/2/1, låser state mod samtidige cron-kørsler og afviser configfejl før request; `watch --status` er read-only.
 - `src/watch.js` gemmer DOWN-baseline, latcher SSL-advarsel gennem unavailable checks til recovery over 14 dage og bruger gemt content-hash ved næste pass.
-- `src/watch.js` har webhook uden timeout/retry/outbox, og README/help lover email/Slack/push, som ikke findes i koden.
+- `docs/pro-alerts.md` er source of truth for kanaler, payload, offline-adfærd og privacy; `test/claims.test.js` låser README/help mod den.
+- `src/watch.js` sender nu webhook med 10 s hard timeout og uden retry (best-effort), returnerer true/false, og `--webhook` uden aktiv Pro-licens advarer med købslink i stedet for at tie.
+- `deskuptime.com` er live (HTTP 200 verificeret 2026-09-25) men har ingen desktop-download; det reelle download er GitHub-releasen `desktop-v0.2.7` med macOS/Windows-assets.
+- Den eksterne produktside og Stripe-fulfillment ligger uden for repoet og kan ikke verificeres endeligt her.
 - Desktopparitet, IPC- og UI-fund er overført til `mahope/deskuptime-desktop`; de skal ikke genåbnes i dette offentlige CLI-repo.
 - `src/license.js:14,40-42` bruger `os.hostname()`, mens Rust bruger `COMPUTERNAME` på Windows. På berørte maskiner kan CLI og desktop derfor bruge to licenspladser. Gemte `license.instance`/`instance_id` migrerer ikke automatisk ved en generatorændring.
 - `tools/make_tarball.sh:14` udelader `src/checkers/headers.js`; `tools/install.sh:6` er fastsat til 0.1.4; npm/tarball/desktop-versioner er ikke synkroniserede.
-- Den eksterne produktside og Stripe-fulfillment ligger uden for repoet og kan ikke verificeres endeligt her.
 
 ## Prioriteret kø
 
@@ -130,19 +132,45 @@ Den aktuelle gate-definition er registreret her:
 
 **Status 2026-09-25:** Færdig i `364ae0d` + `4e685df` på `ceo/watch-truth`. `watch URL --once` laver én pass, persisterer atomisk state og bruger exit 0/2/1; samtidige one-shot-processer afvises med exit 1 uden state-skrivning. `watch --status` laver nul requests og ændrer ikke state. Temp-HOME-tests dækker baseline DOWN, UP/DOWN-sekvenser, gemt content-hash, SSL 14 → unavailable → 14 → 15 → 14, fri URL-kapacitet, tomme flagværdier og intervalgrænse. Node 24.21.0: `npm ci --ignore-scripts`, 45/45 tests, audit 0/0, JavaScript-syntax og diff-check er grønne. Fresh review fandt to P1, tre P2 og ét P3; P1 race/flagfund samt free-limit/intervalfund blev rettet. Korrupt state håndteres fortsat som tom state og følger P0-7's valideringskrav; kanalclaim-pariteten følger P0-5.
 
-### P0-5 — TODO — Skriv Pro-spec og gør produktobne ærlige
+### P0-5 — FÆRDIG — Skriv Pro-spec og gør produktobne ærlige
 
 **Begrundelse:** Betalte brugere betaler i dag for en delvist manglende værdi; email/Slack/desktop-webhook er lovet, men kun generisk CLI-webhook findes.
 
-**Før implementering:** Opret `docs/pro-alerts.md` (eller tilsvarende) med kanalmatrix, payloadschema, timeout/retry, auth/signering, offline-adfærd, pris/entitlement og privacy.
+**Før implementering:** `docs/pro-alerts.md` er oprettet med kanalmatrix, payloadschema, timeout/retry, auth/signering, offline-adfærd, pris/entitlement og privacy.
 
 **Acceptkriterier:**
 
 1. Én matrix bestemmer gratis/Pro for CLI one-off, CLI watch, desktop, tray/local notifications, ubegrænsede URLs, email, webhook, Slack/Discord/Teams, rapporter og batch.
 2. Hver lovet kanal har implementering eller fjernes fra alle kundeflader; ingen “coming soon”-claim i købsflowet.
 3. Gratisbrugere får en tydelig, ikke-forstyrrende upgrade-vej hvor de mangler funktionen.
-4. Ét køb-link pr. side, kun det aftalte DeskUptime Pro-link; donationen forblir diskret og bruges kun ved naturligt tak.
+4. Ét køb-link pr. side, kun det aftalte DeskUptime Pro-link; donationen forbliver diskret og bruges kun ved naturligt tak.
 5. Specen er godkendt før en større Pro-implementering; ingen nye Stripe-produkter/priser.
+
+**Fund og rettelser:**
+
+- README lovede “Email/Slack/webhook alerts”; kun generisk webhook fandtes. Fjernet, og matrixen siger udtrykkeligt at email og Slack/Discord/Teams **ikke** er implementeret.
+- CLI-hjælpen lovede “Email/push alerts”. Fjernet; push er nu præcist “lokal desktop-notification (macOS)”, og CLI'en siger det til Pro-brugere på Windows/Linux.
+- **Fejlkøb-fund:** `--webhook` på en gratis konta skrev “Webhook alerts on.”, men `sendWebhook` var Pro-gated og aldrig kaldte. En gratisbruger troede han fik alarmer. Nu advares med købslink, banneren er ærlig, og terminalalerts fortsætter.
+- **Robusthedsfund:** `fetch` til webhook havde ingen timeout, så et hangende endpoint kunne låse hele overvågningsloopet. Nu `AbortSignal.timeout(10s)`, `sendWebhook` returnerer true/false, ingen retry (dokumenteret best-effort).
+- README pegede på `deskuptime.com` som downloadkilde. Domænet **er** live (HTTP 200 verificeret), men har ingen download; det reelle download er `github.com/mahope/deskuptime/releases/tag/desktop-v0.2.7` (macOS-arm64/x64 + Windows exe/msi, reelle downloadtal). README peger nu på releasen og har produkt-siden som link.
+- Gratis-grænsen (3 URL'er) sagde “Run deskuptime activate” uden købsvej; den peger nu på det aftalte Stripe-link gennem én `upgradeHint()`.
+- `package.json` `files` manglede `docs/`, så README's link til `docs/pro-alerts.md` ville være dødt i npm-pakken. Tilføjet.
+
+**Status 2026-09-25:** Færdig i `4024d08` på `ceo/pro-claims`. `test/claims.test.js` (6 tests) og `test/webhook.test.js` (4 tests) er nye og låser claims, links, payload og timeout. Node 26.7.0: `npm ci --ignore-scripts`, 55/55 tests, audit 0/0, `node --check` og `git diff --check` grønne. Fast-forward-merge til `main` skete 2026-09-25T15:42:30Z. Den eksterne live-side har **sin egen** email-claim og følges i P0-12.
+
+### P0-12 — TODO — Ret email-claimen på den live produktside
+
+**Begrundelse:** `https://deskuptime.com/` er verificeret live 2026-09-25 og viser i sammenligningstabellen “Email and webhook alerts — — yes” for Desktop Pro, og skriver “Removes the three-site limit and adds email and webhook alerts.” Ingen email-implementation findes i CLI'en eller i den private desktop-kilde. Det er et køb, der ikke leverer, på den mest synlige kundeflade.
+
+**Omfang:** Sidens kilder ligger uden for dette repo, så rettelsen kan ikke ske her. Find repoet (Cloudflare Pages-kilde til `deskuptime.com`) og ret claimen til matrixen i `docs/pro-alerts.md` §1.
+
+**Acceptkriterier:**
+
+1. Siden kun hævder de kanaler, der findes: webhook fra CLI-watch og lokale notifications i desktopappen.
+2. Siden og README viser den samme gratis/Pro-matrix; afvigelser er løst, ikke forklaret.
+3. Købsknappen er uændret: kun `https://buy.stripe.com/7sY9AS9eX3Iu418fJ5bMQ01`.
+4. `llms.txt`, `/da/`-siden og sitemap har samme ærlighed som forsiden.
+5. Hvis email besluttes implementeret, flyttes claimen tilbage samtidig med koden — aldrig før.
 
 ### P0-6 — TODO — Ensret Windows device_id i CLI
 
@@ -157,7 +185,7 @@ Den aktuelle gate-definition er registreret her:
 3. Et versioneret Node golden fixture giver den tilsigtede id-generator; Rust-golden og fælles maskintest følger i `mahope/deskuptime-desktop`.
 4. En eksisterende installation med et gammelt gemt id kræver en dokumenteret migrerings-/alias-proces i det private repo, før cross-client-opløsning erklæres færdig.
 
-### P0-7 — I DELT — Hårdgør licenslifecycle
+### P0-7 — TODO — Hårdgør licenslifecycle
 
 **Begrundelse:** Betalende brugere må ikke låses ude ved timeout/5xx, men revoked/expired må heller ikke fortsætte at få Pro. Node-delen er offentlig; desktopdeactivation og Rust-timeouts følger i det private repo.
 
@@ -257,7 +285,8 @@ Den aktuelle gate-definition er registreret her:
 
 - `2026-09-25`: Node-runtime `>=18` → `>=24`, den aktive LTS. Verificeret med Node 24.21.0; ingen application-kodeændring udover help-tekst var nødvendig.
 - `2026-09-25`: Nul runtime-/dev-dependencies bevaret; `package-lock.json` v3 tilføjet. `npm ci --ignore-scripts` og `npm run audit` er grønne med 0 sårbarheder.
-- `2026-09-25`: `npm test` er grøn med 45/45 efter P0-4; `npm run lint` og `npm run build` findes ikke.
+- `2026-09-25`: `npm test` er grøn med 55/55 efter P0-5; `npm run lint` og `npm run build` findes ikke.
+- `2026-09-25`: P0-5 tilføjede 10 tests (6 claims-konformance + 4 webhook). Webhook har nu 10 s timeout; claims låst mod `docs/pro-alerts.md`. Node 26.7.0, `npm ci --ignore-scripts`, audit 0/0, `node --check` og `git diff --check` grønne.
 - `2026-09-25`: P0-4 tilføjede 13 isolerede watch/state-tests. Node 24.21.0, `npm ci --ignore-scripts`, audit 0/0, JavaScript-syntax og diff-check er grønne; fresh review-fund blev triageret og rettet eller eksplicit flyttet til P0-5/P0-7.
 - `2026-09-25`: P0-3 tilføjede seks lokale status-/Action-/headers-/preflight-tests. Node 24.21.0, `npm ci --ignore-scripts`, audit 0/0, JavaScript-syntax og diff-check er grønne; fresh review fandt ingen P0/P1.
 - `2026-09-25`: Actions-størrelserne 4 → 7 ligger i rene Dependabot PR #2 og #3 og udskydes til separate P0-10/P0-11-commits.
@@ -273,7 +302,7 @@ Den aktuelle gate-definition er registreret her:
 ## ❓ Til Mads
 
 1. Hvad er den endelige gratis/Pro-matrix? Skal desktoptray og lokale notifications være gratis, eller kun Pro? README, kode og mission peger i dag i forskellige retninger.
-2. Skal Pro email og Slack/Discord/Teams implementeres nu, eller skal de fjernes fra kundeclaims indtil de findes? Den nuværende kode understøtter kun CLI-generisk webhook.
+2. Skal Pro email og Slack/Discord/Teams implementeres nu, eller skal de forblive uden for matrixen, indtil de er bygget? P0-5 har fjernet dem fra alle overflader i dette repo og noteret dem som ikke-implementeret; **live-siten `deskuptime.com` hævder stadig email for Desktop Pro** (se P0-12). Svar på spørgsmålet afgør både næste CLI-opgave og sitens claim.
 3. Hvilken rapport/status-side skal være første bureau-feature, og hvilke data må en kunde-rapport indeholde?
 4. Skal det eksisterende Stripe Payment Link verificeres manuelt for pris, valuta, fulfillment og license-key før næste release? Ingen betaling eller Stripe-write udføres af agenten.
 5. Er der allerede Mahope/Stripe-aktiveringer fra pre-release Windows-builds, der kræver device_id-migration? Det afgør, om minimal generator-fix er nok.
@@ -293,3 +322,4 @@ Den aktuelle gate-definition er registreret her:
 - **Iteration 3 (P0-2):** Commit `6b81803` kræver Node 24 på tværs af CLI, workflows, Action og dokumentation, tilføjer lockfil/audit og afslutter den offentlige desktop-rekonciliering. Merge til `main` og push af begge grene skete 2026-09-25T06:54:55Z. Node 24.21.0, 26/26 tests, audit 0/0, YAML/shell/syntax/diff og to reviewpass er grønne; næste opgave er P0-3.
 - **Iteration 4 (P0-3):** Commit `5f8ff4c` gør 4xx/5xx, redirects til fejl, timeout og connection refusal konsekvent DOWN i CLI, JSON, watch-status og GitHub Action, mens `reachable` fortsat betyder modtaget HTTP-svar. Batch-validering, strukturerede headers-fejl og seks lokale tests er tilføjet. Node 24.21.0, 32/32 tests, audit 0/0, syntax/diff og fresh review uden P0/P1 er grønne. Fast-forward-merge til `main` skete 2026-09-25T09:24:49Z; næste opgave er P0-4.
 - **Iteration 5 (P0-4):** Commits `364ae0d` og `4e685df` gør `watch --once` single-pass, persisterende og exit-korrekt, gør `watch --status` read-only, latcher DOWN/SSL/content-begivenheder korrekt og forhindrer samtidige state-tab med et kortlevende process-lock. Temp-HOME- og CLI-tests dækker de seks acceptkriterier samt reviewfund. Node 24.21.0, 45/45 tests, audit 0/0, syntax/diff er grønne. Fast-forward-merge til `main` skete 2026-09-25T14:26:12Z; næste opgave er P0-5.
+- **Iteration 6 (P0-5):** Commit `4024d08` gør produktobne ærlige. `docs/pro-alerts.md` er source of truth med kanalmatrix, webhook-payload, timeout/retry, offline-adfærd og privacy. README's email/Slack-claim og hjælpens email/push-claim er væk; `--webhook` uden Pro-licens lyder nu med købslink i stedet for at tie; webhook har 10 s timeout og returnerer status; gratis-grænsen peger på købslinket. Desktop-download peger på den verificerede release `desktop-v0.2.7`, ikke på et domæne uden download. 10 nye tests. Node 26.7.0, 55/55 tests, audit 0/0, syntax/diff grønne. Fast-forward-merge til `main` skete 2026-09-25T15:42:30Z. **Nyt fund:** live-siten `deskuptime.com` (verificeret HTTP 200) hævder stadig email-alerts for Desktop Pro → P0-12; næste iteration starter P0-12 og derefter P0-6.
