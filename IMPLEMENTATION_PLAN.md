@@ -3,7 +3,7 @@
 STATUS: I GANG
 Iteration: 2 — 2026-09-25
 Arbejdsgren: `ceo/desktop-security`
-Næste handling: committér review-rettelserne, merge til `main`, og fortsæt med Windows-/interaktiv smoke før P0-1 afsluttes.
+Næste handling: kør Windows-/interaktiv desktop-smoke; hvis den ikke kan køres i dette miljø, dokumentér præcis hvor den mangler og fortsæt med næste prioriterede opgave.
 
 ## Mission
 
@@ -253,3 +253,4 @@ Den første gate-definition er registreret her:
 ## Iterationslog
 
 - **Iteration 1 (research):** Planen manglede ved start. Repoet, missionen, Stripe-/licenskontrakten, CLI/desktoparkitekturen, tests, releasefiler og dependency-status blev undersøgt. Ingen kode blev ændret ud over denne plan. Gate-baseline og prioriteret kø er registreret ovenfor.
+- **Iteration 2 (P0-1):** Desktopbridge, lokal CSS/CSP, IPC-DTO, URL-validering, sikker DOM-rendering og redigeret licens-state blev implementeret og reviewet. Commits `c63a52e` og `f0d4fa7` er merged til `main`; deploy-noten er `251dd35`. `npm test` 32/32, `cargo check --locked`, `cargo test --locked` 10/10 og `cargo tauri build --debug` på macOS er grønne. Fresh review fandt ingen P1; Windows- og interaktiv smoke mangler, så P0-1 står fortsat `I GANG`.
