@@ -1,7 +1,7 @@
 {
   "name": "@mahope/deskuptime",
   "version": "0.2.8",
-  "description": "Website uptime monitor CLI — uptime, SSL expiry & content change alerts from your terminal or CI. Zero dependencies, works on any URL/CMS.",
+  "description": "Uptime, SSL expiry and content-change alerts from your terminal or CI. Free MIT CLI — DeskUptime Pro ($19 one-time, 3 machines) adds unlimited URLs, webhook alerts, the desktop app.",
   "main": "src/engine.js",
   "bin": {
     "deskuptime": "src/cli.js"

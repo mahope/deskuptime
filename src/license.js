@@ -24,13 +24,25 @@ export const OFFLINE_GRACE_MS = 7 * 24 * 60 * 60 * 1000;
 /** Hard total budget for one license call. A hanging server must not hang the CLI. */
 export const LICENSE_TIMEOUT_MS = 10_000;
 
-/** The four states `deskuptime status` can report. Mirrored in docs/license-lifecycle.md. */
+/**
+ * The five states `deskuptime status` can report. Mirrored in
+ * docs/license-lifecycle.md.
+ *
+ * UNVERIFIED is the honest word for a key the server never got to judge: the
+ * license server was unreachable for longer than the grace period. Calling that
+ * `invalid` (as this CLI did) reads as "your key was rejected", and a customer
+ * who believes that buys a second license.
+ */
 export const LICENSE_STATUS = {
   ACTIVE: 'active',
   CACHED: 'cached',
+  UNVERIFIED: 'unverified',
   INVALID: 'invalid',
   FREE: 'free',
 };
+
+/** The states that entitle the machine to Pro. Everything else is free tier. */
+export const PRO_STATUSES = [LICENSE_STATUS.ACTIVE, LICENSE_STATUS.CACHED];
 
 const KEY_PATTERN = /^[a-f0-9]{32}$/;
 
@@ -233,7 +245,8 @@ export async function deactivateLicense(licenseKey, deviceId = getDeviceId(), { 
  * - valid answer        → pro, status 'active', validatedAt bumped
  * - no verdict (timeout / 408 / 429 / 5xx / unreadable 200) → pro only while
  *   the last successful validation is younger than OFFLINE_GRACE_MS, status
- *   'cached'; past that pro is off and the status is 'invalid'
+ *   'cached'; past that pro is off and the status is 'unverified' — the key was
+ *   never judged, so it is not called invalid
  * - definitive invalid (400/403/404/409 or `valid: false`) → pro off at once,
  *   status 'invalid'
  *
@@ -261,7 +274,7 @@ export async function refreshLicense(license, { now = Date.now() } = {}) {
       // restart before the grace runs out — keeps the customer on Pro.
       return { pro: true, license: { ...license, status: LICENSE_STATUS.CACHED }, reason: res.error, status: LICENSE_STATUS.CACHED };
     }
-    return { pro: false, license: { ...license, status: LICENSE_STATUS.INVALID }, reason: res.error, status: LICENSE_STATUS.INVALID };
+    return { pro: false, license: { ...license, status: LICENSE_STATUS.UNVERIFIED }, reason: res.error, status: LICENSE_STATUS.UNVERIFIED };
   }
   return { pro: false, license: { ...license, status: LICENSE_STATUS.INVALID }, reason: res.error, status: LICENSE_STATUS.INVALID };
 }
@@ -296,7 +309,7 @@ export function normalizeLicense(value) {
  *
  * A state written before this field existed (no `status`) is classified by its
  * age exactly like refreshLicense would classify it: within the grace window
- * it is 'active', past it 'invalid'.
+ * it is 'active', past it 'unverified'.
  */
 export function describeLicense(license, { now = Date.now() } = {}) {
   const stored = normalizeLicense(license);
@@ -309,8 +322,8 @@ export function describeLicense(license, { now = Date.now() } = {}) {
   // A cached status is only true until its grace window closes: `status` is
   // read-only, so it must not keep promising Pro that the next check will drop.
   const status = !stored.status
-    ? (expired ? LICENSE_STATUS.INVALID : LICENSE_STATUS.ACTIVE)
-    : (stored.status === LICENSE_STATUS.CACHED && expired ? LICENSE_STATUS.INVALID : stored.status);
+    ? (expired ? LICENSE_STATUS.UNVERIFIED : LICENSE_STATUS.ACTIVE)
+    : (stored.status === LICENSE_STATUS.CACHED && expired ? LICENSE_STATUS.UNVERIFIED : stored.status);
 
   if (status === LICENSE_STATUS.ACTIVE) {
     return {
@@ -329,15 +342,21 @@ export function describeLicense(license, { now = Date.now() } = {}) {
   }
   // Never getting a verdict (grace expired) is not the same as being rejected, and
   // saying otherwise would send support chasing a revoked key that still works.
-  const rejected = stored.status === LICENSE_STATUS.INVALID;
+  if (status === LICENSE_STATUS.UNVERIFIED) {
+    return {
+      status,
+      validatedAt,
+      detail: stored.status === LICENSE_STATUS.UNVERIFIED
+        ? `the license server has not been reachable${verifiedOn ? ` since ${verifiedOn}` : ''}; the key was never rejected`
+        : (validatedAt
+          ? `not verified for ${Math.floor((now - Date.parse(validatedAt)) / 86_400_000)} days; the key has not been rejected`
+          : 'never verified against the license server'),
+    };
+  }
   return {
     status,
     validatedAt,
-    detail: rejected
-      ? 'the license server rejected this key'
-      : (validatedAt
-        ? `not verified for ${Math.floor((now - Date.parse(validatedAt)) / 86_400_000)} days and the license server is unreachable`
-        : 'never verified against the license server'),
+    detail: 'the license server rejected this key',
   };
 }
 

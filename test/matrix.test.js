@@ -22,7 +22,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { FREE, LICENSE_FIELDS, MATRIX, PRODUCT, PRO, renderHelpPro, renderMatrixTable } from '../src/features.js';
+import { FREE, LICENSE_FIELDS, MATRIX, PRODUCT, PRO, renderHelpPro, renderMatrixTable, renderNpmDescription } from '../src/features.js';
 import { BUY_URL, LICENSE_API_BASE, PRODUCT_KEY } from '../src/license.js';
 import { PRO_BUY_URL } from '../src/watch.js';
 
@@ -181,4 +181,44 @@ test('produktnøgle, købslink, donationslink og API-base er uændrede', () => {
   assert.equal(PRO_BUY_URL, CONTRACT.buyUrl, 'upgradeHint i src/watch.js peger på et andet købslink');
   const funding = readFileSync(join(ROOT, '.github', 'FUNDING.yml'), 'utf8');
   assert.ok(funding.includes(CONTRACT.donationUrl), '.github/FUNDING.yml peger på et andet donationslink');
+});
+
+// Ét købsflow pr. side: hver overflade har præcis én vej til betaling, og den er
+// kontraktens link. Et afledt eller gammelt Stripe-link i én overflade sender
+// kunden i en kasse, der ikke hører til det købte produkt.
+test('hver kundeoverflade har ét købsflow, og det er kontraktens link', async () => {
+  const surfaces = [
+    ['README.md', readFileSync(join(ROOT, 'README.md'), 'utf8'), true],
+    ['docs/pro-alerts.md', readFileSync(join(ROOT, 'docs', 'pro-alerts.md'), 'utf8'), true],
+    ['src/features.js (--help)', readFileSync(join(ROOT, 'src', 'features.js'), 'utf8'), true],
+    // npm-listen og koden har ingen kasse i sig: de peger på README og hjælpen.
+    ['package.json (npm)', readFileSync(join(ROOT, 'package.json'), 'utf8'), false],
+    ['src/watch.js (gratisgrænsen)', readFileSync(join(ROOT, 'src', 'watch.js'), 'utf8'), false],
+  ];
+  for (const [name, text, mustHave] of surfaces) {
+    const links = [...text.matchAll(/https:\/\/buy\.stripe\.com\/[A-Za-z0-9]+/g)].map(m => m[0]);
+    for (const link of new Set(links)) {
+      assert.equal(link, CONTRACT.buyUrl, `${name} har et købslink, der ikke er kontraktens: ${link}`);
+    }
+    if (mustHave) {
+      assert.ok(links.length > 0, `${name} har ingen vej til at købe Pro`);
+    }
+  }
+
+  // Kunden skal kunne finde købet i hjælpen, der er det første sted en
+  // gratisbruger læser hjælpen i.
+  const help = await run(process.execPath, [CLI, '--help']);
+  const helpLinks = [...new Set([...help.stdout.matchAll(/https:\/\/buy\.stripe\.com\/[A-Za-z0-9]+/g)].map(m => m[0]))];
+  assert.deepEqual(helpLinks, [CONTRACT.buyUrl]);
+});
+
+test('npm-beskrivelsen er genereret fra matrixen og nævner kun byggede kanaler', () => {
+  const pkg = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8'));
+  assert.equal(pkg.description, renderNpmDescription());
+  assert.ok(pkg.description.includes(PRODUCT.proName), 'npm-listen nævner ikke Pro');
+  assert.ok(pkg.description.includes(PRODUCT.priceLong), 'npm-listen nævner ikke prisen');
+  assert.ok(pkg.description.length <= 200, `npm-listen afkorter en beskrivelse på ${pkg.description.length} tegn`);
+  for (const row of MATRIX.filter(entry => !entry.implemented)) {
+    assert.ok(!pkg.description.includes('Email'), `npm-listen lover ${row.en}`);
+  }
 });

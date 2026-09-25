@@ -269,3 +269,18 @@ export function renderLicenseDataTable(lang = 'en') {
     ...LICENSE_FIELDS.map(field => line([`\`${field.field}\``, field[l]])),
   ].join('\n');
 }
+
+/**
+ * The npm listing is a customer surface too: it is where a paid searcher lands.
+ * Generated from the same constants and matrix, so it cannot promise a channel
+ * that is not built, and it drops one automatically when it stops being built.
+ */
+export function renderNpmDescription() {
+  const proOnly = new Set(MATRIX.filter(entry => entry.implemented && entry.free.en === NO.en).map(entry => entry.id));
+  const extras = [
+    PRO.urlLimit === Infinity ? 'unlimited URLs' : `${PRO.urlLimit} URLs`,
+    proOnly.has('webhook') && 'webhook alerts',
+    proOnly.has('desktop-app') && 'the desktop app',
+  ].filter(Boolean).join(', ');
+  return `Uptime, SSL expiry and content-change alerts from your terminal or CI. Free MIT CLI — ${PRODUCT.proName} (${PRODUCT.priceLong}, ${PRODUCT.machines} machines) adds ${extras}.`;
+}

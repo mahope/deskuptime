@@ -26,7 +26,7 @@ eget udfald: det er transient, aldrig permanent.
 **Hård timeout:** hvert kald har 10 s total (`LICENSE_TIMEOUT_MS`). Et hængende
 server-svar kan ikke hænge CLI'en eller overvågningsloopet.
 
-## 2. De fire tilstande
+## 2. De fem tilstande
 
 `deskuptime status` viser præcis én af dem — aldrig bare "nøgle fundet".
 
@@ -34,15 +34,24 @@ server-svar kan ikke hænge CLI'en eller overvågningsloopet.
 |---|---|---|
 | `active` | Serveren bekræftede ved seneste check | Ja |
 | `cached` | Ingen oplysning, men seneste bekræftelse er under 7 dage gammel | Ja |
-| `invalid` | Serveren afslog, **eller** ingen bekræftelse i over 7 dage | Nej |
+| `unverified` | Ingen oplysning i over 7 dage — nøglen er **aldrig afslået** | Nej |
+| `invalid` | Serveren har afslået nøglen | Nej |
 | `free` | Ingen gyldig licens gemt | Nej |
+
+**Hvorfor `unverified` er et eget ord.** Før dette ord fandtes, læste "ingen
+bekræftelse i over 7 dage" som `invalid`, altså som *afslået*. Det er en løgn:
+licensserveren svarer aldrig, og kunden kan komme til at tro, at nøglen er død og
+købe en ny. Derfor skelnes der nu mellem "kan ikke verificeres" og "er afslået",
+og `unverified` **viser aldrig et købslink** — kunden har allerede betalt. Vejen
+tilbage er `deskuptime activate <license-key>`, som genverificerer nøglen og
+genskaber Pro, hvis serveren svarer igen.
 
 Nøglen slettes **aldrig** automatisk. Den bliver liggende, så en senere vellykket
 check gendanner Pro, og så support kan se hvilken nøgle kunden har.
 
 En state-fil skrevet før dette felt fandtes (intet `status`-felt) klassificeres
 efter alder præcis som `refreshLicense` ville: inden for 7 dage `active`, derefter
-`invalid`. Ældre installationer låses altså ikke ude.
+`unverified`. Ældre installationer låses altså ikke ude.
 
 ## 3. Lagring
 
@@ -50,7 +59,7 @@ efter alder præcis som `refreshLicense` ville: inden for 7 dage `active`, deref
   i en `0700`-mappe på POSIX. En eksisterende fil med for vide rettigheder
   strammes ved næste skrivning.
 - En licensrecord valideres ved indlæsning: nøglen skal være 32 hex-tegn,
-  `device_id` skal være 1–128 tegn, `status` skal være en af de fire. Alt andet
+  `device_id` skal være 1–128 tegn, `status` skal være en af de fem. Alt andet
   læses som "ingen licens" — en beskadiget state-fil giver hverken Pro eller et
   crash.
 - `deactivate` sletter først lokal state, når serveren svarer
@@ -68,7 +77,8 @@ Ingen licensnøgle, device-id eller webhook-hemmelighed skrives i logfiler.
 
 1. Samme klassificering af 200/400/403/404/408/409/425/429/5xx og malformed 200.
 2. Samme 10 s timeout på hvert licenskald.
-3. Samme fire tilstande i UI'en — især at `invalid` slår Pro fra med det samme.
+3. Samme fem tilstande i UI'en — især at `invalid` og `unverified` slår Pro fra med
+   det samme, og at `unverified` ikke må få kunden til at tro nøglen er død.
 4. Samme 7-dages grace uden at skrive gamle `license.instance`-id'er om
    (se P0-6: CLI'en bruger stadig det gemte id, indtil migreringen er dokumenteret).
 5. `0600` state-fil i `0700`-mappe, atomisk skrivning, validering ved indlæsning.

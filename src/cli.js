@@ -43,7 +43,7 @@ USAGE:
   deskuptime watch --status                         Show status without network checks
   deskuptime activate <key>     Unlock Pro with your license key
   deskuptime deactivate         Free this machine's Pro seat (${PRODUCT.machines} machines per license)
-  deskuptime status             Show license state (active/cached/invalid/free) + monitored URLs
+  deskuptime status             Show license state (active/cached/unverified/invalid/free) + monitored URLs
   deskuptime --version          Show version
   deskuptime --help             This help
 
@@ -419,6 +419,11 @@ if (command === 'status') {
     console.log(`Pro license: active${license.detail ? `, ${license.detail}` : ''}`);
   } else if (license.status === LICENSE_STATUS.CACHED) {
     console.log(`Pro license: cached/offline — ${license.detail}`);
+  } else if (license.status === LICENSE_STATUS.UNVERIFIED) {
+    // No buy link here on purpose: this customer already paid. Pointing at the
+    // checkout is how people end up buying a second license for a key that works.
+    console.log(`Pro license: unverified — ${license.detail}`);
+    console.log('  The key is still stored. Re-check it with: deskuptime activate <license-key>');
   } else {
     // The key is kept on disk, so support and a later `activate` still work.
     console.log(`Pro license: invalid — ${license.detail}`);

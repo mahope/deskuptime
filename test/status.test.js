@@ -829,6 +829,8 @@ test('a license the server rejected loses Pro, a cached one keeps it', () => {
   assert.equal(isPro({ license: { ...base, status: 'invalid' } }), false);
   assert.equal(isPro({ license: { ...base, status: 'cached' } }), true);
   assert.equal(isPro({ license: { ...base, status: 'active' } }), true);
+  // An unverified key is not Pro either, even though it was never rejected.
+  assert.equal(isPro({ license: { ...base, status: 'unverified' } }), false);
   // Legacy state without a status keeps working until the next re-check.
   assert.equal(isPro({ license: base }), true);
 });
@@ -854,4 +856,16 @@ test('cli: status names the license state and never prints the key', async (t) =
   assert.match(invalid, /still stored/);
   assert.doesNotMatch(invalid, new RegExp(LICENSE_KEY));
   assert.doesNotMatch(invalid, /deskuptime-maskine/);
+
+  // A key the server never got to judge is not a dead key: no checkout link,
+  // because this customer already paid and a buy link is how a second license
+  // gets bought.
+  const nineDaysAgo = new Date(Date.now() - 9 * 86_400_000).toISOString();
+  const unverified = await withLicense({ key: LICENSE_KEY, instance: 'deskuptime-maskine', status: 'unverified', validatedAt: nineDaysAgo });
+  assert.match(unverified, /Pro license: unverified/);
+  assert.match(unverified, /never rejected/);
+  assert.match(unverified, /deskuptime activate <license-key>/);
+  assert.doesNotMatch(unverified, /buy\.stripe\.com/, 'an existing customer must not see a checkout link');
+  assert.doesNotMatch(unverified, new RegExp(LICENSE_KEY));
+  assert.doesNotMatch(unverified, /deskuptime-maskine/);
 });

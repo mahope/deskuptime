@@ -278,7 +278,7 @@ test('deactivate: transient or malformed answers keep the seat occupied', async 
   assert.equal(res.deactivated, false, 'only deactivated:true frees the seat');
 });
 
-// ── P0-7: status — four states, and the key is kept for diagnosis ──
+// ── P0-7/P1-1 del B: status — five states, and the key is kept for diagnosis ──
 test('refresh: a transient fault inside the grace window reports cached/offline', async () => {
   mockFetch(429, { ok: false, error: 'slow down' });
   const r = await refreshLicense(lic(1), { now: NOW });
@@ -327,16 +327,41 @@ test('describe: a state file written before the status field exists is classifie
   assert.equal(describeLicense(fresh, { now: NOW }).status, LICENSE_STATUS.ACTIVE);
   const stale = { key: KEY, instance: 'dev-1', validatedAt: new Date(NOW - 9 * DAY).toISOString() };
   const described = describeLicense(stale, { now: NOW });
-  assert.equal(described.status, LICENSE_STATUS.INVALID);
+  assert.equal(described.status, LICENSE_STATUS.UNVERIFIED);
   assert.match(described.detail, /9 days/);
+  assert.match(described.detail, /not been rejected/);
 });
 
-test('describe: a cached state whose grace has since run out reports invalid, not cached', () => {
+test('describe: a cached state whose grace has since run out reports unverified, not cached', () => {
   const stale = { key: KEY, instance: 'dev-1', status: 'cached', validatedAt: new Date(NOW - 9 * DAY).toISOString() };
   const described = describeLicense(stale, { now: NOW });
-  assert.equal(described.status, LICENSE_STATUS.INVALID);
-  assert.match(described.detail, /9 days/);
-  assert.doesNotMatch(described.detail, /rejected/, 'no verdict is not a rejection');
+  assert.equal(described.status, LICENSE_STATUS.UNVERIFIED);
+  assert.match(described.detail, /not verified for 9 days/);
+  assert.match(described.detail, /not been rejected/);
+  assert.doesNotMatch(described.detail, /rejected this key/, 'no verdict is not a rejection');
+});
+
+test('refresh: a server that never answers past the grace reports unverified, not invalid', async () => {
+  mockFetch(503, { ok: false, error: 'license server down' });
+  const r = await refreshLicense(lic(9), { now: NOW });
+  assert.equal(r.pro, false, 'no verdict can never entitle Pro');
+  assert.equal(r.status, LICENSE_STATUS.UNVERIFIED);
+  assert.equal(r.license.status, LICENSE_STATUS.UNVERIFIED);
+  assert.equal(r.license.key, KEY, 'the key survives, so one good answer restores Pro');
+});
+
+test('describe: an unverified key says it was never rejected, so nobody buys a second one', () => {
+  const described = describeLicense({ key: KEY, instance: 'dev-1', status: 'unverified', validatedAt: new Date(NOW - 9 * DAY).toISOString() }, { now: NOW });
+  assert.equal(described.status, LICENSE_STATUS.UNVERIFIED);
+  assert.match(described.detail, /not been reachable since/);
+  assert.match(described.detail, /never rejected/);
+  assert.doesNotMatch(described.detail, /rejected this key/);
+});
+
+test('normalizeLicense: the unverified status survives a round-trip through the state file', () => {
+  const record = normalizeLicense({ key: KEY, instance: 'dev-1', status: 'unverified', validatedAt: '2026-09-24T12:00:00Z' });
+  assert.equal(record.status, LICENSE_STATUS.UNVERIFIED);
+  assert.equal(describeLicense(record, { now: NOW + 9 * DAY }).status, LICENSE_STATUS.UNVERIFIED);
 });
 
 test('normalizeLicense: a malformed record is not a license', () => {

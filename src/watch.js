@@ -12,7 +12,7 @@
  */
 
 import { checkUrl } from './engine.js';
-import { activateLicense, refreshLicense, normalizeLicense, LICENSE_STATUS } from './license.js';
+import { activateLicense, refreshLicense, normalizeLicense, LICENSE_STATUS, PRO_STATUSES } from './license.js';
 import { readFileSync, writeFileSync, mkdirSync, existsSync, renameSync, unlinkSync, statSync, chmodSync } from 'fs';
 import { dirname, posix, win32 } from 'path';
 import { homedir } from 'os';
@@ -110,14 +110,16 @@ export function saveState(state, options = {}) {
 
 /**
  * Pro requires a *usable* license: a valid record that the server has not
- * rejected. A cached (offline) license still counts as Pro, an invalidated one
- * does not — so a revoked key loses its entitlements on the next pass instead
- * of on the next reinstall.
+ * rejected. A cached (offline) license still counts as Pro, an unverified or
+ * invalidated one does not — so a rejected or long-unreachable key loses its
+ * entitlements on the next pass instead of on the next reinstall. The check is
+ * an allow-list plus the legacy case, so a new status can never hand out Pro by
+ * accident while an installation that predates the status field keeps working.
  */
 export function isPro(state) {
   const license = state?.license;
   if (!license?.key || !license?.instance) return false;
-  return license.status !== LICENSE_STATUS.INVALID;
+  return license.status == null || PRO_STATUSES.includes(license.status);
 }
 
 function hashContent(str) {

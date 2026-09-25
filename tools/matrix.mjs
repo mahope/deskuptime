@@ -14,7 +14,7 @@
 import { readFileSync, writeFileSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
-import { renderMatrixTable, renderLicenseDataTable, renderLicenseDataLine } from '../src/features.js';
+import { renderMatrixTable, renderLicenseDataTable, renderLicenseDataLine, renderNpmDescription } from '../src/features.js';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -32,6 +32,12 @@ const TARGETS = [
       matrix: () => renderMatrixTable('da'),
       'license data': () => `${renderLicenseDataLine('da')}\n\n${renderLicenseDataTable('da')}`,
     },
+  },
+  {
+    // The npm listing is a customer surface with no BEGIN/END markers, so it is
+    // patched as JSON instead: description in, description out.
+    file: 'package.json',
+    json: { description: renderNpmDescription },
   },
 ];
 
@@ -55,7 +61,14 @@ for (const target of TARGETS) {
   const path = join(root, target.file);
   const original = readFileSync(path, 'utf-8');
   let updated = original;
-  for (const [name, render] of Object.entries(target.blocks)) {
+  if (target.json) {
+    const pkg = JSON.parse(original);
+    for (const [key, render] of Object.entries(target.json)) {
+      pkg[key] = render();
+    }
+    updated = `${JSON.stringify(pkg, null, 2)}\n`;
+  }
+  for (const [name, render] of Object.entries(target.blocks ?? {})) {
     updated = updateBlock(updated, name, render());
   }
   if (updated === original) continue;
