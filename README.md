@@ -57,6 +57,8 @@ It prints a line on every status change: site down 🚨, back up ✅, SSL expiri
 A one-time $19 purchase. The license key unlocks the desktop app, native notifications
 and unlimited URLs on up to 3 machines.
 
+The CLI in this repository is open source (MIT). DeskUptime Desktop Pro is a paid, closed-source app: download it from https://deskuptime.com/ and unlock it with your license key.
+
 **[Buy DeskUptime Pro](https://buy.stripe.com/7sY9AS9eX3Iu418fJ5bMQ01)** — the key is shown right after checkout and sent by email.
 
 ```bash

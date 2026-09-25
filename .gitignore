@@ -1,6 +1,8 @@
 node_modules/
 *.log
 # Build artifacts
-desktop/src-tauri/target/
 target/
 dist/
+
+# Desktop Pro (betalt) ligger i det private repo mahope/deskuptime-desktop
+desktop/

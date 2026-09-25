@@ -1,9 +1,0 @@
-{
-  "$schema": "https://raw.githubusercontent.com/nousresearch/hermes-software-ecosystem/main/tauri/capability-schema.json",
-  "identifier": "default",
-  "description": "Default capability set for DeskUptime",
-  "windows": ["main"],
-  "permissions": [
-    "core:event:allow-listen"
-  ]
-}

@@ -8,7 +8,7 @@
 |-----|------|----------------|
 | **Core engine** (`deskuptime/src/engine.js`) | HTTP-check + SSL + content diff | ✅ Ja |
 | **CLI** (`deskuptime/src/cli.js`) | `deskuptime check <url>` | ✅ Ja |
-| **Desktop app** (Tauri — `desktop/`) | System notification, background loops | ✅ Ja |
+| **Desktop Pro** (Tauri, betalt — privat repo `mahope/deskuptime-desktop`) | System notification, background loops | ✅ Ja |
 | **Web live-check** (`worker-quickcheck`) | `?url=` → status/SSL/headers | ✅ Ja |
 | **WordPress plugin** (`plugin/`) | WP admin panel wrapper | ⚠️ wrapper, kalder samme engine |
 | **Site comparison pages** (vs/*) | Marketing-sammenligninger | ✅ Ja |
