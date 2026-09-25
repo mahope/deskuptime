@@ -20,7 +20,29 @@ jobs:
       - run: npm test
       - run: npm run audit
       - name: Smoke — JSON mode parses with jq
-        run: node src/cli.js check https://example.com --json | jq -e '.[0].healthy == true'
+        # A local fixture, not example.com: a third party must never be able to
+        # turn this repo's gate red. jq must also be able to fail, so the DOWN
+        # result is asserted too, not only the healthy one.
+        run: |
+          set -euo pipefail
+          JSON=$(node --input-type=module -e '
+            import { createServer } from "node:http";
+            import { spawn } from "node:child_process";
+            const server = createServer((req, res) => {
+              if (req.url === "/down") { res.writeHead(500, { "content-type": "text/html" }); res.end("nope"); return; }
+              res.writeHead(200, { "content-type": "text/html" });
+              res.end("<html><body>ci fixture</body></html>");
+            });
+            await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
+            const base = "http://127.0.0.1:" + server.address().port;
+            const child = spawn(process.execPath, ["src/cli.js", "check", base + "/up", base + "/down", "--json", "--timeout", "5000"], { stdio: ["ignore", "pipe", "inherit"] });
+            child.stdout.pipe(process.stdout);
+            child.on("exit", (code) => { server.close(); process.exit(code === 0 || code === 2 ? 0 : 1); });
+          ')
+          printf '%s' "$JSON" | jq -e 'length == 2' > /dev/null
+          printf '%s' "$JSON" | jq -e '.[0].healthy == true' > /dev/null
+          printf '%s' "$JSON" | jq -e '.[1].healthy == false' > /dev/null
+          printf '%s' "$JSON" | jq -e '.[1].statusCode == 500' > /dev/null
 
   # The device_id scheme must be identical on native Windows, where os.hostname()
   # returns the 15-char NetBIOS name while the desktop app reads COMPUTERNAME.
