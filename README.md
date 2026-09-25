@@ -187,7 +187,10 @@ brew install mahope/tap/deskuptime
 curl -fsSL https://raw.githubusercontent.com/mahope/deskuptime/main/tools/install.sh | bash
 ```
 
-Installs the `deskuptime` CLI to `~/.local/bin`.
+Installs the `deskuptime` CLI to `~/.local/bin`. The script picks the newest published
+CLI release and checks its `sha256` before unpacking; a mismatch aborts the install.
+Set `DESKUPTIME_VERSION=x.y.z` to pin a version, or `DESKUPTIME_REQUIRE_CHECKSUM=1` to
+refuse a release that has no published checksum.
 
 **npm:**
 

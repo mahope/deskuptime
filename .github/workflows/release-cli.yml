@@ -33,7 +33,7 @@ jobs:
 
       - name: Build deterministic tarball
         run: |
-          rm -f deskuptime-*.tar.gz
+          rm -f deskuptime-*.tar.gz deskuptime-*.tar.gz.sha256
           bash tools/make_tarball.sh
 
       - name: Test tarball standalone
@@ -41,6 +41,9 @@ jobs:
           FILE="deskuptime-$(node -p "require('./package.json').version").tar.gz"
           mkdir /tmp/du-check && tar -xzf "$FILE" -C /tmp/du-check
           node /tmp/du-check/src/cli.js check https://example.com | grep -q "200"
+          # The installer refuses an unverified download, so a sidecar that does
+          # not match the tarball would break every curl install.
+          echo "$(sha256sum "$FILE" | awk '{print $1}')  $FILE" | diff -u - "$FILE.sha256"
 
       - name: Create or update release
         env:
@@ -48,13 +51,17 @@ jobs:
         run: |
           TAG="${RELEASE_TAG}"
           FILE="deskuptime-$(node -p "require('./package.json').version").tar.gz"
+          # The installer verifies "$FILE.sha256" before unpacking, so the
+          # sidecar has to ship with the tarball in the same step.
+          ASSETS=("$FILE" "$FILE.sha256")
+          [ -f "$FILE.sha256" ] || { echo "::error::$FILE.sha256 missing; installer cannot verify"; exit 1; }
           SHA="$(sha256sum "$FILE" | awk '{print $1}')"
           if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release upload "$TAG" "$FILE" --repo "$GITHUB_REPOSITORY" --clobber
+            gh release upload "$TAG" "${ASSETS[@]}" --repo "$GITHUB_REPOSITORY" --clobber
           else
-            gh release create "$TAG" "$FILE" --repo "$GITHUB_REPOSITORY" \
+            gh release create "$TAG" "${ASSETS[@]}" --repo "$GITHUB_REPOSITORY" \
               --title "DeskUptime CLI $(node -p "require('./package.json').version") (tarball for curl/brew install)" \
-              --notes "Deterministic CLI tarball. Install: curl -fsSL https://raw.githubusercontent.com/mahope/deskuptime/main/tools/install.sh | bash — or via Homebrew: brew install mahope/tap/deskuptime" \
+              --notes "Deterministic CLI tarball plus its sha256 sidecar. Install: curl -fsSL https://raw.githubusercontent.com/mahope/deskuptime/main/tools/install.sh | bash — or via Homebrew: brew install mahope/tap/deskuptime" \
               --latest=false
           fi
           echo "SHA256=$SHA" >> "$GITHUB_ENV"
