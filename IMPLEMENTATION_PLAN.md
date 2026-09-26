@@ -1,14 +1,19 @@
 STATUS: I GANG
-Iteration: 38 — 2026-09-26
-Arbejdsgrene: `ceo/ssl-measured` (P1-22, målt + fix)
-Næste handling: **P1-22 er færdig.** ❓ 2/❓ 3 er stadig ubesvarede, så målingen gik videre med den overflad P1-21 fundet pegede på: **certifikatet i `check --json` og i Action-payloaden.** Den målte `sslExpiringSoon` på de samme tal-spørgsmål og fandt to ting — hvoraf den anden er den værste fejl der er fundet i certifikatkoden, fordi den **slukker den Pro-funktion vi sælger**. `sslExpiringSoon: false` blev skrevet på enhver URL hvor intet certifikat nogensinde blev læst: en `http://`-side, en `https://`-side der ikke svarer, og — målt med rigtig CLI og rigtig `checkUrl` mod en lokal TLS-server med et 2-dages certifikat, nul kode ændret:
+Iteration: 39 — 2026-09-26
+Arbejdsgrene: `ceo/headers-measured` (P1-23, målt + fix)
+Næste handling: **P1-23 er færdig.** ❓ 2/❓ 3 er stadig ubesvarede, så målingen gik videre med den overflad P1-22 selv udpegede: **`headers --json`** — den eneste gratis flade, der udtaler sig om et *sites* sikkerhedsheadere, altså den et bureau viser en kunde. Den blev målt på de samme tal-spørgsmål med rigtig CLI mod lokale fixtures (lukket port, død port bag et redirect, live server, og samme server med uppercase scheme), nul kode ændret, og fandt to ting:
+
+- **Fund 1 (kun i JSON, og det er den flad der betyder noget):** et site der **aldrig svarede** fik `security: { fem × null }` — samme objekt som en kunde der reelt mangler alle fem headere. Menneske-fladen var aldrig i fare (den stopper på ⚠️ Error), så JSON'en var den eneste løgn, og den er den flade et bureau sender videre i sit eget system. `stopReason: null` for en fejlet request gjorde det værre: `readChain()` svarede `complete: true, measured: true` om en side der ikke havde sagt et ord.
+- **Fund 2 (samme `startsWith`-fejl som P1-22, én flytte væk):** `HTTP://kunde.dk/` er gyldig for validatoren (den går gennem `new URL()`) og blev overvåget over plain HTTP — men værktøjet sagde **intet om HTTPS-håndhævelse**: menneske-fladen tabte `HTTPS forced: ❌ no — site served over plain HTTP`, JSON sagde `startedHttp: false, forcesHttps: null`, altså "ikke relevant" om et site der lige serverede over plain HTTP. Det er værre end P1-22's fund: en regel der ikke kan læses efterlader intet at bemærke.
 
 ```
-https://localhost:PORT/  -> ssl: { validDays: 2, … }  "2d ⚠️"  sslExpiringSoon: true
-HTTPS://localhost:PORT/  -> ssl: null                  "N/A"     sslExpiringSoon: false
+http://127.0.0.1:PORT/  ->  security: {fem × null}   "⚠️ Error: Connection refused"
+HTTP://127.0.0.1:PORT/  ->  forcesHttps: null        (ingen "HTTPS forced:"-linje)
+http://127.0.0.1:PORT/  ->  forcesHttps: false       "HTTPS forced: ❌ no — site served over plain HTTP"
 ```
 
-Én stort bogstav i skemaet, og certifikatkontrollen kørte aldrig: validatoren `isHttpUrl` går gennem `new URL()`, som laver scheme små, mens **de to ejere** af reglen — `engine.js:79` og `action.yml:130` — genkendte https med et versalfølsomt `startsWith`. Samme site, samme certifikat, to modsatte domme, og den falske siger "ikke snart udløbet". Rettelsen: `expectsCertificate()` i `src/status.js` er den ene ejer, begge kaldersteder spørger den, `readSslState()` får `measured` og giver `expiringSoon: null` når intet blev læst (det er den kontraktaendring planen forudså, og den er målt og noteret), `check --json` får det additive `sslChecked`, og action.yml's strenge validator accepterer `null`. **Tre eksisterende tests holdt den gamle kontrakt** (false for et ulæseligt dagantal i `ssltruth` og `report`, og en låsning af den gamle inline-form i `status`) og er rettet med begrundelse. 3 nye tests → **301/301**; audit 0/0. Næste overflad der aldrig er målt på de samme tal-spørgsmål er **`headers --json`** — den er den eneste gratis flade der udtaler sig om et sites sikkerhedsheadere, altså præcis den viste et bureau bruger over for en kunde.
+Rettelsen: `urlScheme()` i `src/status.js` er den ene ejer af "hvilket scheme har URL'en"; P1-22's `expectsCertificate()` og den nye `readHttpsState()` spørger den, og ingen checker genkender `http`/`https` selv. `readChain()` lærer den anden måde en læsning kan være ufuldstændig — intet svar overhovedet — så `complete`/`measured` er falske for refused, timeout og uløseligt værtsnavn, mens P1-16's fire tilfælde er uændrede. `headers --json` får `securityChecked` (additive, samme mønster som P1-21's `contentChecked` og P1-22's `sslChecked`), læst fra ét kald til ejeren; de fem `null` består, så sætningen ved siden af dem er det, der gør dem til en påstand. 4 nye tests → **305/305**; audit 0/0. **Næste opgave: P1-24**, fundet i samme måling — et sikkerhedsheader der er **sendt tomt** rapporteres som `⬜ missing`, altså samme fejltype som P1-21's "beregnet og kasseret". Den er målt og specificeret med acceptkriterier, ikke rettet endnu.
+
 ## Mission
 
 Dette offentlige repo leverer den gratis, fuldt brugbare DeskUptime-CLI (MIT). Desktop Pro ligger i det private repo `mahope/deskuptime-desktop`. Pro er den markant bedre løsning for små bureauer og IT-teams: ubegrænsede URLs, rapporter/status-side, flere lokationer, kanaler som mail og Slack/Discord/Teams-webhooks, automatisering og prioriteret support/compliance-dokumentation. Stripe Payment Link og licens-API må kun bruges i den aftalte form; der oprettes ikke nye produkter eller priser.
@@ -1311,6 +1316,71 @@ Siden er 5 242 880 byte. Begge tal er **hvor vores egen læser standsede**, før
 
 **Målt undervejs, kun til notat:** den første kørsel af `npm test` med PATH-node 22.23.2 (først på PATH) gav 12 fejl i `status.test.js`, fordi `action.yml` og `install.sh` korrekt kræver Node 24+. Med `/opt/homebrew/bin/node` (26.7.0) er de grønne. Samme forhold som baseline-noten beskriver; `/opt/homebrew/opt/node@22/bin/node` ligger før `/opt/homebrew/bin` i denne maskines PATH, så **`npm test` skal køres med `PATH=/opt/homebrew/bin:$PATH`** — ellers er gaten rød af miljøårsager.
 
+### P1-23 — FÆRDIG 2026-09-26 — Et site der aldrig svarede må ikke have en sikkerhedsvurdering (`ceo/headers-measured`)
+
+**Befundelse:** den overflad P1-22 navngav som den næste aldrig målte: `headers --json`. Det er den eneste gratis flade, der udtaler sig om **et sites sikkerhedsheadere** — altså præcis den et bureau viser en kunde — og den er maskingen til alt, hvad bureauet skriver videre.
+
+**Målt (nul kode ændret, rigtig CLI, lokale fixtures med en lukket port, en død port bag et redirect og en live server):**
+
+| Kørsel | `security` | `stopReason` | `securityChecked` (ny) | Menneske-linje |
+|---|---|---|---|---|
+| `http://` lukket port | **5 × `null`** | `null` | **`false`** (var: findes ikke) | `⚠️ Error: Connection refused` |
+| `302` → død port (kæden døde på hop 2) | **5 × `null`** | `null` | **`false`** (var: findes ikke) | `⚠️ Error: Connection refused` |
+| Live site, alle 5 headere | 5 værdier | `null` | `true` | `✅ …` |
+| `http://` der svarer 200 | 2 værdier, 3 `null` | `null` | `true` | `HTTPS forced: ❌ no …` |
+| **`HTTP://` — samme site, ét bogstav** | 2 værdier, 3 `null` | `null` | `true` | **`HTTPS forced:`-linjen er væk** |
+
+**Fund 1 (`--json` kun, og det er den flad, der betyder noget):** `errorResult()` returnerede `security: emptySecurity()`, altså **fem `null`**, og intet andet. Men `null` er i checker's normale sprog "sitet sendte ikke den header" — så en kunde, der aldrig svarede, og en kunde der reelt mangler alle fem, gav **det samme JSON-objekt**. Menneske-fladen var aldrig i fare (den stopper på `⚠️ Error`-linjen), hvilket gjorde det værre: JSON'en var den eneste overflade, og den er den et bureau sender videre i sit eget system. Samme familie som P1-22 (`sslExpiringSoon: false` om intet læst certifikat) og P1-17 (payload der påstod en overgang, der aldrig skete).
+
+**Fund 2 (den samme `startsWith`-fejl som P1-22, én flytte væk):** `startedHttp`/`forcesHttps` genkendte scheme'et selv med `url.startsWith('http://')` i to funktioner, mens validatoren der **accepterer** URL'en (`isHttpUrl`) går gennem `new URL()`. Bevis fra målingen: `'HTTP://…'.startsWith('http://') === false`. Følgen er ikke en forkert etiket: `HTTP://kunde.dk/` blev overvåget over **plain HTTP**, og værktøjet sagde **intet om HTTPS-håndhævelse overhovedet** — menneske-fladen tabte `HTTPS forced: ❌ no — site served over plain HTTP`, JSON'en sagde `startedHttp: false, forcesHttps: null` altså "ikke relevant" om et site der lige serverede over plain HTTP. Det er værre end P1-22's fund: en forkert regel kan bemærkes, en regel der **ikke kan læses** efterlader intet at bemærke.
+
+**Rettelsen:**
+- `urlScheme(url)` i `src/status.js` er den ene ejer af "hvilket scheme har denne URL" (via `new URL()`, altså case-insensitive). `expectsCertificate()` (P1-22) og den nye `readHttpsState()` spørger den; ingen checker genkender `http`/`https` selv.
+- `readHttpsState({ startUrl, finalUrl })` beslutter begge felter ét sted: kun et **plain-HTTP-start** kan have en `forcesHttps`-dom, og kun en kæde, der nåede et svar, kan have sandhed om hvad sitet gjorde. `https`-start og `finalUrl: null` er begge `null` — ikke "nej".
+- `readChain()` får den anden måde en læsning kan være ufuldstændig: **intet svar overhovedet**. `statusCode: null` (refused, timeout, uløseligt værtsnavn) gav før `complete: true, measured: true`, fordi `stopReason` er `null` for en fejlet request. Nu er `complete`/`measured` falske, og `securityNote`-sætningen ("the chain never reached the final response") dækker også det tilfælde.
+- `headers --json` får `securityChecked` (**additive**, samme mønster som P1-21's `contentChecked` og P1-22's `sslChecked`), læst fra **ét** kald til ejeren. De fem `null` består, så en konsument der læser nøglerne ikke crasher — sætningen ved siden af dem er det, der gør dem til en påstand.
+
+**Kontraktaendring:** `headers --json` får ét nyt felt (additive, intet fjernet, intet eksisterende ændret i værdi). `readChain().complete` og `.measured` er nu også falske for en kæde uden svar; ingen overflade nåede den kombination før (fejlvejen gik aldrig gennem `readChain`), og `healthy` er uændret, fordi checkeren kun kalder den med et rigtigt status-tal.
+
+**Acceptkriterier:**
+
+1. Ejeren skal kunne skelne "sitet svarede ikke" fra "svarede". — **`readChain({statusCode: null, stopReason: null})` → `measured: false, complete: false`; `readChain({})` → `false`. P1-16's fire tilfælde er uændrede: `200/null` og `301/no_location` målt, `301/max_redirects` og `301/loop` ikke.**
+2. `headers --json` må ikke kunne læses som en sikkerhedsvurdering af et site, der ikke svarede. — **End-to-end mod en lukket port og mod en kæde, der dør på hop 2: `securityChecked: false`. Kontrollen: en live site giver `securityChecked: true` og sin `x-frame-options`-værdi, så feltet kan ikke være en konstant.**
+3. Scheme'et skal læses af URL'en, ikke af bogstaverne. — **`urlScheme('HTTP://…') === 'http:'`; `readHttpsState` giver identisk svar for `http://` og `HTTP://`; `https`-start og `finalUrl: null` giver `forcesHttps: null`; `readHttpsState()` uden argumenter giver `{startedHttp: false, forcesHttps: null}`.**
+4. Den hovedløse flade skal give det samme svar på begge stavemåder. — **End-to-end mod en rigtig lokal server: `HTTP://` skriver `HTTPS forced: ❌ no — site served over plain HTTP` og JSON `startedHttp: true, forcesHttps: false`. Før rettelsen: linjen var væk, `false`/`null`.**
+5. Én ejer for reglerne. — **Strukturel lås: ingen `startsWith('http` i `src/checkers/headers.js` (kommentarer strippet), den skal kalde `readHttpsState({`, og `cli.js` skal tage `securityChecked: chain.measured` og ikke selv afgøre det fra `r.`.**
+
+**Filer:** `src/status.js` (`urlScheme`, `readHttpsState`, `readChain`), `src/checkers/headers.js`, `src/cli.js`, `test/status.test.js` (4 nye).
+
+**Ingen eksisterende test rettet.** `status.test.js:649` låser `Object.keys(result.security).length === 5` på en refused connection — den holder den gamle form, ikke en dårligere implementation, og rettelsen beholder de fem nøgler. P1-16's strukturelle lås på `readChain`/`healthy` holder uændret.
+
+**Mutationstest (4, alle døde):** `measured/complete` tilbage til `!pending` → 2 fejl; `urlScheme` erstattet af `url.startsWith(...)`-genkendelse i `readHttpsState` → 2 (enhed + `HTTP://`-e2e); `securityChecked: chain.measured` → `true` (konstant) → 2 (begge e2e-nej-tilfælde); `HTTP://`-løsningen i checkeren fjernet så `startedHttp` kun kan være sand for lowercase → den strukturelle lås + e2e.
+
+**Bevis:** Node 26.7.0 — `npm ci --ignore-scripts`, **`npm test` grøn med 305/305** (301 + 4), `npm run audit` 0/0, `node --check` alle JS-filer, `node tools/matrix.mjs --check`, `sh -n`/`bash -n`, YAML tab-fri og `git diff --check` grønne.
+
+### P1-24 — ÅBEN — Et header der er sendt tomt må ikke hedde "mangler" (`ceo/headers-empty-value`)
+
+**Befundelse:** målt i P1-23's kørsel, samme overflad, ikke rettet i samme commit (en ad gangen).
+
+**Målt (nul kode ændret, rigtig CLI, lokal server der svarer `x-frame-options: ` med tom værdi):**
+
+```
+headers http://127.0.0.1:PORT/  ->  ✅ x-content-type-options: nosniff
+                                    ⬜ missing: x-frame-options        <- serveren SENDTE den
+   --json                         ->  "x-frame-options": null
+```
+
+**Årsag:** `src/checkers/headers.js` skriver `security[name] = h[name] || null`, så en **tom streng** bliver `null` — samme værdi som "headeren kom aldrig". `cli.js` regner `missing` som `!v`, så terminalen skriver `⬜ missing:` for en header, serveren faktisk sendte. Det er den samme fejltype som P1-21's "beregnet og kasseret": værktøjet kan ikke skelne to forskellige fejl, og begge er fejl i en sikkerhedsvurdering.
+
+**Acceptkriterier:**
+
+1. Skelne "ikke sendt" fra "sendt tomt". — **`x-frame-options: ` (tom) må ikke have samme værdi som en header serveren aldrig sendte.**
+2. Menneske-fladen må ikke kalde en sendt header "mangler". — **En tom værdi skal have sin egen linje, der siger at headeren er sendt uden indhold.**
+3. Ét sted afgør det. — **Klassificeringen af de fem headere (sendt / sendt-tom / ikke-sendt) hører hjemme i `src/status.js` ved siden af `readHttpsState`, og både `cli.js` og JSON'en læser den.**
+4. Ingen eksisterende måling ændres. — **En normal header (`DENY`, `max-age=…`) er uændret, og P1-16's og P1-23's tests skal stadig være grønne.**
+
+**Filer:** `src/status.js` (ny ejeraflæsning), `src/checkers/headers.js` (`?? null`), `src/cli.js` (visning), `test/status.test.js`.
+
 ## ❓ Til Mads
 
 0. **Skal `src/features.js` også være source of truth for siten og det private desktoprepo?** Matrixen er nu én fil i dette repo, og den private desktop-app plus `deskuptime.com` har hver deres egen matrix. Hvis de skal følge med automatisk, er vejen et lille public npm-pakke (`@mahope/product-matrix`) som alle tre repoer importerer. Uden beslutning fortsætter de to andre overflader med at være håndskrevne — og det er præcis den drift, del A lukker her.
@@ -1350,6 +1420,7 @@ Siden er 5 242 880 byte. Begge tal er **hvor vores egen læser standsede**, før
 
 ## Iterationslog
 
+- **Iteration 39 (P1-23, målt + fix):** ❓ 2 og ❓ 3 ubesvarede, så målingen gik videre med den overflad P1-22 selv udpegede: `headers --json` — den eneste gratis flade, der udtaler sig om et *sites* sikkerhedsheadere, altså den et bureau viser en kunde. Målt med rigtig CLI mod lokale fixtures (lukket port, død port bag et redirect, live server, samme server med uppercase scheme), nul kode ændret. **Fund 1:** `errorResult()` gav `security: {fem × null}` til et site der aldrig svarede — identisk med en kunde der mangler alle fem headere, og menneske-fladen var aldrig i fare, så JSON’en var den eneste løgn; værre endnu, `stopReason: null` for en fejlet request fik `readChain()` til at svare `complete: true, measured: true`. **Fund 2:** `startedHttp`/`forcesHttps` genkendte scheme’et med versalfølsomt `startsWith(http://)` i to funktioner, så `HTTP://` — gyldig for `isHttpUrl` og faktisk overvåget over plain HTTP — fik **ingen** HTTPS-verdict overhovedet: menneske-fladen tabte `HTTPS forced: ❌ no`, JSON sagde `forcesHttps: null`. Samme familie som P1-22’s `HTTPS://`, én flytte væk. Rettelse: `urlScheme()` er den ene ejer (P1-22’s `expectsCertificate()` og den nye `readHttpsState()` spørger den), `readChain()` får “intet svar” som den anden ufuldstændige læsning (P1-16’s fire tilfælde uændrede), og `headers --json` får `securityChecked` fra ét kald til ejeren. 4 nye tests, ingen eksisterende rettet, strukturelle låse på at ingen checker genkender `http` selv og at terminalen ikke afgør `securityChecked` fra `r.`. Node 26.7.0: `npm ci --ignore-scripts`, **305/305**, `npm run audit` 0/0, `node --check` alle JS-filer, `node tools/matrix.mjs --check`, `sh -n`/`bash -n`, YAML tab-fri og `git diff --check` grønne. Mutationstest: 4 varianter, alle døde. Målt undervejs og kun noteret: et header der er **sendt tomt** (`x-frame-options: `) rapporteres som `⬜ missing` — samme fejltype som P1-21, lagt som P1-24 med fire acceptkriterier i stedet for at blive blandet ind i denne rettelse. Næste iteration: P1-24.
 - **Iteration 38 (P1-22, målt + fix):** ❓ 2 og ❓ 3 ubesvarede, så målingen gik videre med den overflad P1-21 fundet pegede på: certifikatet i `check --json` og Action-payloaden. Målt med rigtig CLI og rigtig `checkUrl` mod en lokal TLS-server med et 2-dages certifikat, nul kode ændret. **Fund 1** (planens pointe): `readSslState({})` svarede `expiringSoon: false`, så *enhver* URL uden læst certifikat fik et boolsk "ikke snart udløbet" — `http://`, en `https://` der ikke svarer, og en `https://` der svarer 500 — mens `sslDaysRemaining: null` stod ved siden af og sagde det modsatte. **Fund 2, værre endnu og nyt:** reglen "kun https har et certifikat" havde to ejere, begge versalfølsomme `startsWith('https')`, mens validatoren `isHttpUrl` går gennem `new URL()` og derfor *accepterer* `HTTPS://`. Målt: `https://localhost:PORT/` → `ssl: {validDays: 2}`, `2d ⚠️`, `true`; **`HTTPS://localhost:PORT/` → `ssl: null`, `N/A`, `false`** — samme site, samme certifikat. Én stort bogstav slukkede altså hele certifikatkontrollen, altså den Pro-funktion bureauer betaler for, og sagde samtidig til verden at certifikatet var i orden. Rettelsen følger rækken fra P1-13 til P1-21: `expectsCertificate()` i `src/status.js` er den ene ejer (og bruges af både `engine.js` og `action.yml`), `readSslState()` får `measured` og `expiringSoon: null` når intet blev læst, `check --json` får `sslChecked` additive, action.yml's validator accepterer `null`. 3 nye tests + 4 målte mutationer (3 / 2 / 2 / 1 fejl) → **301/301**; audit 0/0; `node --check`, `matrix --check`, `sh -n`/`bash -n`, YAML-parse og `git diff --check` grønne på Node 26.7.0. Tre eksisterende tests holdt den gamle kontrakt (false for et ulæseligt dagantal, og en låsning af den gamle inline-form) og er rettet med begrundelse — noteret, fordi det er fjerde gang en additive eller kontraktændring låser på en lås (P1-19, P1-20 og P1-21 gjorde det samme). Næste: **`headers --json`** er den eneste gratis flade der udtaler sig om sikkerhedsheadere — den viste et bureau bruger over for en kunde — og den er aldrig målt på de samme tal-spørgsmål.
 
 

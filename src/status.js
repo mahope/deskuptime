@@ -30,7 +30,28 @@ function expiredDaysCount(value) {
 }
 
 /**
- * Whether a URL can have a certificate at all — the one owner of that rule.
+ * The scheme a URL actually has — the one owner of that question.
+ *
+ * The validator that admits a URL (`isHttpUrl`) goes through `new URL()`, which
+ * lowercases the scheme, so a URL written `HTTPS://` or `HTTP://` is accepted and
+ * then requested. Every rule that asked "is this https?" with a case-sensitive
+ * `startsWith` therefore disagreed with the validator about the same string, and
+ * two of those rules did not just mislabel the site: they stopped measuring it
+ * (see `expectsCertificate` and `readHttpsState`).
+ *
+ * @param {string} url
+ * @returns {'http:'|'https:'|null} null when the string is not a URL at all
+ */
+export function urlScheme(url) {
+  try {
+    return new URL(url).protocol;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Whether a URL can have a certificate at all — one answer to the one owner above.
  *
  * Two surfaces need it and both used to spell it themselves as a case-sensitive
  * `startsWith('https')`, while the validator that admits a URL (`isHttpUrl`) goes
@@ -49,11 +70,46 @@ function expiredDaysCount(value) {
  * @returns {boolean} true only for a URL whose scheme is https
  */
 export function expectsCertificate(url) {
-  try {
-    return new URL(url).protocol === 'https:';
-  } catch {
-    return false;
-  }
+  return urlScheme(url) === 'https:';
+}
+
+/**
+ * One reading of a site's scheme policy, shared by every surface that shows one.
+ *
+ * `deskuptime headers` answers a bureau's first question about a client's site —
+ * does plain HTTP get forced to HTTPS? — and measured against a real CLI, it
+ * sometimes did not answer at all. The checker recognised the two schemes itself,
+ * with `startsWith('http://')` and `startsWith('https://')`, in two functions:
+ *
+ *   http://127.0.0.1:PORT/ok  ->  startedHttp: true   forcesHttps: false
+ *     HTTPS forced: ❌ no — site served over plain HTTP
+ *
+ *   HTTP://127.0.0.1:PORT/ok  ->  startedHttp: false  forcesHttps: null
+ *     (no HTTPS line at all)
+ *
+ * Same site, same response, one capital letter: the tool said nothing about
+ * enforcement where it had just been asked, and the JSON called a site serving
+ * over plain HTTP "not applicable". The same family as `expectsCertificate`
+ * (P1-22), one step further out: a rule that cannot be read is worse than a rule
+ * that answers wrongly, because there is nothing on the screen to notice.
+ *
+ * The facts are decided here, once:
+ *
+ *   - `startedHttp` is the scheme the *walk began* on, so `HTTP://` counts.
+ *   - `forcesHttps` is a verdict about a site that was *given the chance* to
+ *     redirect, so only a plain-HTTP start can have one. An https start is `null`
+ *     — there was nothing to force — and a walk that never reached a final
+ *     response is `null` too, because we never saw what the site did.
+ *
+ * @param {object} [state] — `{ startUrl, finalUrl }`; `finalUrl` is null when
+ *   the walk never got a response.
+ */
+export function readHttpsState({ startUrl = '', finalUrl = null } = {}) {
+  const startedHttp = urlScheme(startUrl) === 'http:';
+  return {
+    startedHttp,
+    forcesHttps: startedHttp && finalUrl !== null ? urlScheme(finalUrl) === 'https:' : null,
+  };
 }
 
 /**
@@ -530,9 +586,10 @@ export function chainStopNote({ stopReason, statusCode, redirectCount, limit } =
  *      said the same site was healthy and exited 0.
  *
  * So the facts are decided here, once: `complete` is false exactly when a
- * redirect was left to follow, and only a complete reading may speak for the
- * site's headers. The checker records the raw fact (`stopReason`) and asks here;
- * the terminal asks here. Neither can re-decide it.
+ * redirect was left to follow or no response was ever received, and only a
+ * complete reading may speak for the site's headers. The checker records the raw
+ * fact (`stopReason`, `statusCode`) and asks here; the terminal asks here.
+ * Neither can re-decide it.
  *
  * @param {object} [chain] — `{ stopReason, statusCode, steps, limit }` from
  *   `checkHeaders`.
@@ -542,10 +599,17 @@ export function readChain({ stopReason = null, statusCode = null, steps = [], li
   // A `Location` we could not resolve leaves the same dead end a browser hits,
   // and the 3xx is still the site's own response, so the reading is complete.
   const pending = stopReason === CHAIN_STOP.MAX_REDIRECTS || stopReason === CHAIN_STOP.LOOP;
+  // No response at all is the other way a reading can be unfinished, and the
+  // checker records it as a missing status code: refused, timed out, unresolvable.
+  // `stopReason` alone cannot see it, because a failed request stops for no
+  // redirect reason at all — so it answered "complete, measured" for a site that
+  // was never reached, and `headers --json` published five `null` security headers
+  // for it. A site that says nothing has no security posture to report.
+  const responded = Number.isInteger(statusCode);
   return {
-    complete: !pending,
+    complete: !pending && responded,
     // Only a complete reading may be presented as a finding about the site.
-    measured: !pending,
+    measured: !pending && responded,
     redirectCount: count,
     statusCode: Number.isInteger(statusCode) ? statusCode : null,
     note: chainStopNote({ stopReason, statusCode, redirectCount: count, limit }),

@@ -12,6 +12,7 @@ import {
   describeFetchError,
   isHealthyStatus,
   readChain,
+  readHttpsState,
 } from '../status.js';
 
 const SECURITY_HEADERS = [
@@ -27,6 +28,7 @@ function emptySecurity() {
 }
 
 function errorResult(originalUrl, currentUrl, error) {
+  const https = readHttpsState({ startUrl: originalUrl });
   return {
     finalUrl: currentUrl,
     redirected: currentUrl !== originalUrl,
@@ -34,10 +36,13 @@ function errorResult(originalUrl, currentUrl, error) {
     reachable: false,
     healthy: false,
     statusCode: null,
-    forcesHttps: null,
-    startedHttp: originalUrl.startsWith('http://'),
+    forcesHttps: https.forcesHttps,
+    startedHttp: https.startedHttp,
     server: null,
     poweredBy: null,
+    // Five nulls, which is what a site missing all five also looks like — the
+    // terminal never gets this far, but `headers --json` does, and it is handed
+    // `securityChecked: false` beside it (see `readChain().measured`).
     security: emptySecurity(),
     // No reading of the site at all, so there is no chain to describe.
     stopReason: null,
@@ -100,8 +105,7 @@ export function checkHeaders(url, maxRedirects = 10, options = {}) {
       const security = {};
       for (const name of SECURITY_HEADERS) security[name] = h[name] || null;
 
-      const startIsHttp = url.startsWith('http://');
-      const finalIsHttps = current.startsWith('https://');
+      const https = readHttpsState({ startUrl: url, finalUrl: current });
       const chain = readChain({ stopReason, statusCode: r.status, steps, limit: maxRedirects });
       const healthy = chain.complete && isHealthyStatus(r.status);
 
@@ -122,8 +126,8 @@ export function checkHeaders(url, maxRedirects = 10, options = {}) {
         // and the sentence naming why comes from `readChain` in the terminal.
         errorType: healthy ? null : (chain.complete ? 'http_error' : 'redirect_incomplete'),
         error: healthy ? null : (chain.complete ? `HTTP ${r.status}` : null),
-        forcesHttps: startIsHttp ? finalIsHttps : null,
-        startedHttp: startIsHttp,
+        forcesHttps: https.forcesHttps,
+        startedHttp: https.startedHttp,
         server: h['server'] || null,
         poweredBy: h['x-powered-by'] || null,
         security,

@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url';
 import { checkUrl, checkUrls } from '../src/engine.js';
 import { checkReachability } from '../src/checkers/ping.js';
 import { getStateFile, loadState, runPass, saveState, isPro } from '../src/watch.js';
+import { readChain, readHttpsState, urlScheme } from '../src/status.js';
 
 const run = promisify(execFile);
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
@@ -857,6 +858,146 @@ test('headers: the chain rules have one owner, like the certificate rules', () =
   assert.equal(cli.split('r.stopReason').length - 1, 1, 'the terminal must not re-decide the chain');
   assert.doesNotMatch(cli, /stopReason\s*[!=]==?/);
   assert.doesNotMatch(cli, /chain\.\w+ =/);
+});
+
+// ── headers: the site that was never read (P1-23) ─────────────────────────────
+//
+// Measured with a real CLI against a closed port, before any code changed:
+//
+//   headers --json http://127.0.0.1:<closed>/    ->  security: { five × null }
+//                                                    stopReason: null
+//                                                    reachable: false
+//
+// Five nulls is what a live site missing all five headers also looks like, and
+// the terminal never showed them (it stops at the error line) — so `--json`, the
+// surface a bureau pipes into a client report, stated a security posture for a
+// site that had not said a word. The same held after a redirect, where the chain
+// died on hop two and `stopReason: null` made the reading look complete.
+
+test('headers: the reading knows a site that never answered was never read', () => {
+  // The finding turned on `stopReason` being the only thing that could end a
+  // walk "unfinished", and a failed request stops for no redirect reason at all.
+  assert.equal(readChain({ statusCode: null, stopReason: null }).measured, false);
+  assert.equal(readChain({ statusCode: null, stopReason: null }).complete, false);
+  assert.equal(readChain({}).measured, false, 'no arguments is no reading either');
+
+  // Everything P1-16 decided is unchanged: a response that arrived still counts,
+  // including the 301 that is a dead end rather than an unfinished walk.
+  for (const state of [
+    { statusCode: 200, stopReason: null },
+    { statusCode: 301, stopReason: 'no_location' },
+    { statusCode: 301, stopReason: 'max_redirects' },
+    { statusCode: 301, stopReason: 'loop' },
+  ]) {
+    const expected = state.statusCode !== null && !['max_redirects', 'loop'].includes(state.stopReason);
+    assert.equal(readChain(state).measured, expected, JSON.stringify(state));
+  }
+});
+
+test('headers --json: a site that never answered cannot be read as a security finding', async (t) => {
+  const closedPort = await unusedPort();
+  const redirectTarget = `https://127.0.0.1:${closedPort}/gone`;
+  const redirectUrl = `${await statusServer(t, redirectTarget)}/redirect-refused`;
+
+  for (const [name, url] of [
+    ['refused outright', `http://127.0.0.1:${closedPort}/`],
+    ['refused after one hop', redirectUrl],
+  ]) {
+    const result = await new Promise((resolve, reject) => {
+      run(process.execPath, [CLI, 'headers', url, '--json', '--timeout', REQUEST_TIMEOUT])
+        .then(() => reject(new Error(`${name}: headers --json exited 0 on a site it never reached`)))
+        .catch((error) => {
+          assert.equal(error.code, 2, name);
+          resolve(JSON.parse(error.stdout));
+        });
+    });
+    assert.equal(result.reachable, false, `${name}: no response arrived`);
+    assert.equal(result.securityChecked, false, `${name}: the JSON must be able to say the site was not read`);
+    // The five nulls stay — a consumer reading the keys must not crash — but the
+    // sentence beside them is what makes them not a claim.
+    assert.equal(Object.keys(result.security).length, 5, name);
+  }
+
+  // The control the flag turned on: a site that did answer is measured, so the
+  // field cannot be a constant that is merely present.
+  const server = createServer((req, res) => {
+    res.writeHead(200, { 'content-type': 'text/html', 'x-frame-options': 'DENY' });
+    res.end('ok');
+  });
+  const port = await listen(server);
+  t.after(() => close(server));
+  const live = JSON.parse((await run(process.execPath, [CLI, 'headers', `http://127.0.0.1:${port}/`, '--json', '--timeout', REQUEST_TIMEOUT])).stdout);
+  assert.equal(live.securityChecked, true);
+  assert.equal(live.security['x-frame-options'], 'DENY');
+});
+
+// ── headers: the scheme of the URL as written (P1-23) ────────────────────────
+//
+// Measured with a real CLI against one local server, before any code changed:
+//
+//   http://127.0.0.1:PORT/ok  ->  startedHttp: true   forcesHttps: false
+//     HTTPS forced: ❌ no — site served over plain HTTP
+//   HTTP://127.0.0.1:PORT/ok  ->  startedHttp: false  forcesHttps: null
+//     (no HTTPS line at all)
+//
+// The same family as P1-22's `HTTPS://`: the validator goes through `new URL()`
+// and the checkers spelled the rule themselves, so one capital letter silenced
+// the HTTPS verdict instead of getting it wrong.
+
+test('headers: the scheme is read from the URL, not from its capital letters', () => {
+  assert.equal(urlScheme('HTTPS://acme.dk/'), 'https:');
+  assert.equal(urlScheme('HTTP://acme.dk/'), 'http:');
+  assert.equal(urlScheme('not a url'), null);
+  assert.equal(urlScheme(undefined), null);
+
+  // One capital letter, same site, same verdict.
+  assert.deepEqual(
+    readHttpsState({ startUrl: 'http://acme.dk/', finalUrl: 'http://acme.dk/' }),
+    readHttpsState({ startUrl: 'HTTP://acme.dk/', finalUrl: 'HTTP://acme.dk/' }),
+  );
+
+  // Only a plain-HTTP start can be told anything about forcing HTTPS, and only
+  // a walk that reached a response can be told what it did.
+  assert.deepEqual(readHttpsState({ startUrl: 'https://acme.dk/', finalUrl: 'https://acme.dk/' }), { startedHttp: false, forcesHttps: null });
+  assert.deepEqual(readHttpsState({ startUrl: 'http://acme.dk/', finalUrl: null }), { startedHttp: true, forcesHttps: null });
+  assert.deepEqual(readHttpsState({ startUrl: 'http://acme.dk/', finalUrl: 'https://acme.dk/' }), { startedHttp: true, forcesHttps: true });
+  assert.deepEqual(readHttpsState(), { startedHttp: false, forcesHttps: null });
+});
+
+test('headers: HTTP:// gets the same HTTPS verdict as http://', async (t) => {
+  const server = createServer((req, res) => {
+    res.writeHead(200, { 'content-type': 'text/html', 'x-frame-options': 'DENY' });
+    res.end('ok');
+  });
+  const port = await listen(server);
+  t.after(() => close(server));
+  const base = `127.0.0.1:${port}/`;
+
+  const lower = await run(process.execPath, [CLI, 'headers', `http://${base}`, '--timeout', REQUEST_TIMEOUT]);
+  const upper = await run(process.execPath, [CLI, 'headers', `HTTP://${base}`, '--timeout', REQUEST_TIMEOUT]);
+  assert.match(lower.stdout, /HTTPS forced: ❌ no — site served over plain HTTP/);
+  assert.match(upper.stdout, /HTTPS forced: ❌ no — site served over plain HTTP/, 'a site serving plain HTTP must be told so in any spelling');
+
+  const json = JSON.parse((await run(process.execPath, [CLI, 'headers', `HTTP://${base}`, '--json', '--timeout', REQUEST_TIMEOUT])).stdout);
+  assert.equal(json.startedHttp, true);
+  assert.equal(json.forcesHttps, false);
+  assert.equal(json.securityChecked, true);
+
+  // Pinned ownership: the checker must not recognise the schemes itself. As in the
+  // P1-13…P1-16 measurements, a behavioural test cannot prove a surface stopped
+  // owning a rule — the duplicated `startsWith` returned identical answers in
+  // every test above.
+  const checker = readFileSync(join(ROOT, 'src', 'checkers', 'headers.js'), 'utf8')
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/^\s*\/\/.*$/gm, '');
+  assert.doesNotMatch(checker, /startsWith\(['"]http/, 'the checker must ask readHttpsState(), not recognise http itself');
+  assert.match(checker, /readHttpsState\(\{/);
+  // The JSON's sentence is the owner's verdict, handed over — not decided twice.
+  const cli = readFileSync(join(ROOT, 'src', 'cli.js'), 'utf8')
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/^\s*\/\/.*$/gm, '');
+  assert.match(cli, /securityChecked: chain\.measured/);
+  assert.doesNotMatch(cli, /securityChecked:\s*r\./, 'the terminal must not decide it from the result');
 });
 
 function watchResult(overrides = {}) {

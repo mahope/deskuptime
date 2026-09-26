@@ -248,8 +248,16 @@ if (command === 'headers') {
   const { checkHeaders } = await import('./checkers/headers.js');
   const r = await checkHeaders(url, 10, { timeoutMs });
 
+  // One reading of the walk, asked once and handed to both surfaces: the terminal
+  // prints from it, and `--json` publishes its verdict. The JSON was the only
+  // surface that could lie, because a site that never answered has no security
+  // reading to print — five `null` headers look exactly like a site that is
+  // missing all five, and a bureau pipes this output straight into a client's
+  // report. `securityChecked` is the sentence the JSON could not say.
+  const chain = readChain({ stopReason: r.stopReason, statusCode: r.statusCode, steps: r.steps });
+
   if (args.includes('--json')) {
-    console.log(JSON.stringify(r, null, 2));
+    console.log(JSON.stringify({ ...r, securityChecked: chain.measured }, null, 2));
     if (!r.healthy) process.exitCode = 2;
   } else if (r.error) {
     console.log(`🧭 ${safeText(url, { max: 0 })}`);
@@ -257,7 +265,6 @@ if (command === 'headers') {
     console.log(`   ⚠️  Error: ${safeText(r.error, { max: 0 })}`);
     process.exitCode = 2;
   } else {
-  const chain = readChain({ stopReason: r.stopReason, statusCode: r.statusCode, steps: r.steps });
   console.log(`🧭 ${safeText(url, { max: 0 })}`);
   for (const s of r.steps) {
     console.log(`   ${s.status} → ${safeText(s.location, { max: 0 })}`);
