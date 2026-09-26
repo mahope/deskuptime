@@ -69,9 +69,45 @@ Payload:
   "type": "down | up | ssl_warning | ssl_expired | content_changed",
   "url": "https://yoursite.com",
   "message": "is DOWN — HTTP 503",
-  "timestamp": "2026-09-25T14:26:12.000Z"
+  "timestamp": "2026-09-25T14:26:12.000Z",
+  "measuredAt": "2026-09-25T14:26:11.204Z",
+  "previousChecked": "2026-09-25T14:25:41.000Z",
+  "transition": "observed"
 }
 ```
+
+**Tider.** `timestamp` er, som altid, hvornår denne POST blev bygget — ikke hvornår
+sitet blev målt. Det er den eneste tid feltet havde indtil 26/9, og en kanal der
+viser den som "sitet brød kl. 14:26" læser en leveringstid som en måling.
+`measuredAt` er passens egen tid: samme værdi som skrives til state-filen og vises
+af `deskuptime status`. Forskellen kan ikke læses fra ét tal, fordi
+`printPass` og webhook-modtagerens egen svartid ligger imellem. `previousChecked`
+er tidspunktet for den måling, en overgang sammenlignes med.
+
+**`transition` — tre ord, og hvorfor de findes.** `observed` betyder, at
+DeskUptime faktisk så skiftet: det forudgående pass er til stede og nyere end
+staleness-vinduet. `unobserved` betyder, at hændelsen er en sammenligning med en
+måling, der mangler, er ulæselig eller er ældre end vinduet — typisk fordi
+overvågningsloopet har været dødt. `none` er alt, der ikke er en tilstandsovergang
+(`ssl_warning`, `ssl_expired`, `content_changed`, `baseline`).
+
+Målt 26/9, før dette blev skrevet: en state-fil med et pass fra 41 dage siden —
+loopet var dødt, og sitet var aldrig nede — gav
+
+```json
+{ "type": "up", "message": "is UP (200) — 12ms" }
+```
+
+`type: "up"` er en maskinlæsbar påstand om en tilstandsendring, og overgangen var
+målt mod en læsning fra seks uger siden. `deskuptime status` sagde på samme fil
+`stale — last check 41 d ago`, og kundenapporten sagde det samme, så de to
+menneske-flader havde alderen, og payloaden — den eneste en maskine læser — havde
+intet. Nu følger beskeden med `⚠️ not an observed transition — the last check was
+41 d ago`, og `transition` er `unobserved`.
+
+**Beskeden siger aldrig, hvornår sitet brød.** Den note, der kan stå i `message`,
+handler om det *forudgående tjek* og ikke om nedbruddet. `docs/pro-alerts.md` §2's
+garanti om `down` består derfor uændret.
 
 Ingen licensnøgle, device-id eller brugerdata sendes i payloaden. Se §5.
 

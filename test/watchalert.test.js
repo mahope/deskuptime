@@ -295,3 +295,106 @@ test('a baseline event for an unmeasured site says no duration either', async ()
   assert.doesNotMatch(baseline.message, /nullms/);
   assert.match(baseline.message, /— —$/);
 });
+
+/**
+ * P1-17. The measured case: a state file whose last pass is 41 days old — the
+ * loop died, the site was very probably never down — produced an event that
+ * announced a recovery DeskUptime had not watched:
+ *
+ *   {"type":"up","url":"https://kunde.dk","message":"is UP (200) — 12ms"}
+ *
+ * `type: "up"` is a machine-readable claim that the site changed, and the change
+ * was measured against a reading six weeks old. On that same state file
+ * `deskuptime status` says `stale — last check 41 d ago` and the client report
+ * says the same, so both human surfaces had the age and the payload — the one a
+ * machine reads — had nothing.
+ */
+test('a recovery measured against a stale pass is not announced as a transition', async () => {
+  const { pass } = await passWith(false, {
+    lastChecked: '2026-08-16T01:00:00.000Z', // 41 days before the pass below
+    check: () => up(),
+  });
+  const event = pass.events.find(e => e.type === 'up');
+  assert.ok(event, 'the site is up now, so the pass still reports a recovery');
+  assert.match(event.message, /^is UP \(200\) — 42ms /);
+  assert.match(event.message, /not an observed transition — the last check was 41 d ago/);
+});
+
+test('a transition needs a previous pass that exists and is recent', async () => {
+  // Fresh: the ordinary case must stay quiet, or every alert grows a caveat.
+  const fresh = await passWith(false, { lastChecked: '2026-09-26T00:00:00.000Z', check: () => up() });
+  assert.match(fresh.pass.events[0].message, /^is UP \(200\) — 42ms$/);
+
+  // `wasUp: true` with no pass behind it — hand-edited or half-written. This is
+  // the hole in the first version of the rule, which reused `isCheckStale`:
+  // that helper treats an absent timestamp as "not stale" (correctly, for the
+  // report, which already says "not checked yet") and so the event claimed a
+  // transition against nothing at all.
+  const none = await passWith(true, { lastChecked: null, check: () => ({ url: URL, healthy: false, error: 'HTTP 500', statusCode: 500, timestamp: PASSED }) });
+  assert.match(none.pass.events[0].message, /not an observed transition — no previous check is on record/);
+
+  // Present but unreadable: a time we cannot order is not a time, and the note
+  // must not invent an age for it.
+  const unreadable = await passWith(false, { lastChecked: 'yes', check: () => up() });
+  assert.match(unreadable.pass.events[0].message, /not an observed transition — the previous check is at an unreadable time/);
+});
+
+test('the note names the previous check, never when the site broke', async () => {
+  // `wasUp: 'yes'` reads as an unknown previous verdict, so the pass raises the
+  // down event a paying customer must hear — and the 41-day-old pass behind it is
+  // exactly the case where "when did it break" is unknowable.
+  const { pass } = await passWith('yes', {
+    lastChecked: '2026-08-16T01:00:00.000Z',
+    check: () => ({ url: URL, healthy: false, error: 'Connection refused', statusCode: null, timestamp: PASSED }),
+  });
+  const message = pass.events[0].message;
+  // The age belongs to the *previous check*, so it may say "ago" — but it must
+  // not turn into a claim about when the site broke, which nothing here knows.
+  assert.doesNotMatch(message, /went down|has been down|down for|since|broke/i);
+  assert.match(message, /^is DOWN — Connection refused ⚠️ not an observed transition — the last check was 41 d ago$/);
+});
+
+test('every event carries the pass time and the previous check it is compared against', async () => {
+  const { pass, stateFile } = await passWith(false, { lastChecked: '2026-08-16T01:00:00.000Z', check: () => up() });
+  const event = pass.events[0];
+  assert.equal(event.measuredAt, PASSED, 'the pass time is the fact, not the moment the event was built');
+  assert.equal(event.previousChecked, '2026-08-16T01:00:00.000Z');
+  // The state file and the alert agree about when the pass ran.
+  const saved = JSON.parse(readFileSync(stateFile, 'utf-8'));
+  assert.equal(saved.urls[URL].lastChecked, PASSED);
+  // A non-transition event carries the same facts and no caveat.
+  const baseline = await passWith('yes', { lastChecked: null, check: () => up() });
+  assert.equal(baseline.pass.events[0].type, 'baseline');
+  assert.doesNotMatch(baseline.pass.events[0].message, /not an observed transition/);
+});
+
+/**
+ * The ownership lock. Following P1-13/P1-14/P1-16: an adfærdstest cannot catch a
+ * duplicated owner, so the rule is tested on the source. It counts the *readers*
+ * rather than scanning for one spelling — P1-16's first lock looked for
+ * `stopReason ===` and a second owner written `!== null` walked straight through
+ * it.
+ */
+test('the transition verdict is owned once and asked for, not re-decided', () => {
+  const status = readFileSync(join(import.meta.dirname, '..', 'src', 'status.js'), 'utf-8');
+  const watch = readFileSync(join(import.meta.dirname, '..', 'src', 'watch.js'), 'utf-8');
+
+  // One owner of the sentence, and nobody downstream writes their own.
+  assert.equal((status.match(/export function unobservedNote/g) || []).length, 1);
+  assert.doesNotMatch(watch, /not an observed transition/);
+  assert.doesNotMatch(watch, /unobservedNote/);
+
+  // Nobody outside the owner decides the verdict for themselves.
+  assert.doesNotMatch(watch, /'unobserved'|"unobserved"/);
+  assert.doesNotMatch(watch, /'observed'|"observed"/);
+
+  // Both readers ask: the message in runPass, and the payload in sendWebhook.
+  // Counted by assignment, not by the bare name — the doc comments mention
+  // readEvent() too, and P1-16's lock was fooled by exactly that kind of
+  // spelling difference.
+  const asks = watch.match(/= readEvent\(/g) || [];
+  assert.equal(asks.length, 3, `expected 3 readEvent() asks in watch.js, found ${asks.length}`);
+
+  // And the payload never re-derives the age behind the note.
+  assert.doesNotMatch(watch, /checkAge|isCheckStale/);
+});

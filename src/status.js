@@ -412,6 +412,106 @@ export function readChain({ stopReason = null, statusCode = null, steps = [], li
   };
 }
 
+/**
+ * The change an event claims, in three words a webhook receiver can branch on.
+ *
+ * `observed` is only for a transition DeskUptime actually watched happen: the
+ * previous pass is recent enough that the two readings are one monitoring loop's
+ * worth of evidence. `unobserved` means the event is a comparison against a pass
+ * that is missing or older than the staleness window, and `none` is every event
+ * that is not a transition at all.
+ */
+export const TRANSITION = {
+  OBSERVED: 'observed',
+  UNOBSERVED: 'unobserved',
+  NONE: 'none',
+};
+
+/** The event types that assert a change of state between two passes. */
+const TRANSITION_TYPES = new Set(['up', 'down']);
+
+/**
+ * The fixed sentence for a transition DeskUptime did not watch happen, in one
+ * place: the desktop notification, the terminal and the webhook payload all say
+ * it or none of them do.
+ *
+ * @param {number|null} ageDays — age of the previous pass, or null when the
+ *   state file does not say when it ran
+ * @param {'absent'|'unreadable'} [reason] — why there is no age
+ */
+export function unobservedNote(ageDays, reason) {
+  const when = reason === 'absent'
+    ? 'no previous check is on record'
+    : reason === 'unreadable'
+      ? 'the previous check is at an unreadable time'
+      : `the last check was ${ageDays} d ago`;
+  return `⚠️ not an observed transition — ${when}`;
+}
+
+/**
+ * One reading of a watch event, shared by every surface that sends one.
+ *
+ * The webhook payload is the only place in DeskUptime that states a time, and it
+ * stated the wrong one. Measured against a real `runPass`, a pass with two sites
+ * — one answering instantly, one timing out 800 ms later — produced:
+ *
+ *   {"type":"down","url":"…/quick","message":"is DOWN — …","timestamp":"…11.849Z"}
+ *   {"type":"down","url":"…/slow", "message":"is DOWN — …","timestamp":"…13.870Z"}
+ *
+ * Both checks *started* at `…11.042Z`; `timestamp` is when the POST body was
+ * built, after `printPass` and after the receiver's own latency. A customer whose
+ * channel renders that field reads it as "the site broke at 14:26", and nothing
+ * in the payload is the time of a measurement.
+ *
+ * Worse, the same payload asserted a change DeskUptime never saw. With a state
+ * file whose last pass was 41 days old — the loop had died, the site was very
+ * probably never down — the pass produced:
+ *
+ *   {"type":"up","url":"https://kunde.dk","message":"is UP (200) — 12ms"}
+ *
+ * `type: "up"` is a machine-readable claim that the site transitioned. The
+ * transition is measured against a 41-day-old reading. On that same state file
+ * `deskuptime status` says `stale — last check 41 d ago` and the client report
+ * says the same, so the two human surfaces had the age and the payload — the one
+ * a machine reads — did not.
+ *
+ * So the facts are decided here, once. `runPass` records the raw truth of what it
+ * saw (`measuredAt`, the pass's own time; `previousChecked`, the time of the
+ * reading a transition is compared against) and asks here for the sentence. The
+ * payload asks here too, with the *pass's* time as the reference so the message
+ * and the payload can never disagree about how old the previous check is.
+ *
+ * @param {object} [event] — `{ type, measuredAt, previousChecked }`
+ * @param {Date}   [now]  — defaults to the event's own `measuredAt`, so every
+ *   reader of the same event gets the same answer
+ */
+export function readEvent(event = {}, now) {
+  const value = event && typeof event === 'object' ? event : {};
+  const reference = now instanceof Date ? now
+    : (typeof value.measuredAt === 'string' && !Number.isNaN(Date.parse(value.measuredAt)) ? new Date(value.measuredAt) : new Date());
+  if (!TRANSITION_TYPES.has(value.type)) {
+    return { transition: TRANSITION.NONE, ageDays: null, note: '' };
+  }
+  // Observed needs a previous pass that is *present* and *recent*. Note the
+  // difference from the client report: `isCheckStale` deliberately treats an
+  // absent timestamp as "not stale", because the report already says "not
+  // checked yet" and flagging twice says nothing. An event has no such second
+  // surface — a `down` fired against `wasUp: true` with no pass behind it (a
+  // hand-edited or half-written state file) compares against nothing at all, and
+  // measured, that is exactly what `transition: "observed"` used to claim.
+  const hasPrevious = typeof value.previousChecked === 'string' && value.previousChecked.length > 0;
+  const reason = !hasPrevious ? 'absent'
+    : Number.isNaN(Date.parse(value.previousChecked)) ? 'unreadable'
+      : null;
+  const ageDays = checkAgeDays(value.previousChecked, reference);
+  const observed = reason === null && !isCheckStale(value.previousChecked, reference);
+  return {
+    transition: observed ? TRANSITION.OBSERVED : TRANSITION.UNOBSERVED,
+    ageDays,
+    note: observed ? '' : unobservedNote(ageDays, reason),
+  };
+}
+
 export function isHttpUrl(value) {
   try {
     const url = new URL(value);

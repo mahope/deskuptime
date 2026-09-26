@@ -17,7 +17,7 @@ import { readFileSync, writeFileSync, mkdirSync, existsSync, renameSync, unlinkS
 import { dirname, posix, win32 } from 'path';
 import { homedir } from 'os';
 import { createHash, randomUUID } from 'crypto';
-import { assertValidHttpUrls, expiredNote, isNewerPass, readEntry, readSslState, STALE_AFTER_DAYS } from './status.js';
+import { assertValidHttpUrls, expiredNote, isNewerPass, readEntry, readEvent, readSslState, STALE_AFTER_DAYS } from './status.js';
 import { recordPass } from './report.js';
 import { formatMs, safeText } from './display.js';
 import { loadHistory, pruneHistory, recordHistoryPass, saveHistory } from './history.js';
@@ -165,6 +165,20 @@ export async function runPass(state, opts = {}) {
     // paying customer got no desktop notification and no webhook about a site
     // that was down, while the terminal said "remains DOWN" on the same pass.
     const previous = readEntry(entry).verdict;
+    // The time of the pass this one is compared against, and this pass's own
+    // time. Both are the raw truth of what was measured; what they *mean* is
+    // readEvent()'s decision, so the terminal, the desktop notification and the
+    // webhook payload cannot each reach their own conclusion about it. Before
+    // this the payload carried no time at all except the moment its POST body was
+    // built, and a `up` event compared against a 41-day-old reading still said
+    // "is UP" as if DeskUptime had watched the site come back.
+    const previousChecked = entry.lastChecked;
+    const measuredAt = result.timestamp || new Date().toISOString();
+    // Every event carries the two raw facts; the branch that knows its own type
+    // asks readEvent() what they mean, and so does the payload for the same
+    // event — with the pass's own time as the reference, so the sentence in
+    // `message` and the `transition` word can never disagree.
+    const event = (type, message) => ({ url, type, message, measuredAt, previousChecked });
     // A baseline is "this site has never been checked", not "the last verdict
     // is unreadable" — an entry that already has a pass behind it must not be
     // announced as a first observation, and its DOWN state must reach the
@@ -177,14 +191,20 @@ export async function runPass(state, opts = {}) {
       const detail = result.healthy
         ? ` (${result.statusCode}) — ${formatMs(result.responseTimeMs)}`
         : result.error ? ` — ${result.error}` : '';
-      events.push({ url, type: 'baseline', message: `baseline recorded: ${status}${detail}` });
+      events.push(event('baseline', `baseline recorded: ${status}${detail}`));
     } else if (result.healthy && previous === 'down') {
-      events.push({ url, type: 'up', message: `is UP (${result.statusCode}) — ${formatMs(result.responseTimeMs)}` });
+      // "is UP" is a claim about a change, and this pass may not be the one that
+      // saw it: the loop can have been dead for weeks. The owner decides whether
+      // the reading behind the claim is recent enough to stand on.
+      const { note } = readEvent({ type: 'up', measuredAt, previousChecked });
+      events.push(event('up', `is UP (${result.statusCode}) — ${formatMs(result.responseTimeMs)}${note ? ' ' + note : ''}`));
     } else if (!result.healthy && (previous === 'up' || previous === 'unknown')) {
       // An unreadable previous verdict cannot prove a transition, but the site
       // is down *now* and the customer is paying to hear about it. Silence here
-      // is the bug; the wording claims nothing about when it broke.
-      events.push({ url, type: 'down', message: `is DOWN${result.error ? ' — ' + result.error : ''}` });
+      // is the bug; the wording claims nothing about when it broke. The note
+      // names the age of the *previous check*, never the moment it broke.
+      const { note } = readEvent({ type: 'down', measuredAt, previousChecked });
+      events.push(event('down', `is DOWN${result.error ? ' — ' + result.error : ''}${note ? ' ' + note : ''}`));
     }
 
     // One reading of the certificate, so the event, the persisted entry and
@@ -203,7 +223,7 @@ export async function runPass(state, opts = {}) {
       entry.sslExpired = true;
       if (ssl.expiredDays !== null) entry.sslExpiredDays = ssl.expiredDays;
       if (entry.sslExpiredWarned !== true) {
-        events.push({ url, type: 'ssl_expired', message: `SSL certificate ${expiredNote(ssl.expiredDays)} 🔴` });
+        events.push(event('ssl_expired', `SSL certificate ${expiredNote(ssl.expiredDays)} 🔴`));
         entry.sslExpiredWarned = true;
       }
       entry.sslWarned = false;
@@ -214,7 +234,7 @@ export async function runPass(state, opts = {}) {
       entry.sslValidDays = ssl.days;
       const warningActive = entry.sslWarned === true || typeof entry.sslWarned === 'number';
       if (ssl.expiringSoon && !warningActive) {
-        events.push({ url, type: 'ssl_warning', message: `SSL expires in ${ssl.days} days ⚠️` });
+        events.push(event('ssl_warning', `SSL expires in ${ssl.days} days ⚠️`));
         entry.sslWarned = true;
       } else if (!ssl.expiringSoon) {
         entry.sslWarned = false;
@@ -227,10 +247,12 @@ export async function runPass(state, opts = {}) {
     }
 
     if (result.content?.changed === true) {
-      events.push({ url, type: 'content_changed', message: `content changed (${entry.lastContentLength ?? '?'} → ${result.content.contentLength} bytes)` });
+      events.push(event('content_changed', `content changed (${entry.lastContentLength ?? '?'} → ${result.content.contentLength} bytes)`));
     }
 
-    entry.lastChecked = result.timestamp || new Date().toISOString();
+    // The same reading of this pass's time the events carry, so the state file
+    // and the alert a customer receives cannot disagree about when it ran.
+    entry.lastChecked = measuredAt;
     entry.wasUp = result.healthy;
     entry.lastStatus = result.statusCode;
     // Uptime counters for the client report. Two integers per URL, so the
@@ -480,8 +502,23 @@ async function notify(title, message) {
  * POST an event to a user-supplied webhook URL (Pro only).
  * Best-effort, no retry, no queue — see docs/pro-alerts.md §2.
  * Bounded by a hard timeout so a hanging endpoint cannot stall the watch loop.
+ *
+ * The payload used to carry exactly one time — the moment this body was built,
+ * a second or more after the pass that produced the event, growing with the
+ * length of the pass and the receiver's own latency. A channel that renders that
+ * field read it as "the site broke at 14:26", and the real reading was nowhere
+ * in the payload. It also asserted `type: "up"` / `"down"` — a state change —
+ * without saying how old the reading it was compared against was, so a recovery
+ * measured against a 41-day-old pass looked identical to one DeskUptime watched
+ * happen. So the payload now carries the measurement itself and asks
+ * `readEvent()` for the verdict, with the pass's own time as the reference: the
+ * note in `message` and the `transition` word cannot disagree.
+ *
+ * `timestamp` keeps its old meaning (when this POST was built) so no existing
+ * receiver breaks; the new fields are additive.
  */
 export async function sendWebhook(webhookUrl, event, { timeoutMs = WEBHOOK_TIMEOUT_MS } = {}) {
+  const reading = readEvent(event);
   try {
     const res = await fetch(webhookUrl, {
       method: 'POST',
@@ -492,6 +529,13 @@ export async function sendWebhook(webhookUrl, event, { timeoutMs = WEBHOOK_TIMEO
         url: event.url,
         message: event.message,
         timestamp: new Date().toISOString(),
+        // When the site was actually measured — the pass's own time, the same
+        // one written to the state file and shown by `deskuptime status`.
+        measuredAt: typeof event.measuredAt === 'string' ? event.measuredAt : null,
+        // The reading a transition is compared against, and whether DeskUptime
+        // watched the change or merely found it already so.
+        previousChecked: typeof event.previousChecked === 'string' ? event.previousChecked : null,
+        transition: reading.transition,
       }),
       signal: AbortSignal.timeout(timeoutMs),
     });
