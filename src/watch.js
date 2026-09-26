@@ -17,7 +17,7 @@ import { readFileSync, writeFileSync, mkdirSync, existsSync, renameSync, unlinkS
 import { dirname, posix, win32 } from 'path';
 import { homedir } from 'os';
 import { createHash, randomUUID } from 'crypto';
-import { assertValidHttpUrls, expiredNote, findUrlKey, isNewerPass, partitionUsableUrls, readContentChange, readEntry, readEvent, readRedirectTarget, queuedAgeMs, readSslState, STALE_AFTER_DAYS, unusableUrlNote, urlIdentity, withoutCredentials } from './status.js';
+import { assertValidHttpUrls, expiredNote, findUrlKey, isNewerPass, partitionUsableUrls, readContentChange, readContentChangeAlert, readEntry, readEvent, readRedirectTarget, queuedAgeMs, readSslState, STALE_AFTER_DAYS, unusableUrlNote, urlIdentity, withoutCredentials } from './status.js';
 import { recordPass } from './report.js';
 import { formatMs, safeText } from './display.js';
 import { loadHistory, pruneHistory, recordHistoryPass, saveHistory } from './history.js';
@@ -465,7 +465,28 @@ export async function runPass(state, opts = {}) {
         previousTitle: entry.lastTitle,
         title: result.content.title,
       });
-      events.push(event('content_changed', change.message));
+      // Whether the change is *sent* is a second question, and it has one owner
+      // too: a page that renders a per-request value (a CSRF nonce, a
+      // cache-buster, a live counter) differs on every pass, and every difference
+      // used to become an alert — a POST to the paid channel and a desktop
+      // notification every 30 s, forever. Measured 2026-09-26; see
+      // readContentChangeAlert(). The change itself is still hashed, counted and
+      // written on every pass, and the first change after a quiet hour is sent
+      // as before, so a defaced or redesigned page is still reported.
+      const alert = readContentChangeAlert({
+        change,
+        previousAlertedAt: entry.contentAlertedAt,
+        counted: entry.contentChangesHeld,
+        now,
+      });
+      if (alert) {
+        events.push(event('content_changed', alert.message));
+        entry.contentAlertedAt = now.toISOString();
+        entry.contentChangesHeld = 0;
+      } else {
+        // Held, not dropped: the count rides on the next alert that is sent.
+        entry.contentChangesHeld = (Number.isInteger(entry.contentChangesHeld) ? entry.contentChangesHeld : 0) + 1;
+      }
     }
 
     // The same reading of this pass's time the events carry, so the state file

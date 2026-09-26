@@ -10,7 +10,7 @@ import { fileURLToPath } from 'node:url';
 import { checkUrl, checkUrls } from '../src/engine.js';
 import { checkReachability } from '../src/checkers/ping.js';
 import { getStateFile, loadState, runPass, saveState, isPro } from '../src/watch.js';
-import { readChain, readContentChange, readDisclosure, readEntry, readHttpsState, readRedirectTarget, readSecurityHeaders, SECURITY_HEADER, urlScheme } from '../src/status.js';
+import { CONTENT_ALERT_MIN_GAP_MS, readChain, readContentChange, readDisclosure, readEntry, readHttpsState, readRedirectTarget, readSecurityHeaders, SECURITY_HEADER, urlScheme } from '../src/status.js';
 import { buildReport, renderReportMarkdown } from '../src/report.js';
 
 const run = promisify(execFile);
@@ -1823,12 +1823,21 @@ test('watch content transitions are latched to the saved hash', async (t) => {
     { hash: 'hash-b', length: 20 },
     { hash: 'hash-b', length: 20 },
     { hash: 'hash-a', length: 10 },
+    // The same change as the first one, asked again after an hour. A page that
+    // returns to a hash it had before is still a change — what notices it is
+    // the saved hash, not a clock, and the fifth pass is where that is proved.
+    { hash: 'hash-b', length: 20 },
   ];
+  // Every pass but the last shares one timestamp, so the hour between the
+  // second and the fifth pass is real elapsed time and not four fast passes.
+  const base = new Date('2026-09-27T09:00:00.000Z');
+  const times = [0, 0, 0, 0, CONTENT_ALERT_MIN_GAP_MS + 1000];
   const passes = [];
 
-  for (const value of values) {
+  for (const [index, value] of values.entries()) {
     passes.push(await runPass(state, {
       ...options,
+      now: new Date(base.getTime() + times[index]),
       check: async (_url, { contentHash }) => watchResult({
         content: {
           fetched: true,
@@ -1843,13 +1852,17 @@ test('watch content transitions are latched to the saved hash', async (t) => {
     state = loadState(options);
   }
 
+  // The fourth pass is a real change inside the hour the second one opened, so
+  // it is measured and held rather than sent — see readContentChangeAlert().
   assert.deepEqual(passes.map(pass => pass.events.map(event => event.type)), [
     ['baseline'],
     ['content_changed'],
     [],
+    [],
     ['content_changed'],
   ]);
   assert.match(passes[1].events[0].message, /10 → 20 bytes/);
+  assert.match(passes[4].events[0].message, /1 earlier change since the last alert, not sent/);
 });
 
 test('watch SSL warnings latch through unavailable checks until recovery', async (t) => {

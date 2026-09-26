@@ -18,7 +18,7 @@ kundeflade kan love dem. Redigér claims i `src/features.js`, ikke i tabellerne.
 | `watch` baggrundsovervågning | 3 URL'er, min. 60 s interval | Ubegrænsede URL'er, min. 30 s interval | I begge |
 | Terminal-udskrift ved UP/DOWN/SSL/content-ændring | ✅ | ✅ | I begge |
 | `deskuptime status` — licenstilstand og overvågede URL'er, read-only | ✅ | ✅ | I begge |
-| Webhook-alerts ved hver hændelse (`--webhook`) | — | ✅ | Kun Pro |
+| Webhook-alerts ved hver hændelse, content-ændringer højst 1/time pr. site (`--webhook`) | — | ✅ | Kun Pro |
 | Lokal desktop-notification (macOS i CLI'en, alle platforme i desktopappen) | — | ✅ | Kun Pro |
 | Desktop-app: tray, baggrundsloop, aktivitetsoversigt | — | ✅ | Kun Pro — privat desktopapp |
 | Email-alerts | — | — | **Ikke bygget** |
@@ -44,6 +44,22 @@ noget, der ikke findes.
 Kommando: `deskuptime watch <url> --webhook <url>`.
 
 - **Hvornår:** én POST pr. hændelse, dog aldrig for `baseline`-begivenheder.
+- **Hvilke hændelser der sendes:** alle typerne i `EVENT_TYPES` undtagen `baseline`.
+  Den eneste type med en tæthed er `content_changed`: **højst én pr. site pr. time**
+  (`CONTENT_ALERT_MIN_GAP_MS` i `src/status.js`). En side der renderer en værdi pr.
+  forespørgsel — et CSRF-token, en cache-buster, et "sidst opdateret"-tidspunkt, en
+  live-tæller — har et nyt hash på *hvert* pass, så uden tætheden blev hver eneste
+  forespørgsel til en alarm: målt 2026-09-26 med den rigtige loop gav tre pass tre
+  alarmer på en sådan side. Det er ikke larmet i sig selv, der skader — det er det
+  kanalen og notifikationscentret bliver **dæmpet** af, og dæmpningen er netop det der
+  skjuler den rigtige `is DOWN`. Ændringen læses, hashes, tælles og skrives på hvert
+  pass som før; kun det der *sendes* holdes tilbage. Den første ændring efter en stille
+  time sendes som før, så en defaceret eller redesignet side stadig meldes. Det der
+  blev holdt tilbage **tælles, ikke kasseres**: den næste sendte alarm siger hvor
+  mange ændringer den står for (`3 earlier changes since the last alert, not sent`),
+  så en adapter kan se at siden var aktiv uden at få 2 880 beskeder om det. Et ur der
+  gik baglæs undertrykker intet: spændvidden er negativ, og det er et urproblem, ikke
+  et udsagn om siden.
 - **Hvornår kommer der et `down`:** når et site *nu* er nede, og forrige måling enten
   var op eller ikke kunne læses. En `wasUp` i state-filen, der hverken er `true` eller
   `false` (håndskrevet, genskabt fra backup, halvskrevet), er **ikke** et site der var

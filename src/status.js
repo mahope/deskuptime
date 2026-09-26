@@ -250,6 +250,51 @@ export function readContentChange({ previousLength = null, length = null, previo
   };
 }
 
+/**
+ * How long one site waits between two *sent* content-change alerts. One hour.
+ */
+export const CONTENT_ALERT_MIN_GAP_MS = 60 * 60 * 1000;
+
+/**
+ * One content-change alert per site per hour — the throttle, and the sentence
+ * that accounts for what it held back. `null` means "measured, but not sent".
+ *
+ * `content_changed` is raised from a hash of the page's bytes, so any page that
+ * renders a per-request value — a CSRF nonce, a cache-buster, a "last updated"
+ * timestamp, a live counter — differs on *every* pass, and every difference used
+ * to become an alert: a POST to the paid channel and a desktop notification,
+ * every 30 s, for as long as the loop ran. Measured 2026-09-26 with the real
+ * loop over a page carrying a per-request token: three passes, three alerts, and
+ * not one of them about anything a customer can act on. The damage is not the
+ * volume in itself but what the volume buys — a channel and a notification centre
+ * that cry wolf 2 880 times a day get muted, and the muting is what then hides
+ * the real `is DOWN`.
+ *
+ * So the change is still read, hashed, counted and recorded on every pass: this
+ * decides what is *sent*, not what is true. The first change after a quiet hour
+ * is sent as before, which is what a defaced or redesigned page needs — a
+ * defacement is a change, and it is the first change since the last alert. What
+ * the throttle held back is counted, never dropped, and the next sent alert says
+ * how many changes it stands for, so the silence is accounted for rather than
+ * merely quiet.
+ *
+ * A clock that jumped backwards does not suppress anything: this reads elapsed
+ * time, and a negative span is the same clock problem the pass already names
+ * (`clockAhead`), not evidence about the page.
+ */
+export function readContentChangeAlert({ change, previousAlertedAt = null, counted = 0, now = new Date(), minGapMs = CONTENT_ALERT_MIN_GAP_MS } = {}) {
+  const last = typeof previousAlertedAt === 'string' ? Date.parse(previousAlertedAt) : Number.NaN;
+  const elapsed = now.getTime() - last;
+  if (Number.isFinite(elapsed) && elapsed >= 0 && elapsed < minGapMs) return null;
+  const held = Number.isInteger(counted) && counted > 0 ? counted : 0;
+  return {
+    message: held > 0
+      ? `${change.message} (${held} earlier change${held === 1 ? '' : 's'} since the last alert, not sent)`
+      : change.message,
+    held,
+  };
+}
+
 /** The three states a judged security header can be in. */
 export const SECURITY_HEADER = {
   /** The site sent the header with a value. */

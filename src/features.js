@@ -117,8 +117,8 @@ export const MATRIX = [
   },
   {
     id: 'webhook',
-    en: 'Webhook alerts on every event (`--webhook`)',
-    da: 'Webhook-alerts ved hver hændelse (`--webhook`)',
+    en: 'Webhook alerts on every event, content changes at most 1/hour per site (`--webhook`)',
+    da: 'Webhook-alerts ved hver hændelse, content-ændringer højst 1/time pr. site (`--webhook`)',
     free: NO,
     pro: YES,
     implemented: true,
