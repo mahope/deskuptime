@@ -19,6 +19,7 @@ import { homedir } from 'os';
 import { createHash, randomUUID } from 'crypto';
 import { assertValidHttpUrls } from './status.js';
 import { recordPass } from './report.js';
+import { safeText } from './display.js';
 import { loadHistory, pruneHistory, recordHistoryPass, saveHistory } from './history.js';
 import { FREE, PRO, PRODUCT } from './features.js';
 
@@ -222,8 +223,11 @@ function eventIcon(type) {
 }
 
 export function printPass(pass, { alertUnchangedDown = true } = {}) {
+  // The URL and the error text printed next to a DOWN line come from the site
+  // being watched, so they are flattened to one inert line each: a server that
+  // sends escape sequences must not be able to repaint our own output.
   for (const event of pass.events) {
-    console.log(`[${fmtNow()}] ${eventIcon(event.type)} ${event.url} ${event.message}`);
+    console.log(`[${fmtNow()}] ${eventIcon(event.type)} ${safeText(event.url, { max: 0 })} ${safeText(event.message, { max: 0 })}`);
   }
 
   const reported = new Set(pass.events.filter(event => event.type === 'down' || event.type === 'baseline').map(event => event.url));
@@ -231,7 +235,7 @@ export function printPass(pass, { alertUnchangedDown = true } = {}) {
     for (const result of pass.results) {
       if (result.healthy || reported.has(result.url)) continue;
       const message = alertUnchangedDown ? 'is DOWN' : 'remains DOWN';
-      console.log(`[${fmtNow()}] ${alertUnchangedDown ? '🚨' : '·'} ${result.url} ${message}${result.error ? ' — ' + result.error : ''}`);
+      console.log(`[${fmtNow()}] ${alertUnchangedDown ? '🚨' : '·'} ${safeText(result.url, { max: 0 })} ${message}${result.error ? ' — ' + safeText(result.error, { max: 0 }) : ''}`);
     }
   } else if (pass.events.length === 0) {
     console.log(`[${fmtNow()}] ✓ all monitored sites OK`);
@@ -250,7 +254,7 @@ export function printStatus(options = {}) {
     const status = entry.wasUp === true ? '✅ up' : entry.wasUp === false ? '🚨 down' : '❔ unknown';
     const ssl = entry.sslValidDays != null ? `, SSL ${entry.sslValidDays}d` : '';
     const checked = entry.lastChecked ? ` @ ${entry.lastChecked}` : '';
-    console.log(`  ${status}  ${url} (${entry.lastStatus ?? '—'}${ssl})${checked}`);
+    console.log(`  ${status}  ${safeText(url, { max: 0 })} (${safeText(entry.lastStatus, { fallback: '—', max: 0 })}${ssl})${checked}`);
   }
 }
 

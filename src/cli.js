@@ -18,6 +18,7 @@ import { readFileSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { invalidHttpUrls } from './status.js';
+import { safeText } from './display.js';
 import { DEFAULT_WINDOW_DAYS, HISTORY_DAYS, loadHistory } from './history.js';
 import { FREE, PRODUCT, renderHelpPro } from './features.js';
 
@@ -147,15 +148,17 @@ if (command === 'check') {
       const changedEmoji = result.content?.changed === true ? '🔄' : result.content?.changed === false ? '⏸️' : '—';
       const httpStatus = result.statusCode || 'N/A';
 
-      console.log(`${statusSymbol} ${result.url}`);
+      // Everything below except our own labels can be chosen by the site being
+      // checked, so it goes through safeText() — see src/display.js.
+      console.log(`${statusSymbol} ${safeText(result.url, { max: 0 })}`);
       console.log(`   Status:   ${httpStatus} — ${result.healthy ? 'UP' : 'DOWN'}`);
       console.log(`   Response: ${result.responseTimeMs}ms`);
-      console.log(`   ${sslEmoji} SSL:     ${summary.ssl}`);
+      console.log(`   ${sslEmoji} SSL:     ${safeText(summary.ssl, { max: 0 })}`);
       if (result.content?.fetched) {
         console.log(`   ${changedEmoji} Content: ${result.content.contentLength.toLocaleString()} bytes`);
       }
       if (result.error) {
-        console.log(`   ⚠️  Error:  ${result.error}`);
+        console.log(`   ⚠️  Error:  ${safeText(result.error, { max: 0 })}`);
       }
       console.log('');
     }
@@ -213,26 +216,27 @@ if (command === 'headers') {
     console.log(JSON.stringify(r, null, 2));
     if (!r.healthy) process.exitCode = 2;
   } else if (r.error) {
-    console.log(`🧭 ${url}`);
-    console.log(`   Final: ${r.finalUrl} (${r.statusCode || 'n/a'})`);
-    console.log(`   ⚠️  Error: ${r.error}`);
+    console.log(`🧭 ${safeText(url, { max: 0 })}`);
+    console.log(`   Final: ${safeText(r.finalUrl, { max: 0 })} (${r.statusCode || 'n/a'})`);
+    console.log(`   ⚠️  Error: ${safeText(r.error, { max: 0 })}`);
     process.exitCode = 2;
   } else {
-  console.log(`🧭 ${url}`);
+  console.log(`🧭 ${safeText(url, { max: 0 })}`);
   for (const s of r.steps) {
-    console.log(`   ${s.status} → ${s.location}`);
+    console.log(`   ${s.status} → ${safeText(s.location, { max: 0 })}`);
   }
-  console.log(`   Final: ${r.finalUrl} (${r.statusCode || 'n/a'})${r.redirected ? ' — redirected' : ''}`);
+  console.log(`   Final: ${safeText(r.finalUrl, { max: 0 })} (${r.statusCode || 'n/a'})${r.redirected ? ' — redirected' : ''}`);
   if (r.startedHttp) {
     console.log(`   HTTPS forced: ${r.forcesHttps ? '✅ yes' : '❌ no — site served over plain HTTP'}`);
   }
   if (r.poweredBy) {
-    console.log(`   ⚠️  X-Powered-By exposed: ${r.poweredBy}`);
+    console.log(`   ⚠️  X-Powered-By exposed: ${safeText(r.poweredBy, { max: 0 })}`);
   }
   const missing = Object.entries(r.security).filter(([, v]) => !v).map(([k]) => k);
   const present = Object.entries(r.security).filter(([, v]) => v);
   for (const [k, v] of present) {
-    console.log(`   ✅ ${k}: ${v.length > 60 ? v.slice(0, 57) + '...' : v}`);
+    // max 60 is the historical cap and is kept, so a normal header prints as before.
+    console.log(`   ✅ ${k}: ${safeText(v)}`);
   }
   for (const k of missing) {
     console.log(`   ⬜ missing: ${k}`);
@@ -439,7 +443,7 @@ if (command === 'status') {
   for (const u of urls) {
     const e = state.urls[u];
     const up = e.wasUp === true ? '✅' : e.wasUp === false ? '❌' : '·';
-    console.log(`  ${up} ${u}${e.lastStatus ? ' (' + e.lastStatus + ')' : ''}${e.sslValidDays != null ? ' — SSL ' + e.sslValidDays + 'd' : ''}`);
+    console.log(`  ${up} ${safeText(u, { max: 0 })}${e.lastStatus ? ' (' + safeText(e.lastStatus, { max: 0 }) + ')' : ''}${e.sslValidDays != null ? ' — SSL ' + e.sslValidDays + 'd' : ''}`);
   }
   process.exit(0);
 }

@@ -1,9 +1,9 @@
 # IMPLEMENTATION_PLAN.md
 
 STATUS: I GANG
-Iteration: 17 — 2026-09-26
-Arbejdsgrene: `ceo/report-history` (P1-2 del C)
-Næste handling: **P1-2 del C er færdig** — `deskuptime report` kan nu vise *Uptime (window)*: 30 dages historik i dags-buckets pr. URL i `~/.deskuptime/history.json`, begrænset ved konstruktion (35 døgn pr. URL, 500 URL'er, pruning ved skrivning) og uden at `state.json` vokser. `--days N` (1–35) afløser fast 30 og afvises deterministisk i stedet for at ignoreres. 17 nye tests + 4 mutationstests → 167/167. Næste iteration: planlagte rapporter / flere lokationer (kræver ❓ 2 + ❓ 3), eller en ny research-iteration. P1-1 AC3 (sitekilder) er `BLOCKED` på ❓ 8.
+Iteration: 18 — 2026-09-26
+Arbejdsgrene: `ceo/terminal-safety` (P2-1 del C)
+Næste handling: **P2-1 del C er færdig** — et overvåget site kan ikke længere male DeskUptimes egen terminaloutput. Ny `src/display.js` med én `safeText()`, som alle menneskelæselige udskriftssteder bruger. **Målt først, ikke antaget:** undici afviser ESC/BEL/VT/FF/SO og DEL i en headerværdi (`Invalid header value char`), så den klassiske escape-sekvens-vektor var lukket i parseren — ESC-stripping er defense in depth, ikke en live bug. **C1-kontroltegn (U+0085 NEL, U+009B CSI) kommer derimod igennem**, fordi undici dekoder headerbytes som latin1: et site kan indsætte et linjeskift i `headers`-rapporten og dermed bryde aftalen om én linje pr. record, og U+009B er en CSI i en terminal i 8-bit-tilstand. Bidi/zero-width-stripping er også defense in depth — de kan ikke ankomme som bidi-tegn via latin1. `--json` er bevidst urørt: en maskinformat må hellere miste præcision end ljuge. 12 nye tests + 3 mutationstests → 179/179. Næste iteration: planlagte rapporter / flere lokationer (kræver ❓ 2 + ❓ 3), eller en ny research-iteration. P1-1 AC3 (sitekilder) er `BLOCKED` på ❓ 8.
 
 ## Mission
 
@@ -408,7 +408,7 @@ Den aktuelle gate-definition er registreret her:
 
 - **Ikke bygget (bevidst, i spec §7):** hostet status-side med offentligt URL (kræver server + domæne + ❓ 3), dags-tidsserie/graf pr. site, kalenderperioder ("august 2026"), fakturalayout/logo, dansk rapporttekst, planlagte rapporter.
 
-### P2-1 — I GANG (del A + del B færdig) — Hæd deterministiske tests og drift
+### P2-1 — I GANG (del A + del B + del C færdig) — Hæd deterministiske tests og drift
 
 **Begrundelse:** Nuværende Node-tests er delvist live-netværksafhængige, og Action-smoke-assertionen kan ikke fejle på `false`.
 
@@ -420,7 +420,7 @@ Den aktuelle gate-definition er registreret her:
 2. Node- og Action-resultater dækkes af den samme statusmatrix. — **Del A**
 3. Der tilføjes timeout-, body-size-, webhook- og license-retrytests. — **Del B** (timeout og webhook dækkedes allerede af del A)
 4. Action bruger `jq -e` eller en assertion, der faktisk fejler ved forkert resultat. — **Del A**
-5. Den offentlige Node-gate udvides kun hvis nye værktøjer eller konkrete fejl gør det nødvendigt. — **Del B: ingen nye værktøjer, kun `node --check` på de rørte filer**
+5. Den offentlige Node-gate udvides kun hvis nye værktøjer eller konkrete fejl gør det nødvendigt. — **Del B: ingen nye værktøjer, kun `node --check` på de rørte filer; del C tilføjer ét testfile og ingen afhængighed**
 
 **Del A — FÆRDIG 2026-09-25 (`ceo/deterministic-tests`):**
 
@@ -445,11 +445,25 @@ Den aktuelle gate-definition er registreret her:
 - **Mutationstest (6):** gendannet `clearTimeout` før body-readet → stalling-testen **cancelleres efter 30 s**; fjernet streaming-cap'en → 1 fejl; fjernet `content-length`-springet → 1 fejl; fjernet genprøvningsloopet → 5 fejl; `retryable = true` (verdikt genprøves) → 3 fejl; ignoreret `Retry-After` → 1 fejl.
 - **Bevis:** Node 26.7.0 — `npm ci --ignore-scripts`, **`npm test` grøn med 149/149** (136 + 13), `npm run audit` 0/0, `node --check` alle JS-filer, `node tools/matrix.mjs --check`, `sh -n`/`bash -n` og `git diff --check` grønne. Ingen afhængighed ændret. **Bemærk:** AC3's body-size-del lå og lavede *produktkode*, ikke kun tests — en test alene ville have dokumenteret bugen uden at lukke den.
 
+**Del C — FÆRDIG 2026-09-26 (`ceo/terminal-safety`):**
+
+- **Hvad opgaven egentlig var:** `deskuptime headers` skriver headerværdier fra det site, den undersøger, direkte til terminalen — `X-Powered-By` og CSP/HSTS-værdierne råt. Et overvåget site kan altså vælge en del af den rapport, der handler om sig selv.
+- **Først målt, så skrevet — og min første hypotese var forkert.** Jeg antog, at en ESC i en headerværdi kunne skrive over vores egen output. En probe mod en rå `net`-socket viser, at **undici afviser** ESC, BEL, VT, FF, SO og DEL i en headerværdi med `Invalid header value char`, før de når nogen kode. Den klassiske vektor er altså lukket i parseren, ikke i vores output. Det er skrevet ned, så næste iteration ikke "fikser" det igen.
+- **Hvad der faktisk kommer igennem:** alt fra `0x80` og opefter, fordi undici dekoder headerbytes som **latin1**. Særligt **U+0085 (NEL)** og **U+009B (8-bit CSI)**. Det er reelle fejl: NEL er et linjeskift for nogle terminaler, så et site kan bryde den aftale om én linje pr. record i både `headers` og `watch --once`; U+009B er en CSI i en terminal i 8-bit-tilstand. Bevis: rå-socket-serveren i testen, og `assertInert()` fejler på den muterede kode.
+- **Bidi/zero-width er defense in depth, ikke en live bug.** Via latin1-dekoding ankommer UTF-8-sekvenser som `U+00E2 U+0080 U+00AE` — altså ikke som RLO. `INVISIBLE`-klassen er derfor værd at have for en håndskrevet state-fil, en fremtidig klient og `watch`-state, men den må ikke sælges som en fundet sårbarhed.
+- **Én funktion, alle steder:** ny `src/display.js` med `safeText(value, { max, fallback })`. Den fjerner hele escape-sekvenser (CSI, OSC med BEL *og* ST, to-byte-escapes), C0/C1/DEL, bidi og zero-width, klemmer til én linje og bevarer det historiske 60-tegns cap på sikkerhedsheadere. Anvendt på `headers` (URL, fejl, redirect-trin, `X-Powered-By`, sikkerhedsheadere), `check` (URL, SSL-fejl, fejltekst) og `watch`/`status` (`printPass`, `printStatus`).
+- **`--json` er bevidst urørt.** En maskinformat må hellere miste præcision end lyve om data: den, der renderer JSON'en, skal escape. Der er en test, der låser raw-værdien i `headers --json`.
+- **To fejl fundet af mine egne tests undervejs (ikke produktrelaterede):** (1) `assertInert()` matchede et linjeskift (LF), altså vores *egne* linjeskifter; (2) `net.Server` har ikke `closeAllConnections()` (det har `http.Server`), så `after`-hooken kastede og testrunneren aldrig lukkede. Begge rettet — og det er grunden til, at testen bruger en rå socket med håndtrackede sockets.
+- **Test (12 nye, `test/display.test.js`, ingen netværk):** 6 unit (benign tekst uændret inkl. CSP/HSTS/DENY, hele escape-sekvenser væk, OSC-BEL og OSC-ST, de faktisk-reachable bytes, bidi/zero-width, cap + fallback) og 6 end-to-end mod en rå-socket-server: en forfalsket ren sikkerhedsrapport (de 4 ærlige `⬜ missing:`-linjer skal alle være der), redirect-målet neutraliseret af `new URL()` (percentkodet — låst med en test, så en fremtidig ændring ikke kan åbne det), `--json` tabsfrit, den målte parsergrænse for ESC/BEL/DEL (fejlen skal surfaces, `OWNED` må aldrig printes, exit 2), en DOWN-linje der overlever et site, der prøver at reflowe loggen, og en håndskrevet state-fil, der prøver at male URL-listen.
+- **Mutationstest (3):** `safeText` gjort til pass-through → 15 fejl; 8-bit-CSI-stripping fjernet → 7 fejl; kun `headers`-stedet gjort usikkert → 3 fejl.
+- **Bevis:** Node 26.7.0 — `npm ci --ignore-scripts`, **`npm test` grøn med 179/179** (167 + 12), `npm run audit` 0/0, `node --check` alle JS-filer, `node tools/matrix.mjs --check`, `git diff --check` grønne. Ingen afhængighed ændret, ingen ny claim, matrixen urørt.
 
 ## Dependency- og opgraderingslog
 
 ### Aktuel offentlig CLI
 
+
+- `2026-09-26`: P2-1 del C gjorde terminaloutput tro værdig. `headers` skrev `X-Powered-By` og sikkerhedsheadere fra det undersøgte site råt til terminalen. Målt først: **undici afviser** ESC/BEL/VT/FF/SO og DEL i en headerværdi, så escape-sekvens-vektoren var lukket i parseren — men **C1-tegn (U+0085 NEL, U+009B CSI) kommer igennem**, fordi headerbytes dekodes som latin1, så et site kan bryde aftalen om én linje pr. record. Ny `src/display.js` med én `safeText()`, brugt i `headers`, `check`, `watch` og `status`; `--json` er bevidst urørt, fordi en maskinformat hellere må miste præcision end lyve. 12 nye tests + 3 mutationstests → **179/179**; `npm run audit` 0/0; `node --check`, `matrix --check` og `git diff --check` grønne på Node 26.7.0. Ingen afhængighed ændret.
 - `2026-09-26`: P1-2 del C gav kunderapporten et 30-dages vindue. Ny `src/history.js` skriver dags-buckets (to heltal pr. site pr. døgn) til `~/.deskuptime/history.json` — en **anden fil** end `state.json`, fordi state skrives hvert pass og rummer nøglen. Retention er strukturel: 35 døgn pr. URL, 500 URL'er, pruning ved skrivning, så filen ikke kan vokse med tiden. `deskuptime report` viser `Uptime (all)` og `Uptime (window)`; `--days N` (1–35) afløser det faste 30 og **fejler** i stedet for at blive ignoreret. Et site uden registrerede døgn i vinduet viser `—`, aldrig 100 %, og definitionen er den samme `uptimePercent()` som livstidstallet. Historien skrives for alle tiers, så en opgraderet gratisbruger ikke starter med en tom måned; kun rapporten er Pro. 17 nye tests + 4 mutationstests → **167/167**; `npm run audit` 0/0; `node --check`, `matrix --check`, shell- og diff-check grønne på Node 26.7.0. Ingen afhængighed ændret.
 
 - `2026-09-26`: P2-1 del B lukkede to huller, målt før de blev skrevet. `checkContentChange` ryddede sin abort-timer *før* body-readet, så en side der sender headere og går i stå hangde `watch` for evigt (bevis: testen time'out efter 30 s med den gamle kode), og `response.text()` var ubegrænset, så én meget stor side kunne trække CLI'en ned. Nu: `MAX_CONTENT_BYTES = 2 MiB` med streaming-annullering (et for stort svar giver *intet* indholdssignal, aldrig falsk DOWN), abort-timeren aktiv gennem hele readet, og `contentLength` i **rigtige bytes** frem for UTF-16-tegn. Licenskald har desuden én afgrænset genprøvning (`LICENSE_ATTEMPTS = 2`, 400 ms), som aldrig spørger om et verdigt svar igen og ikke genprøver ved et langt `Retry-After` — så ét 503 ikke længere sender en betalende kunde ned i `cached`/`unverified`. 14 nye tests + 6 mutationstests → **150/150**; `npm run audit` 0/0; `node --check`, `matrix --check`, shell- og diff-check grønne på Node 26.7.0. Ingen afhængighed ændret.
