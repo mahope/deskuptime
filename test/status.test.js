@@ -672,6 +672,188 @@ test('headers: connection refusal returns a structured error without crashing', 
   );
 });
 
+// ── headers: the redirect chain (P1-16) ──────────────────────────────────────
+//
+// Each test below builds a server whose redirect behaviour is under its own
+// control, so each stop reason can be produced for real: a chain longer than the
+// ceiling, a self-redirect, a 301 with no Location, and a site that answers with
+// all five security headers — reached directly or through one hop, so the same
+// site can be measured twice.
+
+test('headers: a redirect chain that was abandoned is not a healthy site', async (t) => {
+  const server = createServer((req, res) => {
+    const { pathname, searchParams } = new URL(req.url, 'http://localhost');
+    if (pathname === '/kade') {
+      res.writeHead(301, { location: `/kade?n=${Number(searchParams.get('n') || 0) + 1}` });
+      res.end();
+      return;
+    }
+    if (pathname === '/loop') {
+      res.writeHead(301, { location: '/loop' });
+      res.end();
+      return;
+    }
+    res.writeHead(200, { 'content-type': 'text/html' });
+    res.end('ok');
+  });
+  const port = await listen(server);
+  t.after(() => close(server));
+  const base = `http://127.0.0.1:${port}`;
+
+  for (const [name, path, reason, note] of [
+    ['ceiling reached', '/kade', 'max_redirects', /gave up after 10 redirects — still redirecting \(301\)/],
+    ['redirect loop', '/loop', 'loop', /redirect loop .* after 1 hop \(301\)/],
+  ]) {
+    const url = `${base}${path}`;
+
+    // Measured before the fix: `headers` printed a clean sheet and exited 0
+    // while `check` on the same URL said DOWN and exited 2.
+    await assert.rejects(
+      run(process.execPath, [CLI, 'headers', url, '--timeout', REQUEST_TIMEOUT]),
+      (error) => {
+        assert.equal(error.code, 2, `${name}: headers must not exit 0`);
+        const out = error.stdout;
+        assert.match(out, note, `${name}: the reason the walk stopped is not named`);
+        assert.match(out, /Final: — \(redirect chain not followed\)/, `${name}: printed a final URL it never reached`);
+        assert.match(out, /Security headers: not measured/, `${name}: presented a 301 as a security finding`);
+        assert.doesNotMatch(out, /missing: content-security-policy/, `${name}: reported headers off a redirect`);
+        assert.doesNotMatch(out, /HTTPS forced:/, `${name}: reported the site's scheme off a redirect`);
+        return true;
+      },
+      name,
+    );
+
+    // The two surfaces must not disagree about the same site any more.
+    await assert.rejects(
+      run(process.execPath, [CLI, 'check', url, '--timeout', REQUEST_TIMEOUT]),
+      (error) => {
+        assert.equal(error.code, 2, `${name}: check must agree that the site is down`);
+        assert.match(error.stdout, /redirect count exceeded/, name);
+        return true;
+      },
+      name,
+    );
+
+    const json = await new Promise((resolve, reject) => {
+      run(process.execPath, [CLI, 'headers', url, '--json', '--timeout', REQUEST_TIMEOUT])
+        .then(() => reject(new Error(`${name}: headers --json exited 0 on an unfinished chain`)))
+        .catch((error) => {
+          assert.equal(error.code, 2, `${name}: headers --json must not exit 0`);
+          resolve(JSON.parse(error.stdout));
+        });
+    });
+    assert.equal(json.stopReason, reason, name);
+    assert.equal(json.healthy, false, name);
+    assert.equal(json.reachable, true, `${name}: a response did arrive`);
+    assert.equal(json.error, null, `${name}: an unfinished reading is not a request error`);
+  }
+});
+
+test('headers: a chain that reaches a real response reads it exactly as before', async (t) => {
+  const server = createServer((req, res) => {
+    const { pathname } = new URL(req.url, 'http://localhost');
+    if (pathname === '/til-helt-sikker') {
+      res.writeHead(301, { location: '/helt-sikker' });
+      res.end();
+      return;
+    }
+    res.writeHead(200, {
+      'content-type': 'text/html',
+      'strict-transport-security': 'max-age=63072000; includeSubDomains; preload',
+      'content-security-policy': "default-src 'self'; frame-ancestors 'none'",
+      'x-content-type-options': 'nosniff',
+      'x-frame-options': 'DENY',
+      'referrer-policy': 'strict-origin-when-cross-origin',
+    });
+    res.end('ok');
+  });
+  const port = await listen(server);
+  t.after(() => close(server));
+  const base = `http://127.0.0.1:${port}`;
+
+  // The control that the finding turned on: the same site, reached directly and
+  // through one hop, must give the same security answer.
+  const direct = await run(process.execPath, [CLI, 'headers', `${base}/helt-sikker`, '--timeout', REQUEST_TIMEOUT]);
+  const viaHop = await run(process.execPath, [CLI, 'headers', `${base}/til-helt-sikker`, '--timeout', REQUEST_TIMEOUT]);
+
+  for (const securityHeader of ['strict-transport-security', 'content-security-policy', 'x-content-type-options', 'x-frame-options', 'referrer-policy']) {
+    assert.match(direct.stdout, new RegExp(`✅ ${securityHeader}:`), `${securityHeader} missing when reached directly`);
+    assert.match(viaHop.stdout, new RegExp(`✅ ${securityHeader}:`), `${securityHeader} missing through one redirect`);
+  }
+  assert.match(viaHop.stdout, /— redirected/, 'a followed redirect still says so');
+  assert.doesNotMatch(viaHop.stdout, /not measured/, 'a completed chain is measured');
+  assert.doesNotMatch(viaHop.stdout, /⚠️  redirect/, 'a completed chain has nothing to warn about');
+
+  const result = JSON.parse((await run(process.execPath, [CLI, 'headers', `${base}/til-helt-sikker`, '--json', '--timeout', REQUEST_TIMEOUT])).stdout);
+  assert.equal(result.stopReason, null);
+  assert.equal(result.healthy, true);
+  assert.equal(result.statusCode, 200);
+  assert.deepEqual(result.steps.map(s => s.status), [301]);
+});
+
+test('headers: a 301 with no usable Location names the dead end without hiding the reading', async (t) => {
+  const server = createServer((req, res) => {
+    if (new URL(req.url, 'http://localhost').pathname === '/uden-location') {
+      res.writeHead(301);
+      res.end();
+      return;
+    }
+    res.writeHead(200, { 'content-type': 'text/html' });
+    res.end('ok');
+  });
+  const port = await listen(server);
+  t.after(() => close(server));
+  const base = `http://127.0.0.1:${port}`;
+  const url = `${base}/uden-location`;
+
+  // The response is still the site's own, so the security reading stands and the
+  // verdict matches `check` (which sees the same 301 and calls it UP).
+  const { stdout } = await run(process.execPath, [CLI, 'headers', url, '--timeout', REQUEST_TIMEOUT]);
+  assert.match(stdout, /⚠️  stopped on a redirect with no usable Location \(301\)/);
+  assert.match(stdout, /Final: http:\/\/127\.0\.0\.1:\d+\/uden-location \(301\)/);
+  assert.match(stdout, /⬜ missing: content-security-policy/);
+  assert.doesNotMatch(stdout, /not measured/);
+
+  const result = JSON.parse((await run(process.execPath, [CLI, 'headers', url, '--json', '--timeout', REQUEST_TIMEOUT])).stdout);
+  assert.equal(result.stopReason, 'no_location');
+  assert.equal(result.healthy, true);
+
+  const checked = await run(process.execPath, [CLI, 'check', url, '--timeout', REQUEST_TIMEOUT]);
+  assert.match(checked.stdout, /301 — UP/, 'check and headers must agree that a 301 is up');
+});
+
+test('headers: the chain rules have one owner, like the certificate rules', () => {
+  // As in the P1-13/P1-14/P1-15 measurements, a behavioural test cannot prove a
+  // surface stopped owning a fact: the duplicated rule returned identical
+  // answers in every test. So the ownership itself is pinned.
+  const strip = (text) => text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+  const status = strip(readFileSync(join(ROOT, 'src', 'status.js'), 'utf8'));
+  const cli = strip(readFileSync(join(ROOT, 'src', 'cli.js'), 'utf8'));
+  const checker = strip(readFileSync(join(ROOT, 'src', 'checkers', 'headers.js'), 'utf8'));
+
+  for (const sentence of [
+    'redirect chain not followed',
+    'the chain never reached the final response',
+    'still redirecting',
+    'no usable Location',
+  ]) {
+    const owners = [status, cli, checker].filter(source => source.includes(sentence));
+    assert.equal(owners.length, 1, `"${sentence}" must be written in exactly one place, found ${owners.length}`);
+  }
+
+  // The checker records the fact and applies the rule; it does not re-decide it.
+  assert.match(checker, /readChain\(\{/);
+  assert.match(checker, /const healthy = chain\.complete && isHealthyStatus\(r\.status\)/);
+  assert.doesNotMatch(checker, /const healthy = isHealthyStatus\(r\.status\);/);
+
+  // The terminal may read the stop reason exactly once — to hand it to the
+  // owner. Measured: a second decision written as `r.stopReason !== null` in
+  // cli.js survived an `=== ` scan, so the lock counts the reads instead.
+  assert.equal(cli.split('r.stopReason').length - 1, 1, 'the terminal must not re-decide the chain');
+  assert.doesNotMatch(cli, /stopReason\s*[!=]==?/);
+  assert.doesNotMatch(cli, /chain\.\w+ =/);
+});
+
 function watchResult(overrides = {}) {
   return {
     url: 'http://watch.test/',

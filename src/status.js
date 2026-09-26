@@ -311,6 +311,107 @@ export function readEntry(entry, { now = new Date() } = {}) {
   };
 }
 
+/**
+ * How many redirects `deskuptime headers` will follow before it gives up.
+ * Browsers give up too (Chrome at 20, Firefox at 20), so this is a ceiling, not
+ * a licence to keep going.
+ */
+export const REDIRECT_LIMIT = 10;
+
+/** Stop reasons the redirect-following checker can report. */
+export const CHAIN_STOP = {
+  /** The ceiling above was reached with a redirect still in front of us. */
+  MAX_REDIRECTS: 'max_redirects',
+  /** The next hop was a URL the chain had already visited. */
+  LOOP: 'loop',
+  /** A 3xx whose `Location` was absent or could not be resolved. */
+  NO_LOCATION: 'no_location',
+};
+
+/**
+ * The fixed wording for a redirect chain that did not end where we were sent,
+ * in one place.
+ *
+ * `no_location` gets its own sentence even though the reading is complete: a 301
+ * with no usable `Location` is a broken site, and the old output said nothing
+ * about it — it printed `Final: <url> (301)` and five "missing header" lines as
+ * if the URL had resolved.
+ *
+ * @param {object} [state] — `{ stopReason, statusCode, redirectCount, limit }`
+ * @returns {string} the sentence, or `''` when the chain ended on a real response
+ */
+export function chainStopNote({ stopReason, statusCode, redirectCount, limit } = {}) {
+  const code = Number.isInteger(statusCode) ? ` (${statusCode})` : '';
+  switch (stopReason) {
+    case CHAIN_STOP.MAX_REDIRECTS:
+      return `gave up after ${limit} redirects — still redirecting${code}`;
+    case CHAIN_STOP.LOOP:
+      return `redirect loop — the chain came back to a URL it had already visited, after ${redirectCount} hop${redirectCount === 1 ? '' : 's'}${code}`;
+    case CHAIN_STOP.NO_LOCATION:
+      return `stopped on a redirect with no usable Location${code}`;
+    default:
+      return '';
+  }
+}
+
+/**
+ * One reading of a redirect chain, shared by every surface that shows one.
+ *
+ * `deskuptime headers` follows redirects by hand so it can print the chain, and
+ * measured against the same URLs that `deskuptime check` calls DOWN, it printed
+ * the opposite verdict with exit 0 and no note:
+ *
+ *   /loop       (redirects to itself)
+ *     check    →  ❌ DOWN — redirect count exceeded            (exit 2)
+ *     headers  →  Final: /loop (301) — redirected
+ *                 HTTPS forced: ❌ no — site served over plain HTTP
+ *                 ⬜ missing: strict-transport-security
+ *                 ⬜ missing: content-security-policy      … alle fem
+ *                (exit 0)
+ *
+ *   /helt-sikker-efter-redirect   (301 → the same site, one hop later)
+ *     headers  →  ✅ alle fem security headers
+ *
+ * Three claims in one block, all read off a response that is not the site's:
+ *
+ *   1. `Final:` — the chain was abandoned with a redirect still pending, so there
+ *      was no final URL to print. The checker walked 10 hops of a 15-hop chain
+ *      and called hop 10's *pending redirect* the final answer.
+ *   2. The `✅`/`⬜` security lines — taken from a 301, which is what a load
+ *      balancer sends. A bureau running the free tool against a hardened site
+ *      behind a redirect was told the site was missing all five headers, and
+ *      nothing said where that reading came from.
+ *   3. `healthy` / the exit code — a chain we refused to follow is a failure,
+ *      which is why `check` says `redirect count exceeded` and exits 2. `headers`
+ *      said the same site was healthy and exited 0.
+ *
+ * So the facts are decided here, once: `complete` is false exactly when a
+ * redirect was left to follow, and only a complete reading may speak for the
+ * site's headers. The checker records the raw fact (`stopReason`) and asks here;
+ * the terminal asks here. Neither can re-decide it.
+ *
+ * @param {object} [chain] — `{ stopReason, statusCode, steps, limit }` from
+ *   `checkHeaders`.
+ */
+export function readChain({ stopReason = null, statusCode = null, steps = [], limit = REDIRECT_LIMIT } = {}) {
+  const count = Array.isArray(steps) ? steps.length : 0;
+  // A `Location` we could not resolve leaves the same dead end a browser hits,
+  // and the 3xx is still the site's own response, so the reading is complete.
+  const pending = stopReason === CHAIN_STOP.MAX_REDIRECTS || stopReason === CHAIN_STOP.LOOP;
+  return {
+    complete: !pending,
+    // Only a complete reading may be presented as a finding about the site.
+    measured: !pending,
+    redirectCount: count,
+    statusCode: Number.isInteger(statusCode) ? statusCode : null,
+    note: chainStopNote({ stopReason, statusCode, redirectCount: count, limit }),
+    finalUrlNote: pending ? '— (redirect chain not followed)' : '',
+    securityNote: pending
+      ? 'Security headers: not measured — the chain never reached the final response'
+      : '',
+  };
+}
+
 export function isHttpUrl(value) {
   try {
     const url = new URL(value);

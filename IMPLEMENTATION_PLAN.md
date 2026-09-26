@@ -1,17 +1,9 @@
 # IMPLEMENTATION_PLAN.md
 
 STATUS: I GANG
-Iteration: 31 — 2026-09-26
-Arbejdsgrene: `ceo/action-summary-truth` (P1-15, mergeet til `main`)
-Næste handling: **P1-15 er færdig.** ❓ 2 og ❓ 3 var stadig ubesvarede, så målingen fortsatte med den tredje overflad P1-14 havde peget på — og nåede **to overflader længere end beregnet**. `summarize()` i `check` viste sig *korrekt* (den læser `readSslState()`), men de to efterfølgende læsninger af samme certifikat — **`check --json`'s `sslExpiringSoon` og GitHub Actions' step-summary — afgjorde stadig selv**, og step-summary gjorde det to gange. Målt på én payload, ingen kode ændret:
-
-```
-| URL               | Status | HTTP | Response | SSL days |
-| https://negativ.dk/ | ✅ UP | 200 | -5ms     | -2       |
-| https://streng.dk/   | ✅ UP | 200 | —ms      | 9        |
-```
-
-`-2` i SSL-dage-cellen er **præcis det P1-7 fjernede fra de to terminal-lister** (`SSL -2d`), og `-5ms` er **præcis det P1-11 fjernede fra kundenapporten** — i den ene tabel en kunde læser i sin egen CI-kørsel og kan kopiere ind på en status-side. `—ms` for en udokumenteret svartid var heller ingen værdi. Step-summary var sweepet for fjendtlig *tekst* (`markdownCell`, P1-12) men aldrig for ubrugelige *tal*. Rettelsen læser begge celler gennem ejerne — `readSslState()` for dage og `formatMs()` for varighed, præcis som de øvrige fire flader — og den lapsede sætning kommer fra `expiredNote()` i stedet for actionens egen `"expired Nd ago"`. `SSL_FAIL_COUNT`'s *vindue* er bevidst stadig actionens eget input, men "er værdien en dagstælling overhovedet" spørger nu samme ejerskab, så tælleren og cellen ikke kan være uenige. `check --json`'s `sslExpiringSoon` var den **tredje** kopi af fornyelsesvinduet; den læser nu `readSslState()` — målt: de to var i dag ens, kun fordi checkeren *runder* dage, så en ren unit-test ikke kunne skelne ejerne (se dækningsnoten). 5 nye tests + 2 målte mutationer → **267/267**; `npm run audit` 0/0; `node --check`, `matrix --check`, YAML-parse, `sh -n`/`bash -n` og diff-check grønne på Node 26.7.0. **Ingen afhængighed ændret, ingen ny claim, matrixen urørt, intet exit-kode ændret, ingen deploy-note nødvendig.** Næste: ❓ 2/❓ 3 hvis de er besvaret; ellers P1-16 — den næste overflad i rækken: **`headers`-kommandoen og dens rapport, der endnu kun er sweepet for fjendtlig tekst (P2-1 del C) og aldrig målt på de samme tal-spørgsmål**.
+Iteration: 32 — 2026-09-26
+Arbejdsgrene: `ceo/headers-chain-truth` (P1-16, mergeet til `main`)
+Næste handling: **P1-16 er færdig.** ❓ 2 og ❓ 3 var stadig ubesvarede, så målingen gik videre med den overflad P1-15 pegede på — `headers`-kommandoen — og den var den dyreste endnu. To flader, samme URL, modsatte dommedom: `check` sagde `❌ DOWN — redirect count exceeded` og exit 2, mens `headers` skrev `Final: /loop (301) — redirected`, fem `⬜ missing:`-linjer og exit **0**. Der var tre påstande i det samme blok, alle læst af et svar der ikke er sitets: `Final:` var det sidste svar i en kæde værktøjet **opgav** (10 hops ind i en 15-hops kæde, og hop 10's igangværende redirect kaldt det endelige), sikkerheds-`✅`/`⬜` var læst af **en 301** — så et bureau fik at vide at et hardet site bag en redirect manglede alle fem headere, bevist ved at måle **samme site** direkte og via ét hop og få to modsatte rapporter — og `healthy`/exit-kode modsagde `check`, der bruger undic's egen redirect-fejl. Rettelsen: `readChain()` i `src/status.js` er den ene ejer af `complete`/`measured` og alle fire sætninger; `checkHeaders` registrerer kun det rå `stopReason` (`max_redirects`/`loop`/`no_location`) og anvender reglen, terminalen spørger. En ufuldstændig læsning får `Final: — (redirect chain not followed)`, én `not measured`-linje i stedet for fem fund, og exit 2. `no_location` er bevidst *fuldstændig* — også en browser rammer det, så headerne må læses, og verdictet matcher `check` (`301 — UP`). 4 nye tests + 5 målte mutationer (2 / 1 / 1 / 2 / 2 fejl) → **271/271**; `npm run audit` 0/0; `node --check`, `matrix --check`, `sh -n`/`bash -n`, YAML-struktur- og diff-check grønne på Node 26.7.0. **Ærlig dækningsnote:** den første strukturelle lås scannede for `stopReason ===`; en anden ejer skrevet som `!== null` **overlevede** den, så låsen tæller nu læsningerne. **Ingen afhængighed ændret, ingen ny claim, matrixen urørt, intet exit-kode ændret for normale målinger, ingen deploy-note nødvendig.** Næste: ❓ 2/❓ 3 hvis de er besvaret; ellers P1-17 — samme måling på den næste ubesvarede overflad: **`watch`-kommandoens webhook- og mail-payload** (`sendWebhook`/`notify`), der endnu kun er sweepet for fjendtlig tekst og aldrig målt på "er dette en måling vi har".
 
 ## Mission
 
@@ -942,6 +934,61 @@ To fejl, én årsag: `action.yml`'s summary-blok havde sin egen `String(x.sslDay
 **Bemærk til release:** `check --json`s feltnavne og værdier er uændrede for alle reelle målinger; kun en lapset certificats sætning i summary-tabellen følger nu `expiredNote()` (`expired today` i stedet for et nøgent `expired`). Menneskeudskrift, ingen konsument.
 
 
+### P1-16 — FÆRDIG 2026-09-26 — En opgivet redirect-kæde må ikke se ud som et sundt site (`ceo/headers-chain-truth`)
+
+**Begrundelse (missionens prioritet 1 + 2):** ❓ 2 og ❓ 3 var stadig ubesvarede, så rækken fortsatte med den overflad P1-15 pegede på: `headers`-kommandoen — den eneste **gratis** flade, der siger noget om et sites *sikkerhedsheadere*. Den var sweepet for fjendtlig tekst (P2-1 del C), aldrig målt på de samme tal-spørgsmål. Den målede sig selv til at være den dyreste endnu.
+
+**Målt fund 2026-09-26, før der blev skrevet en linje kode.** En lokal server med fire URL'er, den rigtige `checkHeaders` og den rigtige `cli.js`, nul kode ændret:
+
+| URL | `deskuptime check` | `deskuptime headers` |
+|---|---|---|
+| `/loop` (redirecter til sig selv) | `❌ DOWN — redirect count exceeded` — **exit 2** | `Final: /loop (301) — redirected`, `⬜ missing:` × 5 — **exit 0** |
+| `/kade` (15-hop kæde) | `❌ DOWN — redirect count exceeded` — **exit 2** | `Final: /kade?n=10 (301) — redirected`, `⬜ missing:` × 5 — **exit 0** |
+| `/til-helt-sikker` (301 → hardet site) | `✅ UP` | `✅` × 5 headere |
+| `/helt-sikker` (samme site, direkte) | `✅ UP` | `✅` × 5 headere |
+
+**To flader, samme URL, modsatte dommedom og modsat exit-kode.** Og tre påstande i ét og samme outputblok, alle læst af et svar, der ikke er sitets:
+
+1. **`Final:` er ikke final.** `checkHeaders` følger redirects i hånden med loft 10, og når loftet nås kalder den det sidste svar *finalt* — for `/kade` gik den 10 hops ind i en 15-hops kæde og kaldte hop 10's **igangværende redirect** det endelige svar. Ordet `Final` er en påstand om en måling, der ikke blev lavet.
+2. **Sikkerheds-`✅`/`⬜` er læst af en 301.** En 301 fra en load balancer har ingen `content-security-policy`, så et bureau der kørte det gratis værktøj mod et hardet site bag en redirect fik at vide, at sitet manglede **alle fem** headere. Beviset er kontrolrækkerne: **samme site**, nået direkte og via én hop, giver to modsatte sikkerhedsrapporter. Og intet i outputtet sagde, hvor læsningen kom fra.
+3. **`healthy`/exit-kode.** `ping.js` bruger `redirect: 'follow'`, så `check` får undic's egen fejl `redirect count exceeded` og siger DOWN. `headers` sagde healthy og exit 0. Det er P1-9's mønster igen: to ejere af én beslutning.
+
+**Rettelsen.** `readChain()` i `src/status.js` er den ene ejer — den afgør `complete`/`measured`, og alle fire sætninger ligger dér. `checkHeaders` registrerer kun det rå faktum (`stopReason`: `max_redirects` / `loop` / `no_location`) og **anvender** reglen; terminalen **spørger** i stedet for at eje. Et ufuldstændigt svar får `Final: — (redirect chain not followed)`, én linje `⬜ Security headers: not measured — the chain never reached the final response` i stedet for fem fund, og exit 2 — samme regel som `--json` og som `check`.
+
+**`no_location` er bevidst *fuldstændig*.** En 301 uden brugbar `Location` er et dødt endepunkt, som også en browser rammer, så 3xx'en er stadig sitets eget svar: headerne må stadig læses, og verdictet matcher `check` (`301 — UP`). Den får sin egen sætning, fordi den er et brudt site — før lavede den intet af sig.
+
+**Acceptkriterier:**
+
+1. En kæde med loftet nået eller en loop er ikke et sundt site. — **Færdig** (mutation M1: den gamle `healthy` indsat igen → 2 fejl)
+2. `Final:` findes ikke, når kæden blev opgivet. — **Færdig** (mutation M2: `!chain.measured`-vagten væk → 1 fejl)
+3. Sikkerhedsfund, `HTTPS forced` og `X-Powered-By` er undertrykt på en ufuldstændig læsning. — **Færdig** (samme mutation)
+4. Den ufuldstændige læsning siger hvorfor, i én sætning, med hop- eller loft-tallet i. — **Færdig**
+5. `headers` og `check` giver samme dom for samme URL. — **Færdig** (begge dele af hver test kører begge kommandoer)
+6. En fuldstændig kæde læser sitet præcis som før, og samme site nået direkte og via redirect giver samme sikkerhedsrapport. — **Færdig** (kontrolrækkerne fra målingen)
+7. Regelns ejerskab er låst strukturelt. — **Færdig** (se mutation M4 — og dens lære)
+8. Intet JSON-feltnavn ændret; kun ét nyt felt (`stopReason`). — **Færdig**
+
+**Test (4 nye, intet netværk):** alle fire i `test/status.test.js` med en lokal server per test. 1) loft + loop: output, exit-kode, `--json`, og `check` på samme URL; 2) kontrol: samme hardede site direkte og via ét hop skal give **identisk** sikkerhedsrapport (fundets modsætning lå her); 3) 301 uden `Location` — fuldstændig læsning + dødt endepunkt navngivet + `check` enig; 4) den strukturelle lås.
+
+**Målt mutationstest (4):**
+
+| # | Mutation | Fejl |
+|---|---|---|
+| M1 | `healthy = isHealthyStatus(r.status)` (reglen fra ejeren væk) | 2 |
+| M2 | `!chain.measured`-vagten i terminalen væk | 1 |
+| M3 | `if (!r.healthy) process.exitCode = 2` i human-grenen væk | 1 |
+| M4 | En **anden** ejer i `cli.js` (`if (r.stopReason !== null) chain.measured = false`) | 2 (1 adfærd + 1 strukturel) |
+| M5 | Reglen vendt om i ejeren (`no_location` talt som ufuldstændig) | 2 |
+
+> **Ærlig dækningsnote — den lås, der ikke låste.** Den første strukturelle lås scannede `cli.js` for `stopReason ===`. M4 skrev den anden beslutning som `!== null`, **overlevede låsen** og blev kun fanget af en adfærdstest. Låsen tæller nu læsningerne af `r.stopReason` (præcis én) og forbyder `chain.\w+ =`. Samme forbehold som P1-13/P1-14/P1-15: en kildefscan er et argument, ikke en garanti — den skal selv måles.
+
+**Fejl i mine egne tests fundet undervejs (ikke produktrelaterede):** første udkast af testen havde en halvskrevet hjælpefunktion (`const port = await0 => 0`) efterladt fra en refaktorering, og et `assert.rejects`-udtryk, hvis returværdi jeg læste som om det gav `stdout`. Begge er fjernet; `--json`-delen læser nu svaret gennem et eksplicit `new Promise`.
+
+**Bevis:** Node 26.7.0 — `npm test` grøn med **271/271** (267 + 4), `npm run audit` 0/0, `node --check` alle JS-filer, `node tools/matrix.mjs --check`, `sh -n`/`bash -n`, YAML-strukturcheck af `action.yml` og `ci.yml`, `git diff --check` grønne. **Ingen afhængighed ændret, ingen ny claim, matrixen urørt, ingen deploy-note nødvendig.**
+
+**Bemærk til release:** `headers --json` har ét nyt felt, `stopReason` (`null` | `max_redirects` | `loop` | `no_location`). Det er **en værdiændring**: `healthy` var `true` for en kæde, værktøjet opgav, og er nu `false` — det er rettelsen, og den gør `headers` enig med `check`. `errorType` får `redirect_incomplete`, og `error` er bevidst `null` (anmodningen fejlede ikke; *læsningen* blev ufuldstændig, og sætningen derom kommer fra ejeren i terminalen). Human-udskriften for en fuldstændig kæde er uændret tegn for tegn.
+
+
 ## ❓ Til Mads
 
 0. **Skal `src/features.js` også være source of truth for siten og det private desktoprepo?** Matrixen er nu én fil i dette repo, og den private desktop-app plus `deskuptime.com` har hver deres egen matrix. Hvis de skal følge med automatisk, er vejen et lille public npm-pakke (`@mahope/product-matrix`) som alle tre repoer importerer. Uden beslutning fortsætter de to andre overflader med at være håndskrevne — og det er præcis den drift, del A lukker her.
@@ -970,6 +1017,8 @@ To fejl, én årsag: `action.yml`'s summary-blok havde sin egen `String(x.sslDay
 - Merge til `main` deployer ikke; npm, GitHub Releases og Homebrew må kun publiceres af Mads via de eksisterende tag-workflows.
 
 ## Iterationslog
+
+- **Iteration 32 (P1-16, målt + fix):** ❓ 2 og ❓ 3 ubesvarede, så målingen gik videre med den overflad P1-15 pegede på: `headers`. Den viste sig den dyreste endnu, fordi den er den eneste **gratis** flade der udtaler sig om et sites sikkerhedsheadere — altså præcis den viste, et bureau bruger over for en kunde. Målt med en lokal server, den rigtige `checkHeaders` og den rigtige `cli.js`, nul kode ændret: **to flader, samme URL, modsatte dommedom.** `/loop` (redirecter til sig selv) gav `check` → `❌ DOWN — redirect count exceeded`, exit 2, og `headers` → `Final: /loop (301) — redirected`, exit 0, fem `⬜ missing:`-linjer. `/kade` (15 hops) gav det samme. Og tre løgne påstande i samme blok, alle læst af et svar der ikke er sitets: (1) `Final:` var det sidste svar i en kæde værktøjet **opgav** — 10 hops ind i en 15-hops kæde, hvor hop 10's igangværende 301 blev kaldt det endelige svar; (2) sikkerheds-`✅`/`⬜` var læst af **en 301**, som intet har headere på, så et hardet site bag en redirect blev rapporteret som manglende alle fem — kontrolrækkerne er beviset: **samme site**, nået direkte og via ét hop, gav to modsatte sikkerhedsrapporter; (3) `healthy`/exit-kode modsagde `check`, fordi `ping.js` bruger `redirect: 'follow'` og får undic's egen `redirect count exceeded`, mens `headers` havde sit eget svar. Rettelsen følger rækken: `readChain()` i `src/status.js` er den ene ejer af `complete`/`measured` og af alle fire sætninger; `checkHeaders` registrerer kun det rå faktum (`stopReason`: `max_redirects`/`loop`/`no_location`) og **anvender** reglen, terminalen **spørger**. Ufuldstændig læsning → `Final: — (redirect chain not followed)`, én `⬜ Security headers: not measured — the chain never reached the final response` i stedet for fem fund, exit 2. `no_location` er bevidst fuldstændig: også en browser rammer et dødt endepunkt, så 3xx'en er sitets eget svar, headerne læses stadig, og verdictet matcher `check` (`301 — UP`) — den får sin egen sætning, fordi den er et brudt site som før lavede intet af sig. 4 nye tests (alle med lokal server, intet netværk) + 5 målte mutationer (2 / 1 / 1 / 2 / 2 fejl) → **271/271**; `npm run audit` 0/0; `node --check`, `matrix --check`, `sh -n`/`bash -n`, YAML-struktur- og diff-check grønne på Node 26.7.0. **Den vigtigste måling var en lås, der ikke låste:** den første strukturelle test scannede `cli.js` for `stopReason ===`; mutation M4 skrev den anden beslutning som `!== null`, **overlevede** og blev kun fanget adfærdsmæssigt — låsen tæller nu læsningerne af `r.stopReason` (præcis én) og forbyder `chain.\w+ =`. Samme forbehold som P1-13/P1-14/P1-15: en kildefscan er et argument, ikke en garanti, så den måles selv. To fejl i mine egne tests noteret i sektionen (en halvskrevet hjælpefunktion fra en refaktorering, og et `assert.rejects` hvis returværdi jeg læste som `stdout`). **Ingen afhængighed ændret, ingen ny claim, matrixen urørt, ingen deploy-note nødvendig.** Næste: ❓ 2/❓ 3 hvis besvaret, ellers P1-17 — `watch`'s webhook- og mail-payload, endnu kun sweepet for fjendtlig tekst.
 
 - **Iteration 31 (P1-15, målt + fix):** ❓ 2 og ❓ 3 ubesvarede, så målingen gik videre med den tredje overflad fra P1-14. `summarize()` viste sig korrekt, men de to læsninger *efter* den afgjorde selv: `check --json`s `sslExpiringSoon` og **GitHub Actions' step-summary**, der gjorde det to gange. Målt på én payload, nul kode ændret: `| https://negativ.dk/ | ✅ UP | 200 | -5ms | -2 |` — `-2` i SSL-dage-cellen er P1-7's fund flyttet til CI, og `-5ms` er P1-11's fund i den tabel, kunden læser. Summaries var sweepet for fjendtlig tekst (P1-12) men aldrig for ubrugelige tal. Rettelsen læser `readSslState()` + `formatMs()` + `expiredNote()`, og tælleren spørger samme ejerskab om, hvad der er en dagstælling. 5 nye tests + 2 målte mutationer (4 / 1 fejl) → **267/267**; audit 0/0; `node --check`, `matrix --check`, `sh -n`, YAML- og diff-check grønne. To ting noteret for næste iteration: (1) mutationen på `sslExpiringSoon` døde *kun* strukturelt, fordi checkeren runder dagtællingen, så ejerskab er kildefscan-testet; (2) min egen test fejlede først med et `spawnSync`, der blokerede event loopet i samme proces som TLS-fixturen — samme fælde som `net.Server` uden `closeAllConnections()` i P2-1 del C. Næste: ❓ 2/❓ 3 hvis besvaret, ellers P1-16 (`headers`-fladen målt på de samme tal-spørgsmål).
 

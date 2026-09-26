@@ -17,7 +17,7 @@ import { buildReport, renderReportJson, renderReportMarkdown } from './report.js
 import { readFileSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
-import { invalidHttpUrls, readEntry, readSslState, STALE_AFTER_DAYS } from './status.js';
+import { invalidHttpUrls, readChain, readEntry, readSslState, STALE_AFTER_DAYS } from './status.js';
 import { formatMs, machinesInUse, safeText } from './display.js';
 import { DEFAULT_WINDOW_DAYS, HISTORY_DAYS, loadHistory } from './history.js';
 import { FREE, PRODUCT, renderHelpPro } from './features.js';
@@ -233,26 +233,44 @@ if (command === 'headers') {
     console.log(`   ⚠️  Error: ${safeText(r.error, { max: 0 })}`);
     process.exitCode = 2;
   } else {
+  const chain = readChain({ stopReason: r.stopReason, statusCode: r.statusCode, steps: r.steps });
   console.log(`🧭 ${safeText(url, { max: 0 })}`);
   for (const s of r.steps) {
     console.log(`   ${s.status} → ${safeText(s.location, { max: 0 })}`);
   }
-  console.log(`   Final: ${safeText(r.finalUrl, { max: 0 })} (${r.statusCode || 'n/a'})${r.redirected ? ' — redirected' : ''}`);
-  if (r.startedHttp) {
-    console.log(`   HTTPS forced: ${r.forcesHttps ? '✅ yes' : '❌ no — site served over plain HTTP'}`);
+  if (chain.note) {
+    console.log(`   ⚠️  ${chain.note}`);
   }
-  if (r.poweredBy) {
-    console.log(`   ⚠️  X-Powered-By exposed: ${safeText(r.poweredBy, { max: 0 })}`);
+  // A chain that was abandoned with a redirect still pending has no final URL,
+  // and printing the last hop as one is what told a bureau that a site missing
+  // all five security headers was in fact missing none of them — the reading
+  // came off a 301. `—` and the reason are honest; a made-up "Final" is not.
+  const finalPart = chain.finalUrlNote
+    || `${safeText(r.finalUrl, { max: 0 })} (${r.statusCode || 'n/a'})${r.redirected ? ' — redirected' : ''}`;
+  console.log(`   Final: ${finalPart}`);
+  if (!chain.measured) {
+    console.log(`   ⬜ ${chain.securityNote}`);
+  } else {
+    if (r.startedHttp) {
+      console.log(`   HTTPS forced: ${r.forcesHttps ? '✅ yes' : '❌ no — site served over plain HTTP'}`);
+    }
+    if (r.poweredBy) {
+      console.log(`   ⚠️  X-Powered-By exposed: ${safeText(r.poweredBy, { max: 0 })}`);
+    }
+    const missing = Object.entries(r.security).filter(([, v]) => !v).map(([k]) => k);
+    const present = Object.entries(r.security).filter(([, v]) => v);
+    for (const [k, v] of present) {
+      // max 60 is the historical cap and is kept, so a normal header prints as before.
+      console.log(`   ✅ ${k}: ${safeText(v)}`);
+    }
+    for (const k of missing) {
+      console.log(`   ⬜ missing: ${k}`);
+    }
   }
-  const missing = Object.entries(r.security).filter(([, v]) => !v).map(([k]) => k);
-  const present = Object.entries(r.security).filter(([, v]) => v);
-  for (const [k, v] of present) {
-    // max 60 is the historical cap and is kept, so a normal header prints as before.
-    console.log(`   ✅ ${k}: ${safeText(v)}`);
-  }
-  for (const k of missing) {
-    console.log(`   ⬜ missing: ${k}`);
-  }
+  // Same rule as `--json` and as `check`: a verdict the tool could not reach is
+  // not a pass. Before this, `headers` on a redirect loop printed a clean sheet
+  // and exited 0 while `check` on the same URL called it DOWN and exited 2.
+  if (!r.healthy) process.exitCode = 2;
   }
 }
 
