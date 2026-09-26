@@ -117,10 +117,39 @@ Det er her bureauet bliver solgt, og derfor er reglerne hårde:
   up-to-date sites, så en død watch-loop ikke kan se ud som et sundt site hos
   en kunde; `summary.down` tælles *alle* sites, for et nedet site skal en kunde
   stadig se. I `--json` hedder felterne `stale`, `ageDays` og `summary.stale`.
-  Et site uden `lastChecked` er ikke stale (det står som "not checked yet"), et
-  urædeligt tidspunkt er stale (et pass skete, men kan ikke vises som aktuelt),
-  og et tidspunkt i fremtiden er clock-skæv, ikke gamle data — rapporten
-  printer uanset det eksakte tidspunkt.
+  Et site uden `lastChecked` er ikke stale, et urædeligt tidspunkt er stale (et
+  pass skede, men kan ikke vises som aktuelt), og et tidspunkt i fremtiden er
+  clock-skæv, ikke gamle data — rapporten printer uanset det eksakte tidspunkt.
+- **Resumelinjen er en partition.** Målt 2026-09-26: `summary.up` tæller kun
+  up-to-date sites, mens `summary.down` tæller *alle* — begge regler er
+  rigtige, men de overlappede, så en rapport over ét friskt up, ét frisk ned og
+  ét stale ned skrev `1 up · 2 down · 1 stale`: fire tal for tre sites, fordi det
+  stale site lå i to af dem. `summary.unknown` blev talt og leveret i `--json`,
+  men **aldrig printet**, så et aldrig tjekket site var en række i tabellen der
+  hørte til intet tal. Derfor løses staleness først (`siteBuckets()` i
+  `src/report.js`), og hvert site lander i præcis én spand: up, down, not
+  checked, status unknown eller stale. Linjen kan derfor lægges sammen, og
+  footnoten siger det. JSON-kontrakten er uændret: `up`/`down`/`unknown`/
+  `stale` har de samme værdier som før, og `staleDown`, `staleUnknown` og
+  `neverChecked` er additive, så et bureau der læser de gamle felter læser
+  uændret tal.
+- **Et tjekket site hedder aldrig "not checked yet".** Ordet er en påstand om
+  historik, og rapporten sagde det om *ethvert* `unknown`-site. Målt på en
+  håndskrevet eller gendannet state-fil gav én række alle tre på én gang:
+  `| https://kunde.dk | not checked yet | 75% (4 checks, 1 failed) | … | 2026-09-25 23:00 UTC |` —
+  kunden læser "aldrig overvåget" ved siden af bevis på fire gennemførte passes.
+  Nu: intet pass nogensinde → `not checked yet`; et pass der kørte, men hvis
+  resultat ikke kan læses → `status unknown (last check 41 d ago)` (eller
+  `… unreadable` for et urædeligt tidspunkt), samme ord som `❔ unknown` i
+  `watch --status` og `'unknown'` i JSON.
+- **Én ejer af verdictet.** `verdictFor()` i `src/status.js` er den eneste
+  beslutning om hvad state-filen siger om et site; både `readEntry()` og
+  rapporten spørger den. `siteStatus()` i rapporten var byte-for-byte ens og
+  selvstændigt redigerbar, og en adfærds-test kan det ikke fange — målt gav den
+  gamle kode 30/30 grønne tests. Derfor er reglen testet strukturelt i
+  `test/report.test.js`. De *fem ordforråd* er derimod bevidst ikke ensrettet:
+  de er layouts (`✅ up`, `✅`, `UP (200)`, `✅ UP`, `up`), og to af dem læses
+  uden for repoet (Actionens job-summary og `report --json`).
 - Uptime kan aldrig overstige 100 % og `failures` kan aldrig blive negativ.
   Tællerne læses ét sted gennem `counters()` i `src/report.js`, som klemmer
   `checksUp` til `checks`: en håndskrevet, gendannet eller halvskrevet state-fil

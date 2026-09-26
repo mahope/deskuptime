@@ -187,6 +187,32 @@ export function isNewerPass(candidate, reference) {
 }
 
 /**
+ * The one decision behind every status word in this product: what does the
+ * state file say about a site?
+ *
+ * It used to be written twice, byte for byte, in `readEntry` below and in
+ * `siteStatus()` in the client report — and the report cannot call `readEntry`
+ * for it, because the report also needs `addedAt` and the counters that
+ * `readEntry` does not read. Two identical owners is a bug waiting to happen:
+ * the report would have kept saying UP for a state file the terminal calls
+ * `unknown`, in the one document a bureau forwards to a customer.
+ *
+ * Only the two booleans count. `"true"`, `1`, `null` and a missing field are
+ * all `unknown`, because a state file that was hand-edited, restored from a
+ * backup or half-written cannot be read as a claim about the site.
+ *
+ * The five surfaces then word this one decision five ways — `✅ up`/`❔ unknown`
+ * (watch --status), `✅`/`·` (watch), `UP (200)`/`not checked yet` (the client
+ * report), `✅ UP` (the Action's job summary) and `up`/`down`/`unknown` in both
+ * JSON payloads. Those are layouts, not rival claims: the Action's summary and
+ * `report --json` are read outside this repo, so unifying the *wording* would
+ * break consumers while fixing nothing. What must stay single is the decision.
+ */
+export function verdictFor(wasUp) {
+  return wasUp === true ? 'up' : wasUp === false ? 'down' : 'unknown';
+}
+
+/**
  * One reading of a state-file entry, shared by every surface that prints one.
  *
  * Three facts about a monitored site are all in `state.urls[url]`: whether the
@@ -222,7 +248,7 @@ export function readEntry(entry, { now = new Date() } = {}) {
   const ageDays = checkAgeDays(value.lastChecked, now);
 
   return {
-    verdict: value.wasUp === true ? 'up' : value.wasUp === false ? 'down' : 'unknown',
+    verdict: verdictFor(value.wasUp),
     statusCode: Number.isInteger(value.lastStatus) ? value.lastStatus : null,
     sslDays: ssl.days,
     sslExpired: ssl.expired,

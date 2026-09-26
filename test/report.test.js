@@ -17,7 +17,8 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { buildReport, counters, nonNegative, recordPass, renderReportJson, renderReportMarkdown, uptimePercent } from '../src/report.js';
+import { buildReport, counters, nonNegative, recordPass, renderReportJson, renderReportMarkdown, siteBuckets, uptimePercent } from '../src/report.js';
+import { readEntry, verdictFor } from '../src/status.js';
 import { loadState, runPass } from '../src/watch.js';
 import { PRODUCT } from '../src/features.js';
 
@@ -173,7 +174,9 @@ test('the report puts problems first and states its own data honestly', () => {
   assert.ok(markdown.includes('— (no completed pass)'), 'a site without a pass must not read as 100%');
   assert.ok(markdown.includes('142 ms') && markdown.includes('78 d'));
   assert.ok(markdown.includes('2026-09-25 09:00 UTC'), markdown);
-  assert.ok(markdown.includes('1 up · 1 down · 110 checks · 2 failed'), markdown);
+  // The line is a partition now, so the never-checked site is a number and not
+  // a row that belongs to nothing: 1 up + 1 down + 1 not checked = 3 sites.
+  assert.ok(markdown.includes('3 site(s) · 1 up · 1 down · 1 not checked · 110 checks · 2 failed'), markdown);
   assert.ok(markdown.includes('nothing was uploaded'));
 });
 
@@ -657,4 +660,123 @@ test('a window with no computable share says so, like its two sibling cells', ()
   });
   assert.doesNotMatch(markdown, /null%/, 'a share we cannot compute must not print as "null%"');
   assert.match(markdown, /— \(no share in the last 30 d\)/);
+});
+
+// ---------------------------------------------------------------------------
+// The summary line is a partition (measured, 2026-09-26)
+// ---------------------------------------------------------------------------
+//
+// `up` excluded a stale pass while `down` kept one — both deliberate, both
+// right, and together they made the line unreadable. Over one up, one down and
+// one stale-down site it printed `1 up · 2 down · 1 stale`: four sites out of
+// three, with the stale site inside both numbers. And `summary.unknown` was
+// counted, exported in the JSON, and never printed, so a never-checked site
+// was a row in the table that belonged to no number on the line.
+
+const STALE_DK = '2026-07-15T09:00:00.000Z';
+
+test('every site lands in exactly one bucket of the summary line', () => {
+  const cases = {
+    'fresh up, fresh down, stale down': {
+      'https://a.dk/': upEntry(),
+      'https://b.dk/': upEntry({ wasUp: false, lastStatus: 503 }),
+      'https://c.dk/': upEntry({ wasUp: false, lastStatus: 503, lastChecked: STALE_DK }),
+    },
+    'two fresh up, one stale up, one never checked': {
+      'https://a.dk/': upEntry(),
+      'https://b.dk/': upEntry(),
+      'https://c.dk/': upEntry({ lastChecked: STALE_DK }),
+      'https://d.dk/': { addedAt: '2026-09-25T08:00:00.000Z' },
+    },
+    // The overlap that has no bucket at all if staleness is not resolved first:
+    // a stale pass *and* an unreadable verdict — the state file a user restores
+    // from a backup gets.
+    'stale verdict, never checked, stale up, fresh down': {
+      'https://a.dk/': upEntry({ wasUp: 'yes', lastChecked: STALE_DK }),
+      'https://b.dk/': { addedAt: '2026-09-25T08:00:00.000Z' },
+      'https://c.dk/': upEntry({ lastChecked: STALE_DK }),
+      'https://d.dk/': upEntry({ wasUp: false, lastStatus: 500 }),
+    },
+  };
+
+  for (const [name, urls] of Object.entries(cases)) {
+    const report = buildReport(proState(urls), { now: NOW });
+    const buckets = siteBuckets(report.sites);
+    const total = buckets.up + buckets.down + buckets.unknown + buckets.stale;
+    assert.equal(total, report.summary.sites, `${name}: the buckets must cover every site`);
+    assert.equal(buckets.neverChecked <= buckets.unknown, true, `${name}: never checked is part of unknown`);
+
+    // The JSON keeps the numbers it has always had — the split is additive, so
+    // an agency reading `down` or `unknown` gets what it got before.
+    const s = report.summary;
+    assert.equal(s.up + (s.down - s.staleDown) + (s.unknown - s.staleUnknown) + s.stale, s.sites, `${name}: JSON overlap is readable`);
+
+    // And the line a customer reads is exactly those buckets.
+    const line = renderReportMarkdown(report).split('\n').find(l => l.startsWith('**') && l.includes('site(s)'));
+    assert.match(line, new RegExp(`\\*\\*${s.sites} site\\(s\\)`), name);
+    assert.match(line, new RegExp(`· ${buckets.up} up `), `${name}: up count`);
+    assert.match(line, new RegExp(`· ${buckets.down} down`), `${name}: down count`);
+    if (buckets.stale > 0) assert.match(line, new RegExp(`· ${buckets.stale} stale`), `${name}: stale count`);
+    if (buckets.neverChecked > 0) assert.match(line, new RegExp(`· ${buckets.neverChecked} not checked`), `${name}: never-checked count`);
+    const unreadable = buckets.unknown - buckets.neverChecked;
+    if (unreadable > 0) assert.match(line, new RegExp(`· ${unreadable} status unknown`), `${name}: unreadable count`);
+  }
+});
+
+test('a site that was checked is never called "not checked yet"', () => {
+  // The row that contradicts itself: a pass from an hour ago, a verdict the
+  // state file cannot read, and the words "not checked yet".
+  const report = buildReport(proState({
+    'https://kunde.dk/': upEntry({ wasUp: 'yes', lastChecked: '2026-09-25T08:30:00.000Z', checks: 4, checksUp: 3 }),
+  }), { now: NOW });
+  const markdown = renderReportMarkdown(report);
+  assert.doesNotMatch(markdown, /not checked yet/, 'a pass ran, so the site was checked');
+  assert.match(markdown, /status unknown \(last check 0 d ago\)/);
+  assert.match(markdown, /· 1 status unknown/, 'the count is on the summary line, not only in the JSON');
+  assert.equal(report.summary.neverChecked, 0);
+  assert.equal(report.summary.unknown, 1);
+
+  // An unreadable timestamp is named as unreadable rather than as an age.
+  const noAge = buildReport(proState({
+    'https://kunde.dk/': upEntry({ wasUp: 'yes', lastChecked: 'ikke-en-dato' }),
+  }), { now: NOW });
+  assert.match(renderReportMarkdown(noAge), /status unknown \(last check unreadable\)/);
+
+  // No pass at all keeps the old words — they are true there.
+  const never = buildReport(proState({ 'https://ny.dk/': { addedAt: '2026-09-25T08:00:00.000Z' } }), { now: NOW });
+  assert.match(renderReportMarkdown(never), /not checked yet/);
+  assert.match(renderReportMarkdown(never), /· 1 not checked/);
+});
+
+test('the report and watch --status cannot disagree about a verdict (one owner)', () => {
+  // `siteStatus()` in the report and `readEntry().verdict` were byte-for-byte
+  // identical and independently editable — the report cannot call `readEntry`,
+  // because it also reads `addedAt` and the counters. Now both ask
+  // `verdictFor()`, and this is the cross-surface check that keeps it so.
+  for (const wasUp of [true, false, 'true', 'false', 1, 0, null, undefined, 'yes', NaN, [], {}, '']) {
+    const report = buildReport(proState({ 'https://x.dk/': upEntry({ wasUp }) }), { now: NOW });
+    const entry = { wasUp, lastChecked: '2026-09-25T09:00:00.000Z' };
+    assert.equal(report.sites[0].status, readEntry(entry, { now: NOW }).verdict, `wasUp: ${String(wasUp)}`);
+  }
+  assert.equal(verdictFor(true), 'up');
+  assert.equal(verdictFor(false), 'down');
+  for (const unusable of ['true', 1, 0, null, undefined, {}, []]) {
+    assert.equal(verdictFor(unusable), 'unknown', `wasUp: ${String(unusable)}`);
+  }
+});
+
+test('a duplicated verdict owner is caught by reading the source, not the output', () => {
+  // The cross-surface test above cannot catch this one: measured, putting the
+  // old byte-for-byte `siteStatus()` back into the report changed no answer,
+  // so 30/30 tests still passed. A duplicated owner is only visible in the
+  // source, and it is the failure this file exists to prevent — the report
+  // keeping "UP" for a state file the terminal calls `unknown`, in the one
+  // document a bureau forwards. So the rule is checked structurally.
+  const reportSrc = readFileSync(join(ROOT, 'src', 'report.js'), 'utf8');
+  const statusSrc = readFileSync(join(ROOT, 'src', 'status.js'), 'utf8');
+
+  assert.doesNotMatch(reportSrc, /wasUp\s*===/, 'the report must ask verdictFor(), not read wasUp itself');
+  assert.match(reportSrc, /verdictFor\(entry\?\.wasUp\)/, 'and it must still ask for the verdict');
+  assert.equal((statusSrc.match(/export function verdictFor\(/g) || []).length, 1, 'one definition');
+  assert.match(statusSrc, /verdict: verdictFor\(value\.wasUp\)/, 'readEntry asks the same owner');
 });

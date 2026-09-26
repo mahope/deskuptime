@@ -27,7 +27,7 @@
 import { PRODUCT } from './features.js';
 import { DEFAULT_WINDOW_DAYS, windowSummary } from './history.js';
 import { markdownCell as cell } from './display.js';
-import { SSL_WARN_DAYS, STALE_AFTER_DAYS, checkAgeDays, expiredNote, isCheckStale, readSslState } from './status.js';
+import { SSL_WARN_DAYS, STALE_AFTER_DAYS, checkAgeDays, expiredNote, isCheckStale, readSslState, verdictFor } from './status.js';
 
 export const DEFAULT_REPORT_TITLE = 'Website uptime report';
 const MAX_TITLE_LENGTH = 120;
@@ -110,10 +110,25 @@ export function uptimePercent(entry) {
   return Number(((checksUp / checks) * 100).toFixed(2));
 }
 
-function siteStatus(entry) {
-  if (entry?.wasUp === true) return 'up';
-  if (entry?.wasUp === false) return 'down';
-  return 'unknown';
+/**
+ * Status words for a verdict the state file cannot read.
+ *
+ * "not checked yet" is a claim about history, and the report used to make it
+ * for every `unknown` site. Measured on a state file that was hand-edited or
+ * restored from a backup, one row said all three of these at once:
+ *
+ *   | https://kunde.dk | not checked yet | 75% (4 checks, 1 failed) | … | 2026-09-25 23:00 UTC |
+ *
+ * A customer reads that as "this site was never monitored" while the same row
+ * carries four completed passes and a timestamp from an hour ago. So the two
+ * cases get their own words: no pass has ever run → never monitored; a pass ran
+ * and its verdict cannot be read → the status is unknown, and the age of that
+ * pass is named, because "unknown" without an age reads as "no data" too.
+ */
+function unknownStatus(site) {
+  if (!site.lastChecked) return 'not checked yet';
+  if (site.ageDays === null) return 'status unknown (last check unreadable)';
+  return `status unknown (last check ${site.ageDays} d ago)`;
 }
 
 const STATUS_RANK = { down: 0, unknown: 1, up: 2 };
@@ -166,7 +181,7 @@ export function buildReport(state, { title, now = new Date(), history, windowDay
       const stale = isCheckStale(entry.lastChecked, now);
       return {
         url,
-        status: siteStatus(entry),
+        status: verdictFor(entry?.wasUp),
         stale,
         ageDays: checkAgeDays(entry.lastChecked, now),
         statusCode: Number.isInteger(entry.lastStatus) ? entry.lastStatus : null,
@@ -191,6 +206,8 @@ export function buildReport(state, { title, now = new Date(), history, windowDay
     // Problems first: a report that opens with a DOWN site is the one a client reads.
     .sort((a, b) => STATUS_RANK[a.status] - STATUS_RANK[b.status] || a.url.localeCompare(b.url));
 
+  const buckets = siteBuckets(sites);
+
   const summary = {
     sites: sites.length,
     // "up" is a claim about now, so a stale pass is not one of them — the
@@ -201,6 +218,13 @@ export function buildReport(state, { title, now = new Date(), history, windowDay
     down: sites.filter(site => site.status === 'down').length,
     unknown: sites.filter(site => site.status === 'unknown').length,
     stale: sites.filter(site => site.stale).length,
+    // Additive, so an agency reading `up`/`down`/`unknown`/`stale` gets the
+    // same numbers as before. These three are what makes the overlap above
+    // readable instead of a puzzle: the stale sites' share of `down` and
+    // `unknown`, and how many of the unknown sites never had a pass at all.
+    staleDown: sites.filter(site => site.stale && site.status === 'down').length,
+    staleUnknown: sites.filter(site => site.stale && site.status === 'unknown').length,
+    neverChecked: buckets.neverChecked,
     checks: sites.reduce((total, site) => total + site.checks, 0),
     failures: sites.reduce((total, site) => total + site.failures, 0),
     sslExpiringSoon: sites.filter(site => site.sslExpiringSoon).length,
@@ -228,18 +252,77 @@ function uptimeCell(site) {
   return `${site.uptimePercent}% (${site.checks} checks${failures})`;
 }
 
+/**
+ * The disjoint buckets the summary line is written from.
+ *
+ * The line is the first thing a customer reads and it is the only place the
+ * counts and the table have to agree. Measured before this existed, they did
+ * not: `up` deliberately excluded a stale pass while `down` deliberately kept
+ * one (both are right — a stale site is not *currently* up, and a customer must
+ * still see a site last seen down), so the two rules overlapped. A report over
+ * one up, one down and one stale-down site read
+ *
+ *   **3 site(s) · 1 up · 2 down · 9 checks · 4 failed · 1 stale**
+ *
+ * where 1 + 2 + 1 is four sites out of three, and the stale site is inside
+ * both `down` and `stale`. With a site that was never checked, the numbers fell
+ * the other way: `summary.unknown` was counted, exported in the JSON — and
+ * never printed at all, so a fourth row in the table belonged to no number on
+ * the line.
+ *
+ * So staleness is resolved first and the status words only describe sites whose
+ * pass is current. Every site lands in exactly one bucket, which is what makes
+ * the line addable — and the stale sites keep their last observed status in the
+ * table, named on their own line with the age of that pass, so nothing is lost
+ * by moving them here.
+ */
+export function siteBuckets(sites) {
+  const buckets = { up: 0, down: 0, unknown: 0, stale: 0, neverChecked: 0 };
+  for (const site of Array.isArray(sites) ? sites : []) {
+    if (!site || typeof site !== 'object') continue;
+    if (!site.lastChecked) buckets.neverChecked++;
+    if (site.stale === true) {
+      buckets.stale++;
+    } else if (site.status === 'up') {
+      buckets.up++;
+    } else if (site.status === 'down') {
+      buckets.down++;
+    } else {
+      buckets.unknown++;
+    }
+  }
+  return buckets;
+}
+
 function statusCell(site) {
   const observed = site.status === 'up'
     ? `UP${site.statusCode ? ` (${site.statusCode})` : ''}`
     : site.status === 'down'
       ? `DOWN${site.statusCode ? ` (${site.statusCode})` : ''}`
-      : 'not checked yet';
+      : unknownStatus(site);
   return site.stale ? `${observed} ⚠️ ${staleNote(site)}` : observed;
 }
 
 /** How the age is worded, or null when it cannot be known. */
 function staleNote(site) {
   return site.ageDays === null ? 'stale — last check unreadable' : `stale — last check ${site.ageDays} d ago`;
+}
+
+/**
+ * The unknown bucket, in the customer's words.
+ *
+ * Two different facts hide in `unknown`, and the summary line used to print
+ * neither: a site that was never monitored, and a site whose last pass ran but
+ * whose verdict cannot be read (a hand-edited or restored state file). They
+ * are separated here because the table already separates them — one says "not
+ * checked yet", the other names the age of the pass it cannot read.
+ */
+function unknownWords(buckets) {
+  const unreadable = buckets.unknown - buckets.neverChecked;
+  const parts = [];
+  if (buckets.neverChecked > 0) parts.push(`${buckets.neverChecked} not checked`);
+  if (unreadable > 0) parts.push(`${unreadable} status unknown`);
+  return parts.length > 0 ? ` · ${parts.join(' · ')}` : '';
 }
 
 function windowCell(site, windowDays) {
@@ -266,6 +349,7 @@ const HEADERS = ['Site', 'Status', 'Uptime (all)', 'Uptime (window)', 'Response'
 
 export function renderReportMarkdown(report) {
   const windowDays = report.windowDays || DEFAULT_WINDOW_DAYS;
+  const buckets = siteBuckets(report.sites);
   const rows = report.sites.map(site => {
     const cells = [
       cell(site.url),
@@ -323,12 +407,12 @@ export function renderReportMarkdown(report) {
     `|${' --- |'.repeat(HEADERS.length)}`,
     ...(rows.length > 0 ? rows : [`| ${['_no monitored sites_', '—', '—', '—', '—', '—', '—'].join(' | ')} |`]),
     '',
-    `**${report.summary.sites} site(s) · ${report.summary.up} up · ${report.summary.down} down · ${report.summary.checks} checks · ${report.summary.failures} failed${expiring.length > 0 ? ` · ${expiring.length} SSL expiring soon` : ''}${expired.length > 0 ? ` · ${expired.length} SSL EXPIRED` : ''}${stale.length > 0 ? ` · ${stale.length} stale (no check in the last ${STALE_AFTER_DAYS} d)` : ''}**`,
+    `**${report.summary.sites} site(s) · ${buckets.up} up · ${buckets.down} down${unknownWords(buckets)} · ${report.summary.checks} checks · ${report.summary.failures} failed${expiring.length > 0 ? ` · ${expiring.length} SSL expiring soon` : ''}${expired.length > 0 ? ` · ${expired.length} SSL EXPIRED` : ''}${stale.length > 0 ? ` · ${stale.length} stale (no check in the last ${STALE_AFTER_DAYS} d)` : ''}**`,
     ...expiredLines,
     ...attention,
     ...staleLines,
     '',
-    `Uptime is the share of completed monitoring passes that answered HTTP 200–399. "Uptime (all)" counts every pass since the site was added${since ? ` (earliest ${shortTime(since)})` : ''}; "Uptime (window)" counts the passes recorded in the last ${windowDays} days. A site with no completed pass yet shows — rather than 100%. "Up" in the summary counts sites checked within the last ${STALE_AFTER_DAYS} days; a site whose monitoring stopped is listed as stale with the age of its last pass.`,
+    `Uptime is the share of completed monitoring passes that answered HTTP 200–399. "Uptime (all)" counts every pass since the site was added${since ? ` (earliest ${shortTime(since)})` : ''}; "Uptime (window)" counts the passes recorded in the last ${windowDays} days. A site with no completed pass yet shows — rather than 100%. The counts in the summary line are a partition: every site is in exactly one of up, down, not checked, status unknown or stale. "Up" and "down" describe sites checked within the last ${STALE_AFTER_DAYS} days; a site whose monitoring stopped is counted as stale and keeps the status from its last pass in the table, named with the age of that pass. "Status unknown" means a pass ran but its result cannot be read from the state file.`,
     '',
     `Generated on one machine, without an account: no page content, response headers or license data is included, and nothing was uploaded.`,
   ].join('\n');
