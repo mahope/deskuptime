@@ -1,3 +1,76 @@
+## Status fra denne iteration (59, P1-43 — `unwatch` sagde stop, loopen sagde "stadig med")
+
+**Hvorfor denne flade:** ❓ 1–3 er stadig ubesvarede, så iterationen tog den anden
+valgfri kandidat fra P1-42's afslutning. Den første (en genstart midt i et
+nedbrud) blev **målt først og var ikke en fejl** — se nedenfor — så den her.
+
+**Målt først, nul kode ændret.** Rigtig betalt loop
+(`watch a b --webhook … --interval 30`, Pro fra `passthrough`-stubben, aldrig et
+kald til mahope.tools), rigtig state-fil, lokalt fixture der svarer 200 på begge,
+og en rigtig `deskuptime unwatch b` i en anden proces:
+
+```
+deskuptime unwatch b  →  ✅ No longer monitoring: http://127.0.0.1:58542/b
+state.json            →  [ a ]                    ← filen er enig
+…ét loop-pass senere…
+state.json            →  [ a, b ]                 ← loopen lagde den tilbage
+deskuptime status     →  Monitored URLs (2)
+```
+
+Kommandoen sagde altså "vi overvåger ikke sitet længere", og 30 sekunder senere
+blev det overvåget igen — med filen, `status` og kundenrapporten alle enige om
+den forkerte antagelse. **Ingen ny måling, ingen hårdhævet løsning, ét fund:**
+`mergePersistedState()` lagde filens poster *ind i* loopens kopi og slettede
+aldrig en. Loopens hukommelse var altså det eneste andet eksemplar af listen, og
+det var det, der overlevede; skrivningen i passets slut lagde URL'en tilbage på
+disk. På **gratisniveauet** er det værre end en forkert visning: den frigjorte
+plads er taget igen, så næste `watch <url>` svarer `Free tier monitors 3 URLs`,
+og den eneste vej tilbage er håndredigering af filen med licensnøglen i.
+
+**Efter, samme måling:** `unwatch` står, `state.json` har `[ a ]`, `status` viser
+1 URL, og loopen siger det den gang den sker i stedet for at tie:
+`🛑 No longer monitoring: http://127.0.0.1:58542/b — removed from the saved list
+by another command.` Et site der forsvinder fra outputtet uden en linje er
+uadskilleligt fra et pass der glemte det.
+
+**Signalet er filens egen mtime mod loopens *eget* sidste skrivning**, og kun
+for de URL'er loopen selv har skrevet. Det er den eneste ting i filen, der kan
+skelne "nogen har fjernet dette med vilje" fra "filen på disk er vores egen
+fortid": en `unwatch`, et cron-pass, en `watch --once` eller en restore efterlader
+en fil der er *nyere* end vores egen skrivning. **Modvægten er målt, ikke
+antaget:** en skrivning der *mislykkedes* (P1-39) registrerer intet, så en forældet
+fil er ældre end vores seneste successfulde, og loopen beholder sin egen liste —
+præcis som før. En URL brugeren lige har navngivet på kommandolinjen er heller
+ikke i det sæt, så `deskuptime watch c` kan aldrig få sin egen URL slettet af en
+fil. Begge gates er målt som mutationer.
+
+**Vinduet der ikke lukkes, står i koden, ikke skjult:** en fjerning der lander
+*mellem* loopens læsning og dens skrivning tages tilbage af netop det pass og
+æres på det næste. At tage state-låsen om et helt pass ville være at holde den
+for evigt, så vinduet bliver liggende og er navngivet — det er ikke en fejl
+forklædt som en anden. Låsen er ellers uændret: `runOnce` og `unwatch` holder
+den, og den er ikke loopens at holde i et kvarter.
+
+**Fem nye tests i `test/watchlist.test.js`** (registreret i `npm test` — samme
+fælde som P1-10) → **396/396** (391 + 5); audit 0/0; `node --check` alle
+JS-filer, `matrix --check` og `git diff --check` grønne på Node 26.7.0.
+**Tre mutationer målt, alle døde** (1/1/2 fejl). **En vished, sjette gang i mit
+arbejde:** min første mutation af `lastWrite.urls`-gaten ændrede slet ikke
+adfærden — den flyttede kun en betingelse, som så ud som dækning. Den rigtige
+mutation (loopen over `Object.keys(state.urls)` i stedet for `lastWrite.urls`)
+dør med 1 fejl, og det er den der låser testen "en URL loopen ikke har skrevet
+endnu fjernes aldrig". Ingen claim ændret, ingen matrix-række, ingen exit-kode,
+ingen payload-felt, ingen deploy-note nødvendig. README's `unwatch`-linje er
+tekst for tekst sand nu. **Næste:** ❓ 1–3, ellers en målt opgave.
+
+**Kandidaten der ikke var en fejl (målt, så den ikke skal måles igen):** en
+genstart midt i et nedbrud virker. Rigtig loop, rigtig state-fil, sitet gik ned
+mens modtageren svarede 503 hele budgettet (3 POST, advarslen om outboxen, så
+`SIGKILL`), og imens kom både sitet og modtageren op. Den nye proces leverede
+først den ventende `is DOWN`-alarm med **dens egen** `measuredAt` (20:05:10, leveret
+20:05:22) og derefter `is UP` — i den rækkefølge de skete i. Køen overlever et
+drab, og det er P1-42's løfte holdt.
+
 ## Status fra denne iteration (58, P1-42 — en alarm der ikke kom af sted, blev væk)
 
 **Hvorfor denne flade:** ❓ 1–3 er stadig ubesvarede, så iterationen tog den opgave
@@ -2610,6 +2683,48 @@ sender den igen. Spec: `docs/pro-alerts.md` §2, ny underafsnit.
 9. `deskuptime status` viser hvad kanalen stadig er skyldt. ✅
 10. 9 nye tests + den målte kunderejse med rigtig modtager. ✅ → 391/391
 
+### P1-43 — FÆRDIG 2026-09-26 (`ceo/unwatch-in-loop`) — `unwatch` holdt ikke, når en loop kørte
+
+**Begrundelse (målt, ikke formodet):** en betalt loop, en rigtig state-fil og en
+`deskuptime unwatch b` i en anden proces. Kommandoen skrev `✅ No longer
+monitoring`, filen mistede nøglen, og **ét loop-pass senere** havde filen den
+igen, sitet blev målt igen, og `status` sagde `Monitored URLs (2)`. På
+gratisniveauet kostede det den frigjorte plads, så næste `watch <url>` blev
+afvist med `Free tier monitors 3 URLs`.
+
+**Root cause:** `mergePersistedState()` lagde filens poster ind i loopens kopi og
+slettede aldrig en, så loopens hukommelse — det eneste andet eksemplar af listen —
+overlevede, og skrivningen i passets slut lagde URL'en tilbage på disk.
+
+**Fix:** filens mtime mod loopens *eget* sidste skrivning som signal, kun for de
+URL'er loopen selv har skrevet (`lastWrite` i `src/watch.js`), og loopen siger
+`🛑 No longer monitoring: <url> — removed from the saved list by another command.`
+den gang det sker. Modvægten er målt: en mislykket skrivning (P1-39) registrerer
+intet, så en forældet fil fjerner aldrig noget, og en URL fra kommandolinjen kan
+aldrig slettes af en fil.
+
+**Acceptkriterier:**
+
+1. `unwatch` under en kørende loop står: filen, `status` og rapporten er enige
+   efter det næste pass. ✅ målt før (2 URL'er) og efter (1 URL)
+2. Løftet i `unwatch`'s egen besked ("Its uptime history is kept") holder, fordi
+   URL'en ikke længere kan dukke op i en rapport. ✅ samme måling
+3. En fil der er ældre end loopens egen skrivning fjerner intet. ✅ målt som
+   mutation
+4. `deskuptime watch <ny-url>` under en kørende sletter aldrig den URL, den blev
+   bedt om at overvåge. ✅ målt som mutation
+
+**Målt:** 396/396 (391 + 5), audit 0/0, `node --check`, `matrix --check`,
+`git diff --check` grønne på Node 26.7.0. Tre mutationer døde (1/1/2 fejl); én
+første mutation var vished (anden gang i mit arbejde) og blev skrevet om.
+Ingen claim, ingen matrix-række, ingen exit-kode, ingen deploy-note nødvendig.
+
+**Åben og bevidst:** en fjerning der lander mellem loopens læsning og dens
+skrivning tages tilbage af netop det pass og æres på det næste. At låse et helt
+pass ville være at holde låsen for evigt. Skal det lukkes, er vejen et felt i
+state-filen med hvem der ejer skrivningen — større end en iteration, og den er
+noteret her, ikke gemt.
+
 ## ❓ Til Mads
 
 13. ~~Hvad skal et site, vi ikke kan tjekke, gøre ved et pass?~~ **Besvaret i kode 2026-09-26 (P1-40, `ceo/skip-unusable-urls`):** (c) + (b), planens egen anbefaling. En nøgle i `state.json` uden scheme springes over, de øvrige sites fortsætter, nøglen nævnes på hvert pass og på `watch --status`, `status` og i rapporten, og exit 2 beholdes **kun** når intet kunne tjekkes. Målt først: ét `kunde.dk` blandt 25 nøgler dræbte passet med exit 1 og nul tjek. **Valget er ikke gratis, og en nøgle uden adresse er aldrig et nedet site** — den grænse til det andet svar ((a): passet fejler) er én linje i `runPass` plus exit-koden, hvis Mads vil have den. Målingen og koden ligger i afsnittet øverst.
@@ -2657,6 +2772,8 @@ sender den igen. Spec: `docs/pro-alerts.md` §2, ny underafsnit.
 - **Release-note P1-2:** matrixen, README, `--help` og npm-beskrivelsen lover nu `deskuptime report`, men kun en build med kode. Gamle installerede CLI'er kender ikke kommandoen og skriver blot `Unknown command` — ingen eksisterende kundeafhængighed brydes ved merge. ❓ 10 (nyt `v0.2.9-cli`-tag) er stadig det, der gør curl-stien komplet.
 
 - **Release-note P1-40:** Ét navn i overvågningslisten, der ikke er en adresse, behøvede før **standse overvågningen af alle dine øvrige sites**. Før skrev `deskuptime watch --once` en rå Node-stacktrace, exit 1, og **intet** site blev tjekket — fordi værktøjet ville læse *alle* nøgler i `state.json` igennem som adresser inden den første request, så ét `kunde.dk` fra en håndredigering, en rodet restore eller et script endte overvågningen af de 24 andre. Det er den vej cron kører, så brugeren så kun en stacktrace i mailen og ingen alarmer. Nu springes nøglen over, de øvrige sites tjekkes som sædvanligt, og du får én advarsel der navnginer den og siger hvad du kan gøre: `Cannot be checked — not a site that is down: 1 saved URL is not a full address (kunde.dk). The other 2 monitored sites were checked as usual. Fix the key, or drop it: deskuptime unwatch 'kunde.dk'` — samme sætning i `watch --status`, i `status` og i kundenrapporten. **Exit 2 er kun tilbage, når intet overhovedet kunne tjekkes**, så et cron-job kan ikke overse det; en kørsel hvor alle nøgler er gyldige er uændret, tegn for tegn. **En nøgle uden adresse er aldrig et nedet site:** den tæller ikke som `up` i listerne og ikke som `UP` i rapporten, men som *status unknown* med grunden — før skrev en rapport `UP` for en `kunde.dk`, den intet pass nogensinde kan måle. Den tager heller ikke længere en af de tre gratis-pladser, og `deskuptime unwatch 'kunde.dk'` virker igen, så du slipper for at redigere `state.json` — filen der også rummer din licensnøgle.
+
+- **Release-note P1-43:** `deskuptime unwatch <url>` **holdt ikke, hvis du havde en `watch`-loop kørerende** — og det er den konfiguration de fleste har, for det er den der sender alarmer. Før skrev kommandoen `✅ No longer monitoring: …`, filen mistede nøglen med det samme, og **ét pass senere** havde loopen lagt den tilbage igen: sitet blev målt forfra, `deskuptime status` sagde `Monitored URLs (2)`, og kundenrapporten viste den igen. På gratisniveauet betød det, at den frigjorte plads var taget igen, så næste `watch <url>` blev afvist med `Free tier monitors 3 URLs`, og den eneste vej tilbage var at redigere filen med licensnøglen i. Nu ser loops filens mtime mod sin **egen** seneste skrivning, og en URL den selv har skrevet, men filen ikke længere har, er fjernet med vilje — enten af `unwatch`, af et cron-pass, eller af en restore. **Og den siger det, i stedet for at tie:** `🛑 No longer monitoring: <url> — removed from the saved list by another command.` **Ingen status, rapport eller historik er slettet**, så en `unwatch` efter et kryds med et kørende cron-job tager også effekt, og din 35 dages historik ligger stadig i `history.json`. **Den ene ting der ikke er lukket:** fjerner du et site i det samme øjeblik, et pass er ved at skrive, tager det pass det tilbage, og det næste pass ærer det. Låsen kan ikke dække det — den er ikke loopens at holde i et kvarter. **Exit-koder, matrix-rækker, JSON-felter og claims er uændrede.**
 
 - **Release-note P1-42:** En alarm, din Slack/Discord/Teams-kanal ikke fik, **kan ikke længere forsvinde**. Før blev hver hændelse sendt i det pass den opstod i, og en modtager der svarer `5xx` hele budgettet igennem fik tre forsøg og så intet: passet havde allerede noteret ændringen, så næste pass rejste ingen ny besked, og intet i loopen sendte den igen. Kanalen hørte intet om nedbruddet og fik så en `is UP` om en genopretning den aldrig blev fortalt om. Nu gemmes en alarm der ikke kom af sted, og **næste pass sender den igen — før de nye alarmer**, så din kanal læser dem i den rækkefølge de skete i. Alarmen beholder sit eget målingstidspunkt, så en sen levering ser ud som sen og ikke som frisk. **Grænserne er med vilje:** 3 forsøg i alt på tværs af passene, højst 20 ventende alarmer og 30 minutter — en kanal der var nede længe nok til at den gamle fejl er rettet, får ikke en gammel `is DOWN` i dag. **Og opgivelsen siges den:** `Giving up on an alert that was never delivered: … Your channel received nothing about it. Check the webhook URL and that the receiver is up.` — en stille drop ville være uadskillelig fra en levering. `deskuptime status` viser nu også hvad kanalen stadig er skyldt, så det overlever en genstart. **Webhook-URL'en skrives aldrig til disk** (den er næsten altid et token), og `message` afkortes til 500 tegn. **Ingen payload-felt er ændret**, så en eksisterende adapter er uberørt.
 
@@ -2755,3 +2872,5 @@ sender den igen. Spec: `docs/pro-alerts.md` §2, ny underafsnit.
 - **Iteration 14 (P2-1 del A):** Målingen først fandt fire live-`example.com`-tests i `test/test.js`, en vakuum-assertion i watch-testen (promise'en resolver `null` både ved "vi dræbte den" og "den døde alene") og en Action, der **tæller uden at verificere** — `[]`, manglende `healthy` eller færre resultater end URL'er gav `down=0` og grøn kørsel. Da TLS-fixturen kom på plads, faldt en reel P0-fejl ud: `ssl.js` sendte SNI som IP-literal, hvilket Node 24+ afviser med en exception, så intet HTTPS-site overvåget på IP-adresse fik SSL-dage (og Action'en ville have meldt det sunde site som SSL-fejl). Rettet med `net.isIP`-gate. `test/test.js` er nu helt uden live-netværk (lokal HTTP-fixture + selvsigneret cert pr. kørsel via `openssl`, springer over uden openssl), watch-testen kan fejle, og Action'en validerer array, resultatantal og boolsk `healthy` før tællingen, med exit 1 og `::error::` ellers. +6 tests, heraf 5 gennem en stub-CLI der sender payloads den rigtige CLI ikke producerer, plus exit-2/exit-0-verifikation af fejlvejen. Node 26.7.0: `npm ci --ignore-scripts`, `npm test` **124/124**, `npm run audit` 0/0, `node --check`, `sh -n`/`bash -n` (også det udpakkede action-script), YAML tab-fri og `git diff --check` grønne. Mutationstest: genindsat `servername` → 2 fejl i 16; slettet valideringsblok → 2 fejl i 32. Næste iteration: P1-2 del A eller P2-1 del B.
 - **Iteration 14, del 2 (CI-smoke):** Efter merge af del A blev den sidste live-afhængighed i gaten lukket: `ci.yml`'s smoke-step tjekkede `https://example.com`, så et site Mads ikke ejer kunne gøre hele repoets gate rød. Step'en kører nu en lokal fixture med både en UP- og en DOWN-route og fire `jq -e`-assertions, så jq både kan fejle og faktisk fejler på en DOWN. Negativ test lokalt: med `.[1].healthy == true` i stedet for `false` fejler step'en med jq exit 1 under `set -e`. `npm test` 124/124, `npm run audit` 0/0, `node --check`, YAML-parse af alle fem workflows (PyYAML) og `git diff --check` grønne på Node 26.7.0.
 - **Iteration 58 (P1-42, målt + spec + fix):** ❓ 1–3 ubesvarede, så iterationen tog den opgave P1-41 lod ligge: modtageren nede **gennem hele budgettet**. Målt først med rigtig loop, rigtig state-fil, lokalt site på 500 og rigtig modtager på 503: 3 POST, og 36 s senere igen ingenting (`state.json`: `urls, license` — ingen kø), fordi passet latched `wasUp: false`. Spec **først** i `docs/pro-alerts.md` §2 (kapacitet 20 ældste-først, alder 30 min, 3 forsøg i alt, dedupe pr. `(url, type)` med den ældre tilbage, og røde regel for hvad der aldrig gemmes: webhook-URL, modtagerens svartekst; `message` → 500 tegn). **Fix:** `outbox` i state, flush ved passets start **før** nye hændelser, tre grænser der låser, opgivelsen sagt i ordene, `sendWebhook(…, { kept })` så advarslen ikke kan lyve, `webhookBody()` som den ene bygger af payloaden (ingen felt ændret), og `deskuptime status` viser det kanalen er skyldt. **To fejl fundet undervejs, rettet i koden:** `flushOutbox` gemte ikke et mislykket forsøg (tællede længde, ikke indhold — femte gang i mit arbejde at en måle-/låsfejl så ud som dækning), og loopen sagde `Nothing resends it` mens den gemte alarmen. **Én lås udvidet, ikke slækket** (niende gang): `checkAgeMs`-læseren 2 → 3 i `status.js` fordi `queuedAgeMs` er der, **og** en ny lås på at den klipper fortegnet væk; invarianten urørt. 9 nye tests i `test/outbox.test.js` (lagt til i `npm test`) inkl. den målte kunderejse med rigtig modtager (503 hele budgettet → gemt → 200 → leveret med `measuredAt`) → **391/391** (382 + 9); audit 0/0; `node --check`, `matrix --check`, `git diff --check` grønne på Node 26.7.0. Ingen payload-felt, exit-kode, matrix-række eller claim ændret; ingen deploy-note nødvendig. **Næste:** ❓ 1–3, ellers en målt opgave — kandidater uden valg: en restart midt i et nedbrud, og `watch --once` på cron-vejen med en webhook i loopet.
+
+- **Iteration 59 (P1-43, målt + fix):** ❓ 1–3 ubesvarede, så den anden valgfri kandidat fra P1-42 blev målt: `unwatch` under en kørende betalt loop. Før: kommandoen sagde `✅ No longer monitoring`, filen var enig, og ét pass senere lå URL'en i filen igen, blev målt igen, og `status` sagde 2 URL'er — på gratisniveauet kostede det den frigjorte plads. **Root cause:** `mergePersistedState()` føjede filens poster ind i loopens kopi og slettede aldrig en, så loopens hukommelse overlevede og passets skrivning lagde den tilbage. **Fix:** filens mtime mod loopens egen sidste skrivning, kun for de URL'er loopen selv har skrevet (`lastWrite`), så P1-39's mislykkede skrivning (intet registreret → ældre fil fjerner intet) og en URL fra kommandolinjen (aldrig i sættet) begge er beskyttet — begge som mutationer, ikke som antagelser. Løbende loop siger `🛑 No longer monitoring: <url> — removed from the saved list by another command.` **Den anden kandidat var ikke en fejl:** en `SIGKILL` midt i et nedbrud med en ventende alarm overlever — den nye proces leverede `is DOWN` med sin egen `measuredAt` (20:05:10 leveret 20:05:22) og *så* `is UP`, i den rækkefølge de skete i. 5 nye tests i `test/watchlist.test.js` → **396/396** (391 + 5); audit 0/0; `node --check`, `matrix --check`, `git diff --check` grønne på Node 26.7.0. Tre mutationer døde (1/1/2 fejl); **min første mutation af `lastWrite.urls`-gaten var vished** (anden gang i mit arbejde — den flyttede kun en betingelse) og blev skrevet om til den rigtige, som dør med 1 fejl. **Næste:** ❓ 1–3, ellers en målt opgave.

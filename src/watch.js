@@ -174,6 +174,21 @@ export function loadState(options = {}) {
 }
 
 /**
+ * What this process last wrote to the state file: when, and which URLs.
+ *
+ * A running loop is the one process that keeps its own copy of the state, so
+ * this is what lets it tell its own past from somebody else's present. Another
+ * writer — `unwatch`, a `watch --once` cron pass, a restore — leaves a file that
+ * is *newer* than our last write; a URL we ourselves wrote and the file no
+ * longer has was then removed on purpose. See mergePersistedState().
+ *
+ * A write that failed is deliberately not recorded: the file on disk is then
+ * older than we think, so the loop keeps its own truth and monitoring survives
+ * an unwritable state file (P1-39).
+ */
+let lastWrite = { ms: 0, urls: null };
+
+/**
  * State holds the license key and the monitored URLs, so it is written 0600
  * inside a 0700 directory, and swapped in atomically: a crash mid-write can
  * never leave a truncated state file behind.
@@ -190,9 +205,24 @@ export function saveState(state, options = {}) {
     writeFileSync(temporaryFile, JSON.stringify(state, null, 2), { mode: 0o600 });
     renameSync(temporaryFile, stateFile);
     if (process.platform !== 'win32') chmodSync(stateFile, 0o600);
+    lastWrite = { ms: stateFileMtimeMs(stateFile), urls: new Set(Object.keys(state.urls || {})) };
   } catch (error) {
     try { unlinkSync(temporaryFile); } catch {}
     throw error;
+  }
+}
+
+/**
+ * When the state file itself was last modified, or 0 when it is not there or
+ * cannot be read. 0 is deliberately the "we know nothing" answer: it is older
+ * than any write we ever recorded, so an unknown file is never treated as
+ * somebody else's news.
+ */
+export function stateFileMtimeMs(stateFile) {
+  try {
+    return statSync(stateFile).mtimeMs;
+  } catch {
+    return 0;
   }
 }
 
@@ -597,7 +627,42 @@ function addMonitoredUrls(state, urls, pro) {
   return added;
 }
 
-function mergePersistedState(state, options) {
+/**
+ * What the loop learns from the file on disk before every pass.
+ *
+ * Entries are merged one by one and the newer pass wins — isNewerPass()'s
+ * decision, not a string compare (see its doc comment for the two timestamp
+ * pairs that sort the wrong way). A URL is only ever *added* that way, and that
+ * is the whole bug this function was measured with on 2026-09-26:
+ *
+ *   `deskuptime watch a b --webhook … --interval 30`   (a paid loop, running)
+ *   `deskuptime unwatch b`  →  ✅ No longer monitoring: …/b
+ *   …one pass later…       →  state.json holds a and b again, the site is
+ *                              measured again, and `status` lists 2 URLs.
+ *
+ * Nothing in the loop could know better: its own copy of the list is the one
+ * that still has b, the pass had already latched the verdict, and the write at
+ * the end of the pass put b back — so the tool said it had stopped monitoring a
+ * site, and thirty seconds later it was monitoring it again and had said so on
+ * disk. On the free tier that is worse than an annoyance: the freed slot is
+ * taken again, so the next `watch <url>` answers "Free tier monitors 3 URLs"
+ * and the only remaining way to get it back is hand-editing the file that holds
+ * the license key.
+ *
+ * The file is believed only when it is *newer than our own last write* and the
+ * URL is one we ourselves wrote — which is also what keeps the unwritable state
+ * file honest: a write that failed (P1-39) never recorded anything, so the
+ * stale file is older than our last successful one and the loop keeps its own
+ * list, exactly as it did before. A URL the user just named on the command line
+ * is not in that set either, so starting a loop can never delete what it was
+ * asked to monitor.
+ *
+ * What this does not close: a removal that lands between the loop's read and
+ * its write is undone by that one pass, and honoured on the next. Taking the
+ * state lock for the length of a pass would mean holding it forever, so the
+ * window stays and is named here rather than papered over.
+ */
+export function mergePersistedState(state, options) {
   const persisted = loadState(options);
   for (const [url, entry] of Object.entries(persisted.urls)) {
     const current = state.urls[url];
@@ -606,6 +671,15 @@ function mergePersistedState(state, options) {
     // and the whole entry that rolled back because of it.
     if (!current || isNewerPass(entry.lastChecked, current.lastChecked)) {
       state.urls[url] = entry;
+    }
+  }
+  // Somebody wrote after us and their list is shorter: the URL is gone on
+  // purpose, and the loop's memory is the only thing left that would bring it
+  // back. Only the URLs we wrote ourselves are candidates, so nothing else in
+  // memory can be talked out of existence by a file on disk.
+  if (lastWrite.urls && stateFileMtimeMs(stateFileFrom(options)) > lastWrite.ms) {
+    for (const url of lastWrite.urls) {
+      if (!Object.hasOwn(persisted.urls, url)) delete state.urls[url];
     }
   }
   if (Object.hasOwn(persisted, 'license')) state.license = persisted.license;
@@ -728,6 +802,14 @@ export async function runOnce(urls, opts = {}) {
  *
  * The state lock is the same one `runOnce` takes, so unwatching during a cron
  * pass cannot be overwritten by that pass's save.
+ *
+ * A running `watch` loop holds no lock — it runs for hours — and it keeps its
+ * own copy of the list, so before P1-43 it undid this command one pass later:
+ * measured with the real loop, the URL was back in the file, measured again and
+ * listed by `status` within 30 seconds. mergePersistedState() now takes the
+ * removal from the file when the file is newer than the loop's own last write.
+ * What is not closed, and is named there: a removal that lands between the
+ * loop's read and its write is undone by that one pass and honoured by the next.
  */
 export function unwatchUrls(urls, opts = {}) {
   const wanted = [...new Set(urls)];
@@ -1125,7 +1207,14 @@ export async function startWatch(urls, opts = {}) {
 
   // eslint-disable-next-line no-constant-condition
   while (true) {
+    const before = new Set(Object.keys(state.urls));
     mergePersistedState(state, opts);
+    // A URL the user stopped monitoring has left the loop too. Said out loud,
+    // because the alternative — a site quietly vanishing from the output — is
+    // indistinguishable from a pass that forgot it.
+    for (const url of before) {
+      if (!state.urls[url]) console.log(`\n🛑 No longer monitoring: ${url} — removed from the saved list by another command.`);
+    }
     if (Date.now() - lastLicenseCheck >= LICENSE_RECHECK_MS) {
       lastLicenseCheck = Date.now();
       pro = await recheckLicense();
