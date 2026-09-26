@@ -108,6 +108,13 @@ Det er her bureauet bliver solgt, og derfor er reglerne hårde:
   negativt eller ugyldigt tal fra en håndskrevet state-fil er behandlet som
   ukendt, ikke som "forfalden nu". I `--json` hedder felterne
   `sslDaysRemaining`, `sslExpiringSoon` og `summary.sslExpiringSoon`.
+- Uptime kan aldrig overstige 100 % og `failures` kan aldrig blive negativ.
+  Tællerne læses ét sted gennem `counters()` i `src/report.js`, som klemmer
+  `checksUp` til `checks`: en håndskrevet, gendannet eller halvskrevet state-fil
+  kan derfor ikke få rapporten til at skrive "250 %" eller "−2 failed" hos en
+  kunde. Samme klemning findes i historikkens dagsbucketter. Næste
+  overvågningspass skriver de reparerede tal tilbage, så fejlen ikke overlever i
+  senere rapporter.
 - `--days N`: rapportvinduet, 1–35 (hvor meget historik der faktisk er gemt).
   Uden flag er det 30. Uden for intervallet fejler kommandoen med en besked,
   der siger hvorfor, i stedet for at ignorere tallet.
@@ -145,9 +152,13 @@ Det er her bureauet bliver solgt, og derfor er reglerne hårde:
   tælling via rigtige `runPass`-kald, at en DOWN-side står først, at
   `|`/`<script>`/newline i en URL ikke kan ødelægge tabellen, at licensnøglen
   ikke lækker til Markdown eller JSON, Pro-gaten med købslink, `--json` og
-  `--title`.
+  `--title`, at `checksUp > checks` hverken kan give over 100 % eller negativ
+  `failures` i Markdown, JSON eller resumelinjen, og at et rigtigt `runPass` på
+  en skæv state-fil skriver de reparerede tal tilbage på disk.
 - Mutation: at slette `recordPass`-kaldet i `runPass` giver fejl i
-  uptime-testen; at gøre `isPro`-gaten væk giver fejl i gaten.
+  uptime-testen; at gøre `isPro`-gaten væk giver fejl i gaten; at fjerne
+  klemningen i `counters()` giver **4 fejl i 19**, og at læse `failures` uden
+  klemning i `buildReport` giver **2 fejl**.
 
 ## 7. Ikke bygget (bevidst)
 

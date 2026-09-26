@@ -17,7 +17,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { buildReport, recordPass, renderReportJson, renderReportMarkdown, uptimePercent } from '../src/report.js';
+import { buildReport, counters, recordPass, renderReportJson, renderReportMarkdown, uptimePercent } from '../src/report.js';
 import { loadState, runPass } from '../src/watch.js';
 import { PRODUCT } from '../src/features.js';
 
@@ -73,6 +73,40 @@ test('uptime is the share of UP passes, and no data is never 100%', () => {
   assert.equal(uptimePercent({ checks: 'many', checksUp: null }), null);
   // A negative counter is unusable data, not 0% uptime.
   assert.equal(uptimePercent({ checks: -3, checksUp: 9 }), null);
+  // More UP passes than passes is not a site that is more than up. A state file
+  // edited by hand, restored from a backup or written by another tool must not
+  // produce a number above 100 % in a document a customer reads.
+  assert.equal(uptimePercent({ checks: 2, checksUp: 5 }), 100);
+  assert.equal(uptimePercent({ checks: 2880, checksUp: 99999 }), 100);
+  for (const entry of [{ checks: 2, checksUp: 5 }, { checks: 0, checksUp: 9 }, { checks: 'many', checksUp: 9 }, { checks: 5, checksUp: -2 }]) {
+    const { checks, checksUp, failures } = counters(entry);
+    assert.ok(checksUp <= checks, `${JSON.stringify(entry)} has more UP passes than passes`);
+    assert.ok(failures >= 0, `${JSON.stringify(entry)} has negative failures`);
+  }
+});
+
+test('recordPass repairs a state file whose counters are out of step', () => {
+  // checksUp above checks: the old code incremented both counters and kept the
+  // skew forever, so the report claimed 250 % uptime and a negative number of
+  // failures. One pass must bring the entry back to a state that can be true.
+  const entry = { checks: 5, checksUp: 9 };
+  const pass = recordPass(entry, { healthy: false });
+  assert.deepEqual(pass, { checks: 6, failures: 1 });
+  assert.ok(entry.checksUp <= entry.checks, 'the entry is left consistent');
+  assert.equal(uptimePercent(entry), 83.33);
+
+  // A skewed entry followed by an UP pass is capped too — checksUp can never be
+  // pushed above the passes that actually ran.
+  recordPass(entry, { healthy: true });
+  recordPass(entry, { healthy: true });
+  assert.ok(entry.checksUp <= entry.checks, 'repeated passes keep it consistent');
+  assert.ok(counters(entry).failures >= 0);
+
+  // A healthy first pass on a skewed entry is 100 %, not more.
+  const healed = { checks: 4, checksUp: 40 };
+  recordPass(healed, { healthy: true });
+  assert.deepEqual(counters(healed), { checks: 5, checksUp: 5, failures: 0 });
+  assert.equal(uptimePercent(healed), 100);
 });
 
 test('recordPass counts every pass and only the UP ones', () => {
@@ -348,6 +382,71 @@ test('every site that needs renewing is named, and the JSON agrees with the text
     json.sites.filter(site => site.sslExpiringSoon).map(site => site.url),
     ['https://acme.dk/', 'https://shop.dk/'],
   );
+});
+
+test('a report can never claim more than 100 % uptime or a negative failure', () => {
+  const report = buildReport(proState({
+    'https://acme.dk/': upEntry({ checks: 2, checksUp: 5 }),
+    'https://shop.dk/': upEntry({ wasUp: false, lastStatus: 503, checks: 50, checksUp: 49 }),
+  }), { now: NOW });
+
+  // Problems first, so the skewed site is looked up by URL, not by index.
+  const byUrl = Object.fromEntries(report.sites.map(site => [site.url, site]));
+  assert.equal(byUrl['https://acme.dk/'].uptimePercent, 100);
+  assert.equal(byUrl['https://acme.dk/'].failures, 0);
+  assert.equal(byUrl['https://shop.dk/'].uptimePercent, 98);
+  assert.equal(report.summary.failures, 1);
+  assert.equal(report.summary.checks, 52);
+
+  const markdown = renderReportMarkdown(report);
+  assert.doesNotMatch(markdown, /250 ?%/);
+  assert.doesNotMatch(markdown, /-2 failed|-1 failed/);
+  assert.match(markdown, /\| 100% \(2 checks\) \|/);
+  assert.match(markdown, /1 failed\*\*/);
+
+  const json = JSON.parse(renderReportJson(report));
+  for (const site of json.sites) {
+    assert.ok(site.uptimePercent === null || (site.uptimePercent >= 0 && site.uptimePercent <= 100), `${site.url} is outside 0–100 %`);
+    assert.ok(site.failures >= 0, `${site.url} has negative failures`);
+  }
+  assert.ok(json.summary.failures >= 0);
+});
+
+test('a real watch pass writes consistent counters back to a skewed state file', async (t) => {
+  const home = tempHome(t);
+  const options = { env: { HOME: home, USERPROFILE: home } };
+  const url = 'https://acme.dk/';
+  writeState(home, { urls: { [url]: { ...upEntry({ checks: 5, checksUp: 9 }) } } });
+
+  // Before a pass runs, the report on disk is clamped — it never prints the
+  // skew it finds.
+  const before = buildReport(loadState(options), { now: NOW });
+  assert.equal(before.sites[0].uptimePercent, 100);
+  assert.equal(before.sites[0].failures, 0);
+
+  await runPass(loadState(options), {
+    ...options,
+    now: NOW,
+    returnResults: true,
+    check: async () => ({
+      healthy: false,
+      reachable: false,
+      statusCode: 503,
+      responseTimeMs: 90,
+      timestamp: NOW.toISOString(),
+      ssl: { validDays: 40 },
+      content: null,
+    }),
+  });
+
+  // The repair is persisted, so later reports — and the file itself — stay true.
+  const entry = loadState(options).urls[url];
+  assert.equal(entry.checks, 6);
+  assert.equal(entry.checksUp, 5);
+  const after = buildReport(loadState(options), { now: NOW });
+  assert.equal(after.sites[0].uptimePercent, 83.33);
+  assert.equal(after.sites[0].failures, 1);
+  assert.equal(after.summary.failures, 1);
 });
 
 test('the report, check and watch share one expiry threshold', async () => {

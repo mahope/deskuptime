@@ -34,17 +34,40 @@ export function intOrZero(value) {
 }
 
 /**
+ * The counter pair, read as one consistent set.
+ *
+ * `checksUp > checks` is not a site that is more than up — it is a state file
+ * that was hand-edited, restored from a backup, or written by another tool.
+ * Unclamped it renders "250 % uptime" and "−2 failed" in the one document a
+ * bureau forwards to a customer, so the ceiling is applied here: the single
+ * place the writer, the report and the percentage all read these numbers.
+ * `src/history.js` clamps its daily buckets for the same reason, and a state
+ * file that is out of step is repaired by the next pass (see `recordPass`)
+ * rather than staying wrong in every later report.
+ */
+export function counters(entry) {
+  const checks = intOrZero(entry?.checks);
+  const checksUp = Math.min(intOrZero(entry?.checksUp), checks);
+  return { checks, checksUp, failures: checks - checksUp };
+}
+
+/**
  * Fold one completed pass into a URL entry: how many checks ran, how many of
  * them answered UP, and the last response time. Uptime is deliberately
  * defined here and nowhere else, so the writer and the reader cannot disagree.
+ *
+ * The previous counters are read through `counters()`, which is also what
+ * repairs a state file whose `checksUp` is above its `checks`: the write below
+ * then carries the repaired pair forward instead of preserving the error.
  *
  * @param {object} entry — state.urls[url], mutated in place
  * @param {object} result — a result from engine.checkUrl()
  * @returns {{ checks: number, failures: number }}
  */
 export function recordPass(entry, result) {
-  const checks = intOrZero(entry.checks) + 1;
-  const checksUp = intOrZero(entry.checksUp) + (result?.healthy === true ? 1 : 0);
+  const previous = counters(entry);
+  const checks = previous.checks + 1;
+  const checksUp = previous.checksUp + (result?.healthy === true ? 1 : 0);
   entry.checks = checks;
   entry.checksUp = checksUp;
   if (Number.isFinite(result?.responseTimeMs)) entry.lastResponseMs = result.responseTimeMs;
@@ -53,9 +76,9 @@ export function recordPass(entry, result) {
 
 /** Share of completed passes that answered UP, or null when none has run yet. */
 export function uptimePercent(entry) {
-  const checks = intOrZero(entry?.checks);
+  const { checks, checksUp } = counters(entry);
   if (checks === 0) return null;
-  return Number(((intOrZero(entry.checksUp) / checks) * 100).toFixed(2));
+  return Number(((checksUp / checks) * 100).toFixed(2));
 }
 
 function siteStatus(entry) {
@@ -95,8 +118,7 @@ export function buildReport(state, { title, now = new Date(), history, windowDay
   const sites = Object.entries(state?.urls ?? {})
     .filter(([url, entry]) => typeof url === 'string' && url && entry && typeof entry === 'object')
     .map(([url, entry]) => {
-      const checks = intOrZero(entry.checks);
-      const checksUp = intOrZero(entry.checksUp);
+      const { checks, failures } = counters(entry);
       // A negative or otherwise unusable day count is treated as unknown, never
       // as a certificate that expired: a hand-edited state file must not be able
       // to invent an urgent renewal in a report a customer reads.
@@ -110,7 +132,7 @@ export function buildReport(state, { title, now = new Date(), history, windowDay
         uptimePercent: uptimePercent(entry),
         window: windowSummary(history, url, { days: windowDays, now, uptimePercent }),
         checks,
-        failures: checks - checksUp,
+        failures,
         responseMs: Number.isFinite(entry.lastResponseMs) ? entry.lastResponseMs : null,
         sslDaysRemaining,
         // The same window `check` and `watch` use, so a certificate that is
