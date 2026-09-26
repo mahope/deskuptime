@@ -398,8 +398,23 @@ export function readDisclosure(disc = {}) {
  *
  * Callers pick their own icon and punctuation and cannot re-decide any of it.
  *
- * @param {object} ssl — `{ days, expired, expiredDays }`; `days` is the
- *   checker's `validDays` or the state entry's `sslValidDays`.
+ *   - `mayHaveExpired` is the reading's own *age*. A day count is a countdown,
+ *     and a countdown is only a claim while it still counts down: `validDays` was
+ *     true at the pass that read it, and nothing about it stays true. Callers
+ *     that read a stored `sslValidDays` hand in `measuredAt` (the pass time) and
+ *     `now`, and the certificate's own deadline is checked against them. Without
+ *     a `measuredAt` there is no claim to make — that is the freshly measured
+ *     case, where `check` and the watch loop call in.
+ *   - `expiringSoon` is false for a certificate that may already be gone, for
+ *     the same reason it is false for a lapsed one: "renew soon" is a statement
+ *     about the future, and there may be no future left to renew into.
+ *
+ * A lapsed reading (`expired`) is deliberately *not* aged: a certificate that had
+ * expired at the pass has not un-expired since, so an old lapse claim errs in the
+ * safe direction and needs no correction.
+ *
+ * @param {object} ssl — `{ days, expired, expiredDays, measuredAt, now }`; `days`
+ *   is the checker's `validDays` or the state entry's `sslValidDays`.
  */
 export function readSslState(ssl) {
   const value = ssl && typeof ssl === 'object' ? ssl : {};
@@ -408,19 +423,82 @@ export function readSslState(ssl) {
   const expired = value.expired === true || expiredDays !== null;
   // A certificate was read when it left us one fact: a day count, or a lapse.
   const measured = days !== null || expired;
+  const reading = readSslReadingAge(days, { measuredAt: value.measuredAt, now: value.now, expired });
   return {
     days,
     expired,
     expiredDays,
     measured,
-    // Not `false` for a URL with no certificate: see above. The `expired` case is
-    // measured, and stays false — a lapsed certificate is not "renew soon".
-    expiringSoon: !measured ? null : (!expired && isSslExpiringSoon(days)),
+    // Not `false` for a URL with no certificate: see above. The `expired` and the
+    // `mayHaveExpired` cases are measured, and stay false — a lapsed certificate
+    // is not "renew soon".
+    expiringSoon: !measured ? null : (!expired && !reading.mayHaveExpired && isSslExpiringSoon(days)),
     // A field that was present but unreadable is reported as unknown; a field
     // that was never there says nothing at all, so plain-HTTP monitoring does
     // not grow a column of dashes.
     unreadable: value.days !== undefined && value.days !== null && days === null && !expired,
+    // How old the reading is in whole days, and whether the certificate may have
+    // lapsed since. Both `null`/`false` when the caller did not say when the
+    // reading was taken, so a surface that just measured the certificate is
+    // untouched.
+    readingAgeDays: reading.ageDays,
+    mayHaveExpired: reading.mayHaveExpired,
   };
+}
+
+/**
+ * A certificate day count is a countdown, and a countdown expires.
+ *
+ * The measurement is the checker's own: `validDays = Math.round((validTo - now) /
+ * DAY)` at the pass (src/checkers/ssl.js). So the deadline the reading implies is
+ * not one instant but a half-day-wide interval, and the *earliest* end of it is
+ * what a client report must plan around. Once the clock has passed that earliest
+ * end, the certificate may be gone even though every surface still printed a
+ * number. Measured through the real `report`, no code changed, one state file
+ * whose newest pass was 36 h old and had read `sslValidDays: 1`:
+ *
+ *   | https://kunde.dk/ | UP (200) | … | ⚠️ 1 d — renew soon | 2026-09-25 03:04 UTC |
+ *   **1 site(s) · 1 up · 0 down · 1200 checks · 50 failed · 1 SSL expiring soon**
+ *   **SSL certificate expiring within 14 days — renewal needed:** https://kunde.dk/ (1 d)
+ *
+ * A day count that reads "1 d left" is at most half a day of a promise, and the
+ * promise was made 36 hours ago: the certificate had almost certainly lapsed
+ * before the report was written. A bureau forwards that line to a client, the
+ * client renews "in a day", and the site is broken in the meantime — the one
+ * output the paid tier exists for.
+ *
+ * The bound is deliberately the permissive one (the earliest instant the
+ * reading's own rounding allows) and it only engages once the reading is at
+ * least a day old: below that the number is the ordinary countdown every surface
+ * has always printed, and an hour-old reading of `0 d` must not start shouting.
+ * `passAge` decides whether the reading can be placed at all, so a never,
+ * unreadable or future-dated pass time produces no claim in either direction.
+ */
+function readSslReadingAge(days, { measuredAt, now = new Date(), expired }) {
+  if (days === null || expired) return { ageDays: null, mayHaveExpired: false };
+  if (typeof measuredAt !== 'string' || !measuredAt) return { ageDays: null, mayHaveExpired: false };
+  // Asked of the one owner of a pass time, so a pass dated ahead of this
+  // machine's clock cannot be aged here a second way (P1-31's lock). `null` for
+  // a pass time that cannot be placed — no pass, unreadable, or ahead — and an
+  // unplaceable reading makes no claim in either direction: it is not proof that
+  // the certificate is fine.
+  const pass = passAge(measuredAt, now);
+  if (pass.ageMs === null || pass.state === PASS_AGE.AHEAD) return { ageDays: null, mayHaveExpired: false };
+  const mayHaveExpired = pass.ageMs >= MS_PER_DAY && pass.ageMs >= (days - 0.5) * MS_PER_DAY;
+  return { ageDays: pass.ageDays, mayHaveExpired };
+}
+
+/**
+ * The fixed wording for a certificate whose reading is too old to renew against.
+ *
+ * One sentence for every surface, and it carries the two numbers a reader needs
+ * to act: what the certificate had left when it was measured, and how long ago
+ * that was. `—` in place of a number means the state file cannot say.
+ */
+export function sslLapsedNote({ days = null, ageDays = null } = {}) {
+  const reading = days === null ? 'reading unknown' : `${days} d left`;
+  const when = ageDays === null ? 'at an unreadable time' : `${ageDays} d ago`;
+  return `may be expired — last reading: ${reading}, checked ${when}`;
 }
 
 /**
@@ -916,10 +994,16 @@ export function verdictFor(wasUp) {
  */
 export function readEntry(entry, { now = new Date(), url = '' } = {}) {
   const value = entry && typeof entry === 'object' ? entry : {};
+  // The pass time goes in with the day count: a stored `sslValidDays` is a
+  // countdown that was true when the pass read it, and these two lists are
+  // read-only — so they are exactly where an expired certificate can sit behind
+  // a "renew soon" that stopped being true a day ago.
   const ssl = readSslState({
     days: value.sslValidDays,
     expired: value.sslExpired,
     expiredDays: value.sslExpiredDays,
+    measuredAt: value.lastChecked,
+    now,
   });
   const stale = isCheckStale(value.lastChecked, now);
   const pass = passAge(value.lastChecked, now);
@@ -937,13 +1021,21 @@ export function readEntry(entry, { now = new Date(), url = '' } = {}) {
     statusCode: readStatusCode(value.lastStatus),
     sslDays: ssl.days,
     sslExpired: ssl.expired,
+    // A stored day count whose deadline has passed since the pass that read it.
+    // The verdict is untouched — an old reading is not proof the certificate is
+    // gone — but it is not "renew soon" either, and these lists are where a user
+    // decides whether to act today.
+    sslMayHaveExpired: ssl.mayHaveExpired,
+    sslReadingAgeDays: ssl.readingAgeDays,
     // Without a leading separator: the two surfaces punctuate differently, but
     // neither can change what is being said about the certificate.
     sslNote: ssl.expired
       ? `SSL 🔴 ${expiredNote(ssl.expiredDays)}`
-      : ssl.days === null
-        ? (ssl.unreadable ? 'SSL —' : '')
-        : ssl.expiringSoon ? `SSL ⚠️ ${ssl.days}d — renew soon` : `SSL ${ssl.days}d`,
+      : ssl.mayHaveExpired
+        ? `SSL 🔴 ${sslLapsedNote({ days: ssl.days, ageDays: ssl.readingAgeDays })}`
+        : ssl.days === null
+          ? (ssl.unreadable ? 'SSL —' : '')
+          : ssl.expiringSoon ? `SSL ⚠️ ${ssl.days}d — renew soon` : `SSL ${ssl.days}d`,
     ageDays,
     stale,
     staleNote: stale ? staleAgeNote(ageDays) : '',

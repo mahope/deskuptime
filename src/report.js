@@ -27,7 +27,7 @@
 import { PRODUCT } from './features.js';
 import { DEFAULT_WINDOW_DAYS, windowSummary } from './history.js';
 import { markdownCell as cell } from './display.js';
-import { SSL_WARN_DAYS, STALE_AFTER_DAYS, clockAheadNote, expiredNote, isCheckStale, passAge, readPassTime, readRedirectTarget, readSslState, readStatusCode, staleAgeNote, unknownNote, verdictFor } from './status.js';
+import { SSL_WARN_DAYS, STALE_AFTER_DAYS, clockAheadNote, expiredNote, isCheckStale, passAge, readPassTime, readRedirectTarget, readSslState, readStatusCode, sslLapsedNote, staleAgeNote, unknownNote, verdictFor } from './status.js';
 
 export const DEFAULT_REPORT_TITLE = 'Website uptime report';
 const MAX_TITLE_LENGTH = 120;
@@ -169,6 +169,13 @@ export function buildReport(state, { title, now = new Date(), history, windowDay
         days: entry.sslValidDays,
         expired: entry.sslExpired,
         expiredDays: entry.sslExpiredDays,
+        // When that day count was measured. Without it the column printed a
+        // countdown as if it were running now: a pass 36 h old that read "1 d
+        // left" produced `⚠️ 1 d — renew soon` and a named renewal line in the
+        // document a client reads, for a certificate that had almost certainly
+        // lapsed in the meantime.
+        measuredAt: entry.lastChecked,
+        now,
       });
       const sslDaysRemaining = ssl.days;
       // The report is a read of the last completed pass and re-checks nothing, so
@@ -221,6 +228,13 @@ export function buildReport(state, { title, now = new Date(), history, windowDay
         sslExpiringSoon: ssl.expiringSoon,
         sslExpired: ssl.expired,
         sslExpiredDays: ssl.expiredDays,
+        // The two additive fields for the reading's own age, so the machine
+        // surface can say what the column says: `sslMayHaveExpired` is the
+        // certificate whose deadline has passed since the pass that read it —
+        // not measured as expired, which is what `sslExpired` still means — and
+        // `sslReadingAgeDays` says how old the reading is.
+        sslMayHaveExpired: ssl.mayHaveExpired,
+        sslReadingAgeDays: ssl.readingAgeDays,
         contentBytes: nonNegative(entry.lastContentLength),
         // The two timestamps go through the one reading of a recorded time, so
         // `--json` can never forward a string the Markdown column has already
@@ -269,6 +283,10 @@ export function buildReport(state, { title, now = new Date(), history, windowDay
     failures: sites.reduce((total, site) => total + site.failures, 0),
     sslExpiringSoon: sites.filter(site => site.sslExpiringSoon).length,
     sslExpired: sites.filter(site => site.sslExpired).length,
+    // Additive, and disjoint from the two above: a certificate whose deadline
+    // passed since the pass that read it is neither expiring nor measured as
+    // expired, and it is the one a client most needs to hear about.
+    sslMayHaveExpired: sites.filter(site => site.sslMayHaveExpired).length,
   };
 
   return {
@@ -410,6 +428,7 @@ function windowCell(site, windowDays) {
 
 function sslCell(site) {
   if (site.sslExpired) return `🔴 ${expiredNote(site.sslExpiredDays)}`;
+  if (site.sslMayHaveExpired) return `🔴 ${sslLapsedNote({ days: site.sslDaysRemaining, ageDays: site.sslReadingAgeDays })}`;
   if (site.sslDaysRemaining === null) return '—';
   return site.sslExpiringSoon ? `⚠️ ${site.sslDaysRemaining} d — renew soon` : `${site.sslDaysRemaining} d`;
 }
@@ -475,6 +494,22 @@ export function renderReportMarkdown(report) {
       `**SSL certificate${expiring.length === 1 ? '' : 's'} expiring within ${SSL_WARN_DAYS} days — renewal needed:** ${expiring.map(site => cell(`${site.url} (${site.sslDaysRemaining} d)`)).join(', ')}`,
     ];
 
+  // The reading that has stopped counting. It belongs under the expired line
+  // rather than in it: nothing measured a lapse, so "the site is affected" would
+  // be a claim we cannot make — but a certificate that had `1 d` left 36 hours ago
+  // is not a renewal to schedule, and this is the one line in the document that
+  // can still prevent an outage. Named with both numbers, because one of them
+  // alone is what made the old line wrong.
+  const lapsed = report.sites.filter(site => site.sslMayHaveExpired);
+  const lapsedLines = lapsed.length === 0
+    ? []
+    : [
+      '',
+      `**Get a fresh certificate reading before you act on ${lapsed.length === 1 ? 'this' : 'these'}:** ${lapsed.map(site => cell(`${site.url} — ${sslLapsedNote({ days: site.sslDaysRemaining, ageDays: site.sslReadingAgeDays })}`)).join('; ')}`,
+      '',
+      'Run: deskuptime check <url>',
+    ];
+
   // Same reasoning for old data: a site whose monitoring stopped is the
   // recipient's most consequential line, and it is invisible in a table unless
   // it is named.
@@ -508,13 +543,14 @@ export function renderReportMarkdown(report) {
     `|${' --- |'.repeat(HEADERS.length)}`,
     ...(rows.length > 0 ? rows : [`| ${['_no monitored sites_', '—', '—', '—', '—', '—', '—'].join(' | ')} |`]),
     '',
-    `**${report.summary.sites} site(s) · ${buckets.up} up · ${buckets.down} down${unknownWords(buckets)} · ${report.summary.checks} checks · ${report.summary.failures} failed${expiring.length > 0 ? ` · ${expiring.length} SSL expiring soon` : ''}${expired.length > 0 ? ` · ${expired.length} SSL EXPIRED` : ''}${stale.length > 0 ? ` · ${stale.length} stale (no check in the last ${STALE_AFTER_DAYS} d)` : ''}${crossed.length > 0 ? ` · ${crossed.length} answered by another host` : ''}**`,
+    `**${report.summary.sites} site(s) · ${buckets.up} up · ${buckets.down} down${unknownWords(buckets)} · ${report.summary.checks} checks · ${report.summary.failures} failed${expiring.length > 0 ? ` · ${expiring.length} SSL expiring soon` : ''}${expired.length > 0 ? ` · ${expired.length} SSL EXPIRED` : ''}${lapsed.length > 0 ? ` · ${lapsed.length} SSL may be expired` : ''}${stale.length > 0 ? ` · ${stale.length} stale (no check in the last ${STALE_AFTER_DAYS} d)` : ''}${crossed.length > 0 ? ` · ${crossed.length} answered by another host` : ''}**`,
     ...expiredLines,
+    ...lapsedLines,
     ...attention,
     ...staleLines,
     ...crossedLines,
     '',
-    `Uptime is the share of completed monitoring passes that answered HTTP 200–399. "Uptime (all)" counts every pass since the site was added${since ? ` (earliest ${shortTime(since)})` : ''}; "Uptime (window)" counts the passes recorded in the last ${windowDays} days. A site with no completed pass yet shows — rather than 100%. "Uptime (window)" is counted from a separate daily history file, so a row can show a recent check with an empty window column; that column then names the file that is missing the pass rather than claiming the site was not monitored. The counts in the summary line are a partition: every site is in exactly one of up, down, not checked, status unknown or stale. "Up" and "down" describe sites checked within the last ${STALE_AFTER_DAYS} days; a site whose monitoring stopped is counted as stale and keeps the status from its last pass in the table, named with the age of that pass. "Status unknown" means a pass ran but its result cannot be read from the state file.`,
+    `Uptime is the share of completed monitoring passes that answered HTTP 200–399. "Uptime (all)" counts every pass since the site was added${since ? ` (earliest ${shortTime(since)})` : ''}; "Uptime (window)" counts the passes recorded in the last ${windowDays} days. A site with no completed pass yet shows — rather than 100%. "Uptime (window)" is counted from a separate daily history file, so a row can show a recent check with an empty window column; that column then names the file that is missing the pass rather than claiming the site was not monitored. The counts in the summary line are a partition: every site is in exactly one of up, down, not checked, status unknown or stale. "Up" and "down" describe sites checked within the last ${STALE_AFTER_DAYS} days; a site whose monitoring stopped is counted as stale and keeps the status from its last pass in the table, named with the age of that pass. "Status unknown" means a pass ran but its result cannot be read from the state file. The SSL column is what the last pass read, so its day count is the deadline the certificate had at that moment. A reading less than a day old is shown as measured; one old enough that the certificate may have lapsed since is named as such and is not counted as a renewal to schedule — run \`deskuptime check <url>\` for a fresh reading.`,
     '',
     `Generated on one machine, without an account: no page content, response headers or license data is included, and nothing was uploaded.`,
   ].join('\n');

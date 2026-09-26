@@ -108,6 +108,30 @@ Det er her bureauet bliver solgt, og derfor er reglerne hårde:
   negativt eller ugyldigt tal fra en håndskrevet state-fil er behandlet som
   ukendt, ikke som "forfalden nu". I `--json` hedder felterne
   `sslDaysRemaining`, `sslExpiringSoon` og `summary.sslExpiringSoon`.
+- **Et dages-tal er en nedtælling, og en nedtælling holder ikke.** Målt
+  2026-09-26 med rigtig `report` på en state-fil hvis seneste pass var 36 timer
+  gammelt og havde læst `sslValidDays: 1`:
+
+  ```
+  | https://kunde.dk/ | UP (200) | … | ⚠️ 1 d — renew soon | 2026-09-25 03:04 UTC |
+  **1 site(s) · 1 up · 0 down · … · 1 SSL expiring soon**
+  **SSL certificate expiring within 14 days — renewal needed:** https://kunde.dk/ (1 d)
+  ```
+
+  `validDays` er `Math.round((validTo - now) / døgn)` **på passets tidspunkt**,
+  så "1 d tilbage" var højst et halvt dags løfte — fremsagt 36 timer tidligere.
+  Certifikatet var med al sandsynlighed udløbet, og dokumentet bureauet videresender
+  bad kunden om at fornye det "om en dag". Nu er døgntallet kun en påstand, når
+  læsningen er under ét dage gammel; ellers sætter ejeren
+  (`readSslState` i `src/status.js`) punktet på den **tidligste** udløbsinstans
+  læsningens egen afrunding tillader, og kolonnen skriver
+  `🔴 may be expired — last reading: 1 d left, checked 1 d ago`. Den tælles i
+  `summary.sslMayHaveExpired`, **ikke** i `sslExpiringSoon` (et certifikat der
+  måske er væk, er ikke en fornyelse der kan planlægges), og navnes på en egen
+  linje med de to tal der gør den rigtige. Et **målt** forfald (`sslExpired`)
+  aldres ikke: et certifikat der var udløbet på passets tidspunkt er ikke blevet
+  gyldigt sidenhen, så den påstand fejler i den sikre retning. I `--json` hedder
+  felterne `sslMayHaveExpired` og `sslReadingAgeDays`.
 - **Ald data markeres som forældet.** Rapporten genkører intet, så "3 up ·
   0 down" handler om det *sidste* pass, ikke om nu. Et site uden pass inden for
   `STALE_AFTER_DAYS` (2 dage, ét sted i `src/status.js` sammen med

@@ -1322,3 +1322,118 @@ test('a clock a few hours fast does not accuse the history file (real CLI)', asy
     .split('\n').find(l => l.startsWith('| https://kunde.dk/'));
   assert.match(honestRow, new RegExp(missing), `a genuinely absent pass is still named: ${honestRow}`);
 });
+
+// ---------------------------------------------------------------------------
+// A certificate day count is a countdown, and a countdown expires.
+//
+// Measured through the real `report` on a state file whose newest pass was 36 h
+// old and had read `sslValidDays: 1`, no code changed:
+//
+//   | https://kunde.dk/ | UP (200) | … | ⚠️ 1 d — renew soon | 2026-09-25 03:04 UTC |
+//   **1 site(s) · 1 up · 0 down · … · 1 SSL expiring soon**
+//   **SSL certificate expiring within 14 days — renewal needed:** … (1 d)
+//
+// `validDays` is `Math.round((validTo - now) / DAY)` *at the pass*, so "1 d left"
+// was at most half a day of a promise, made 36 hours ago. The certificate had
+// almost certainly lapsed, and the document a bureau forwards told the client to
+// renew it "in a day".
+// ---------------------------------------------------------------------------
+
+const hoursAgo = h => new Date(NOW.getTime() - h * 60 * 60 * 1000).toISOString();
+
+test('a certificate reading too old to renew against is not "renew soon"', () => {
+  const report = buildReport(proState({
+    'https://kunde.dk/': upEntry({ sslValidDays: 1, lastChecked: hoursAgo(36) }),
+    'https://frisk.dk/': upEntry({ sslValidDays: 1, lastChecked: hoursAgo(0.5) }),
+    'https://langt.dk/': upEntry({ sslValidDays: 20, lastChecked: hoursAgo(36) }),
+  }), { now: NOW });
+
+  const byUrl = Object.fromEntries(report.sites.map(site => [site.url, site]));
+  const lapsed = byUrl['https://kunde.dk/'];
+  assert.equal(lapsed.sslMayHaveExpired, true, 'a day-old reading of "1 d left" cannot be renewed against');
+  assert.equal(lapsed.sslReadingAgeDays, 1);
+  assert.equal(lapsed.sslExpiringSoon, false, 'a certificate that may be gone is not a renewal to schedule');
+  assert.equal(lapsed.sslExpired, false, 'nothing measured a lapse, so none is claimed');
+  assert.equal(lapsed.sslDaysRemaining, 1, 'the measurement itself is unchanged');
+
+  // The two cases that must not move: a reading younger than a day, and a
+  // reading whose deadline is nowhere near.
+  assert.equal(byUrl['https://frisk.dk/'].sslMayHaveExpired, false);
+  assert.equal(byUrl['https://frisk.dk/'].sslExpiringSoon, true);
+  assert.equal(byUrl['https://langt.dk/'].sslMayHaveExpired, false);
+  assert.equal(byUrl['https://langt.dk/'].sslExpiringSoon, false);
+
+  assert.equal(report.summary.sslMayHaveExpired, 1);
+  assert.equal(report.summary.sslExpiringSoon, 1, 'and the two counts are disjoint');
+
+  const markdown = renderReportMarkdown(report);
+  const row = markdown.split('\n').find(l => l.startsWith('| https://kunde.dk/'));
+  assert.match(row, /🔴 may be expired — last reading: 1 d left, checked 1 d ago/);
+  assert.doesNotMatch(row, /renew soon/);
+  assert.match(markdown, /1 SSL may be expired/);
+  assert.doesNotMatch(markdown, /renewal needed:\*\* https:\/\/kunde\.dk/);
+  assert.match(markdown, /Get a fresh certificate reading before you act on this:\*\* https:\/\/kunde\.dk\/ — may be expired — last reading: 1 d left, checked 1 d ago/);
+  assert.match(markdown, /Run: deskuptime check <url>/);
+
+  // The fresh reading still produces exactly the line it always did.
+  assert.match(markdown, /⚠️ 1 d — renew soon/);
+  assert.match(markdown, /1 SSL expiring soon/);
+
+  const json = JSON.parse(renderReportJson(report));
+  assert.equal(json.summary.sslMayHaveExpired, 1);
+  assert.equal(json.sites.find(site => site.url === 'https://kunde.dk/').sslMayHaveExpired, true);
+  assert.equal(json.sites.find(site => site.url === 'https://frisk.dk/').sslMayHaveExpired, false);
+});
+
+test('both terminal lists ask the same owner about a lapsed deadline', () => {
+  const read = readEntry(upEntry({ sslValidDays: 1, lastChecked: hoursAgo(36) }), { now: NOW });
+  assert.equal(read.sslMayHaveExpired, true);
+  assert.equal(read.sslDays, 1);
+  assert.equal(read.sslNote, 'SSL 🔴 may be expired — last reading: 1 d left, checked 1 d ago');
+
+  // A reading younger than a day is the countdown it has always been.
+  const fresh = readEntry(upEntry({ sslValidDays: 1, lastChecked: hoursAgo(0.5) }), { now: NOW });
+  assert.equal(fresh.sslMayHaveExpired, false);
+  assert.equal(fresh.sslNote, 'SSL ⚠️ 1d — renew soon');
+
+  // A clock that cannot place the pass makes no claim in either direction —
+  // P1-31's rule, asked of the same owner.
+  const ahead = readEntry(upEntry({ sslValidDays: 1, lastChecked: '2026-10-15T10:24:20.661Z' }), { now: NOW });
+  assert.equal(ahead.sslMayHaveExpired, false);
+  assert.equal(ahead.sslReadingAgeDays, null);
+
+  // A *measured* lapse is not aged: a certificate that had expired at the pass
+  // has not un-expired since, so the reading errs in the safe direction.
+  const lapsed = readEntry(upEntry({ sslExpired: true, sslExpiredDays: 3, lastChecked: hoursAgo(36) }), { now: NOW });
+  assert.equal(lapsed.sslMayHaveExpired, false);
+  assert.equal(lapsed.sslNote, 'SSL 🔴 expired 3d ago');
+});
+
+test('the certificate deadline is compared in one place, and only there', () => {
+  const readSrc = name => readFileSync(join(ROOT, 'src', name), 'utf8')
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/^\s*\/\/.*$/gm, '');
+  const statusSrc = readSrc('status.js');
+
+  assert.equal((statusSrc.match(/function readSslReadingAge\(/g) ?? []).length, 1, 'one reading of the deadline');
+  assert.equal((statusSrc.match(/export function sslLapsedNote\(/g) ?? []).length, 1, 'one wording for a lapsed deadline');
+
+  for (const name of ['report.js', 'watch.js', 'cli.js', 'engine.js', 'history.js', 'display.js']) {
+    const source = readSrc(name);
+    // No surface may compare a certificate's day count against a pass's age —
+    // that comparison is the decision, and it is `readSslState`'s.
+    assert.doesNotMatch(source, /ssl\.days\s*[<>=]/, `${name} decides a certificate deadline itself`);
+    // The two forms of the sentence itself. The summary line's "1 SSL may be
+    // expired" is a count label beside "1 SSL expiring soon", not a second
+    // wording — so the lock targets the sentence, not the words.
+    assert.doesNotMatch(source, /last reading:/, `${name} owns the lapsed wording`);
+    assert.doesNotMatch(source, /may be expired —/, `${name} re-words the lapsed reading`);
+    // …and no surface may read the reading's age to make that decision. It hands
+    // the pass time to the owner instead, by name.
+    assert.doesNotMatch(source, /passAge\([^)]*lastChecked[^)]*\)\s*\.\s*ageMs/, `${name} ages a certificate reading itself`);
+  }
+
+  assert.match(readSrc('report.js'), /measuredAt: entry\.lastChecked/, 'the report hands the pass time to the owner');
+  assert.match(statusSrc, /measuredAt: value\.lastChecked/, 'and so does readEntry, for both terminal lists');
+  assert.match(statusSrc, /passAge\(measuredAt, now\)/, 'the owner places the reading with passAge, not its own parsing');
+});
