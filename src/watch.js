@@ -114,6 +114,16 @@ function stateFileFrom(options) {
   return options.stateFile || getStateFile(options);
 }
 
+function unreadableStateFile(stateFile) {
+  if (!existsSync(stateFile)) return null;
+  try {
+    JSON.parse(readFileSync(stateFile, 'utf-8'));
+    return null;
+  } catch (error) {
+    return { code: error?.code || 'invalid JSON' };
+  }
+}
+
 /**
  * A state file we cannot write is a fact the user has to see — and it is not a
  * reason to stop monitoring.
@@ -149,7 +159,32 @@ function stateFileFrom(options) {
  * it to be guessed from a temp filename.
  */
 export function stateWriteErrorMessage(error, stateFile) {
+  // A file we cannot read is not a write problem, and saying "check free disk
+  // space" about a truncated file sends the user to the wrong place. Same
+  // owner as the surfaces that only read it, so the loop and `status` cannot
+  // describe one broken file three ways.
+  if (error?.code === ESTATE_UNREADABLE) return stateReadErrorMessage(error.readError, stateFile);
   return `Could not write the monitoring state — ${error?.code || error?.message || 'unknown error'} — ${stateFile}. Nothing is remembered while this lasts: check free disk space and that the file and its folder are writable.`;
+}
+
+export const ESTATE_UNREADABLE = 'ESTATEUNREADABLE';
+
+/**
+ * One sentence for "the state file is there and cannot be parsed", so a cron
+ * pass, a running loop, `status`, `watch --status` and the report gate cannot
+ * each describe the same file differently.
+ *
+ * This file holds the license key and the monitored URLs, so it is the one file
+ * a user must never lose and the one file we must never silently write over: a
+ * truncated file still has the readable prefix that holds the key, and a
+ * half-written state that gets overwritten takes a paid license with it. The
+ * sentence therefore names the file, says that nothing is written over it and
+ * nothing is reported from it, and gives the one command that fixes it without
+ * destroying anything — `mv`, never `rm`.
+ */
+export function stateReadErrorMessage(error, stateFile) {
+  const why = error?.code === 'ENOENT' ? 'file not found' : (error?.code || 'invalid JSON');
+  return `DeskUptime cannot read the monitoring state — ${why} — ${stateFile}. It may still hold your license key and your monitored URLs, so nothing is written over it and nothing is reported from it. Move it aside to start clean: mv "${stateFile}" "${stateFile}.broken" — then run: deskuptime activate <license-key>`;
 }
 
 function saveStateOrWarn(state, options, what) {
@@ -163,14 +198,27 @@ function saveStateOrWarn(state, options, what) {
   }
 }
 
-export function loadState(options = {}) {
+/**
+ * The state file, and whether it could be read at all.
+ *
+ * An unreadable file used to be an empty one: every command reported "0 URLs",
+ * the free tier and the checkout, and the first command that saved wrote a fresh
+ * file over the old one — taking a paid license key with it. So the reason is
+ * returned next to the state instead of being swallowed here, and the callers
+ * that can act on it (the ones that report, and the one that writes) do.
+ */
+export function readStateFile(options = {}) {
   const stateFile = stateFileFrom(options);
-  if (!existsSync(stateFile)) return emptyState();
+  if (!existsSync(stateFile)) return { state: emptyState(), unreadable: null };
   try {
-    return normalizeState(JSON.parse(readFileSync(stateFile, 'utf-8')));
-  } catch {
-    return emptyState();
+    return { state: normalizeState(JSON.parse(readFileSync(stateFile, 'utf-8'))), unreadable: null };
+  } catch (error) {
+    return { state: emptyState(), unreadable: { code: error?.code || 'invalid JSON', stateFile } };
   }
+}
+
+export function loadState(options = {}) {
+  return readStateFile(options).state;
 }
 
 /**
@@ -199,6 +247,19 @@ export function saveState(state, options = {}) {
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   if (process.platform !== 'win32') {
     try { chmodSync(dir, 0o700); } catch { /* pre-existing dir we may not own */ }
+  }
+  // Never write over a state file we could not read. A truncated or corrupt file
+  // is exactly where a paid license key survives — the key sits in the readable
+  // prefix of a file whose tail was lost — and a fresh save would replace that
+  // prefix with an empty one, so the customer is left on the free tier holding
+  // no key and no way back but their inbox. The caller gets the read sentence
+  // (stateWriteErrorMessage maps this code), and the user keeps the file.
+  const unreadable = unreadableStateFile(stateFile);
+  if (unreadable) {
+    const error = new Error(stateReadErrorMessage(unreadable, stateFile));
+    error.code = ESTATE_UNREADABLE;
+    error.readError = unreadable;
+    throw error;
   }
   const temporaryFile = `${stateFile}.${process.pid}.${randomUUID()}.tmp`;
   try {
@@ -503,8 +564,15 @@ export function printPass(pass, { alertUnchangedDown = true } = {}) {
 const VERDICT_ICON = { up: '✅ up', down: '🚨 down', unknown: '❔ unknown' };
 
 export function printStatus(options = {}) {
-  const state = loadState(options);
+  const { state, unreadable } = readStateFile(options);
   const entries = Object.entries(state.urls);
+  if (unreadable) {
+    // "No URLs monitored. Start with: deskuptime watch <url>" was a lie here: the
+    // URLs are in the file, we just cannot read them, and this is the command a
+    // user runs to find out whether monitoring works.
+    console.error(`⚠️  ${stateReadErrorMessage(unreadable, unreadable.stateFile)}`);
+    return;
+  }
   if (entries.length === 0) {
     console.log('No URLs monitored. Start with: deskuptime watch <url>');
     return;

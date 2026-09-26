@@ -13,7 +13,7 @@
  */
 
 import { checkUrls, summarize } from './engine.js';
-import { startWatch, runOnce, printStatus, printPass, loadState, saveState, freeLimitMessage, isPro, unwatchUrls, getStateFile, stateWriteErrorMessage } from './watch.js';
+import { startWatch, runOnce, printStatus, printPass, loadState, readStateFile, saveState, freeLimitMessage, isPro, unwatchUrls, getStateFile, stateWriteErrorMessage, stateReadErrorMessage } from './watch.js';
 import { buildReport, renderReportJson, renderReportMarkdown } from './report.js';
 import { readFileSync } from 'fs';
 import { join, dirname } from 'path';
@@ -344,6 +344,15 @@ if (command === 'headers') {
 
 // ── Activate (Pro license) ──
 if (command === 'activate') {
+  // Before the key is even read, and before the server is called: activating
+  // takes a seat on the server, and a state file we cannot read is a file we
+  // cannot write the key into. Doing it anyway costs the customer a seat and
+  // then loses the key that seat belongs to.
+  const unreadableAtActivate = readStateFile().unreadable;
+  if (unreadableAtActivate) {
+    console.error(`❌ Error: ${stateReadErrorMessage(unreadableAtActivate, unreadableAtActivate.stateFile)}`);
+    process.exit(1);
+  }
   const key = args[1];
   if (!key) {
     const { BUY_URL } = await import('./license.js');
@@ -390,6 +399,13 @@ if (command === 'activate') {
 
 // ── Deactivate (free this machine's seat) ──
 if (command === 'deactivate') {
+  // Same gate as `activate`, for the same reason: the receipt is written to this
+  // file, and a released seat nobody can store is a seat released for nothing.
+  const unreadableAtDeactivate = readStateFile().unreadable;
+  if (unreadableAtDeactivate) {
+    console.error(`❌ Error: ${stateReadErrorMessage(unreadableAtDeactivate, unreadableAtDeactivate.stateFile)}`);
+    process.exit(1);
+  }
   const state = loadState();
   const { deactivateLicense, describeLicense, releaseReceipt, LICENSE_STATUS } = await import('./license.js');
   if (!state.license?.key) {
@@ -602,7 +618,17 @@ if (command === 'unwatch') {
 // ── Status ──
 if (command === 'status') {
   const { describeLicense, LICENSE_STATUS, BUY_URL } = await import('./license.js');
-  const state = loadState();
+  const { state, unreadable } = readStateFile();
+  if (unreadable) {
+    // Read before the license block on purpose. This file holds the key, so an
+    // unreadable one is the one state where "Free tier" and the checkout are
+    // both wrong: the customer paid, the key is in the file we cannot parse, and
+    // the one thing we must not do is sell it to them again (the same rule that
+    // keeps `released` and `unverified` off the checkout). Nothing is counted
+    // either — "Monitored URLs (0)" would be a claim about a file nobody read.
+    console.error(`❌ Error: ${stateReadErrorMessage(unreadable, unreadable.stateFile)}`);
+    process.exit(1);
+  }
   const urls = Object.keys(state.urls);
   const license = describeLicense(state.license);
   if (license.status === LICENSE_STATUS.RELEASED) {
@@ -717,7 +743,13 @@ if (command === 'report') {
     process.exit(1);
   }
 
-  const state = loadState();
+  const { state, unreadable } = readStateFile();
+  if (unreadable) {
+    // Before the Pro gate, because the gate would answer for a license it cannot
+    // see and hand a customer the checkout for a key that sits in this file.
+    console.error(`❌ Error: ${stateReadErrorMessage(unreadable, unreadable.stateFile)}`);
+    process.exit(1);
+  }
   if (!isPro(state)) {
     // A free user gets the same one upgrade path as everywhere else in the CLI,
     // and keeps a working alternative: `watch --once` and `status` still print
