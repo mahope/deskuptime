@@ -18,7 +18,7 @@ import { readFileSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { invalidHttpUrls, isSslExpiringSoon, readEntry, STALE_AFTER_DAYS } from './status.js';
-import { formatMs, safeText } from './display.js';
+import { formatMs, machinesInUse, safeText } from './display.js';
 import { DEFAULT_WINDOW_DAYS, HISTORY_DAYS, loadHistory } from './history.js';
 import { FREE, PRODUCT, renderHelpPro } from './features.js';
 
@@ -268,7 +268,7 @@ if (command === 'activate') {
     const state = loadState();
     state.license = { key: res.key, instance: res.deviceId, plan: res.meta.plan, status: LICENSE_STATUS.ACTIVE, validatedAt: new Date().toISOString() };
     saveState(state);
-    console.log(`✅ Pro activated${res.meta.devicesInUse != null ? ' (' + res.meta.devicesInUse + ' of 3 machines in use)' : ''}.`);
+    console.log(`✅ Pro activated (${machinesInUse(res.meta.devicesInUse)} of ${PRODUCT.machines} machines in use).`);
     console.log('   Unlimited monitored URLs, intervals down to 30s, desktop notifications.');
   }
 }

@@ -49,6 +49,9 @@ runs:
         # Resolve the CLI entry inside this action's own directory
         ACTION_PATH="$(cd "${GITHUB_ACTION_PATH:-.}" && pwd)"
         CLI="$ACTION_PATH/src/cli.js"
+        # The summary table and the client report share one cell escaper, and
+        # the `node -e` blocks below are CommonJS, so they reach it by path.
+        export DU_ACTION_PATH="$ACTION_PATH"
 
         if [ ! -f "$CLI" ]; then
           echo "::error::deskuptime cli.js not found at $CLI"
@@ -93,6 +96,12 @@ runs:
           for (const x of r) {
             if (typeof x.url !== "string" || x.url === "") fail("result without a url field");
             if (typeof x.healthy !== "boolean") fail("result for " + x.url + " has no boolean healthy field");
+            // Present-but-not-a-boolean is the shape a different CLI version
+            // sends. It was unchecked, so a payload the SSL counter below reads
+            // passed validation and then counted on a value that was not a fact.
+            if (x.sslExpiringSoon !== undefined && typeof x.sslExpiringSoon !== "boolean") {
+              fail("result for " + x.url + " has a non-boolean sslExpiringSoon field");
+            }
           }
         '
 
@@ -133,13 +142,19 @@ runs:
             echo "| URL | Status | HTTP | Response | SSL days |"
             echo "|-----|--------|------|----------|----------|"
             node -e '
+              const { markdownCell } = require(process.env.DU_ACTION_PATH + "/src/display.js");
               const r = JSON.parse(require("fs").readFileSync("deskuptime-results.json","utf8"));
               for (const x of r) {
                 const s = x.healthy ? "✅ UP" : "❌ DOWN";
                 const ssl = x.sslExpired === true
                   ? `🔴 expired${x.sslExpiredDays > 0 ? ` ${x.sslExpiredDays}d ago` : ""}`
                   : x.sslDaysRemaining === null ? "—" : String(x.sslDaysRemaining);
-                console.log(`| ${x.url} | ${s} | ${x.statusCode ?? "—"} | ${x.responseTimeMs ?? "—"}ms | ${ssl} |`);
+                // Every cell goes through markdownCell. A summary is the one
+                // human surface that reached neither safeText nor the client
+                // report'"'"'s own cell(), and one `|` or one newline in a URL
+                // was enough to write a forged row — including one claiming a
+                // site was DOWN while every real check was UP.
+                console.log(`| ${markdownCell(x.url)} | ${markdownCell(s)} | ${markdownCell(x.statusCode ?? "—")} | ${markdownCell((x.responseTimeMs ?? "—") + "ms")} | ${markdownCell(ssl)} |`);
               }
             '
             echo ""

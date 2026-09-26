@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { createServer } from 'node:http';
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, existsSync, rmSync, readdirSync, statSync, chmodSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, existsSync, rmSync, readdirSync, statSync, chmodSync, copyFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname, win32 } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -423,6 +423,10 @@ function stubAction(t, payload) {
   });
   mkdirSync(join(root, 'src'), { recursive: true });
   writeFileSync(join(root, 'src', 'cli.js'), `console.log(${JSON.stringify(payload)});\n`);
+  // The summary table reaches the real cell escaper, so the stub has to be the
+  // real one — a hand-written copy would let the stub pass on escaping the
+  // action does not do.
+  copyFileSync(join(ROOT, 'src', 'display.js'), join(root, 'src', 'display.js'));
   return { root, temp };
 }
 
@@ -1027,4 +1031,94 @@ test('action: the certificate window is the CLI window, and a lapsed certificate
       assert.equal(code, 0, `${name}: expected exit 0, got ${code}: ${error.stdout}${error.stderr}`);
     }
   }
+});
+
+// ── P1-9 punkt 9: rå interpolation i step-summary ──
+// `summary: true` er den eneste menneske-flade, der hverken gik gennem
+// safeText eller rapportens cell(). Målt før rettelsen: en URL med ét `|` og
+// ét linjeskift skrev to rækker i $GITHUB_STEP_SUMMARY, hvoraf den anden så
+// ud som en målt DOWN-række for et site, der aldrig blev tjekket.
+
+function summaryRows(text) {
+  // How a Markdown reader sees it: one row per line, cells split on unescaped pipes.
+  return text
+    .split('\n')
+    .filter(line => line.startsWith('| '))
+    .map(line => line.replace(/\\\|/g, '\u0000').split('|').length);
+}
+
+test('action: a hostile URL cannot forge a row in the step summary', async (t) => {
+  const hostile = 'https://evil.test/a|<script>alert(1)</script>|\n| forged-row | https://b.test | DOWN | 500 |';
+  const { root, temp } = stubAction(t, JSON.stringify([
+    { url: hostile, healthy: true, statusCode: 200, responseTimeMs: 12, sslDaysRemaining: 90, sslExpiringSoon: false },
+  ]));
+
+  await run('bash', ['-c', actionScript()], {
+    cwd: temp,
+    env: actionEnv({
+      DU_URLS: 'https://evil.test/',
+      DU_FAIL_ON_DOWN: 'true',
+      DU_SUMMARY: 'true',
+      GITHUB_ACTION_PATH: root,
+    }, temp),
+  });
+
+  const summary = readFileSync(join(temp, 'github-summary'), 'utf8');
+  const widths = new Set(summaryRows(summary));
+  // The header and exactly one measured row. A URL that splits its own cell
+  // adds a row, which is the whole failure: measured before the fix, this same
+  // payload wrote 3 — the header, the half-row, and a forged `| forged-row |`.
+  assert.equal(summaryRows(summary).length, 2, `summary had extra rows:\n${summary}`);
+  assert.equal(widths.size, 1, `rows have different widths ${[...widths]}:\n${summary}`);
+  assert.doesNotMatch(summary, /<script>/, 'markup from a URL reached the summary');
+  assert.match(summary, /forged-row/, 'the hostile text is still visible — as one cell, not as a row');
+  assert.doesNotMatch(summary, /^\| forged-row/m, 'a URL forged its own table row');
+});
+
+test('action: the summary cannot be broken by a value the CLI does not produce', async (t) => {
+  // statusCode and responseTimeMs are numbers from our own CLI. A payload from
+  // another version, or a hand-edited results file, is not — and a pipe in any
+  // of them splits the row just as a pipe in the URL does.
+  const { root, temp } = stubAction(t, JSON.stringify([
+    { url: 'https://a.test/', healthy: true, statusCode: '200|forged', responseTimeMs: '1|2', sslDaysRemaining: '9|9' },
+  ]));
+
+  await run('bash', ['-c', actionScript()], {
+    cwd: temp,
+    env: actionEnv({
+      DU_URLS: 'https://a.test/',
+      DU_FAIL_ON_DOWN: 'true',
+      DU_SUMMARY: 'true',
+      GITHUB_ACTION_PATH: root,
+    }, temp),
+  });
+
+  const summary = readFileSync(join(temp, 'github-summary'), 'utf8');
+  assert.equal(new Set(summaryRows(summary)).size, 1, `rows have different widths:\n${summary}`);
+  assert.doesNotMatch(summary, /200\|forged|1\|2|9\|9/, 'a raw value reached the table unescaped');
+});
+
+test('action: a payload whose sslExpiringSoon is not a boolean fails the step', async (t) => {
+  // The validation block existed so a payload the step cannot count fails loudly
+  // instead of turning into a green run. `healthy` and `url` were checked;
+  // `sslExpiringSoon` was not, so a CLI version that sent a string passed.
+  const { root, temp } = stubAction(t, JSON.stringify([
+    { url: 'https://acme.dk/', healthy: true, sslExpiringSoon: 'yes', sslDaysRemaining: 3 },
+  ]));
+
+  await assert.rejects(
+    run('bash', ['-c', actionScript()], {
+      cwd: temp,
+      env: actionEnv({
+        DU_URLS: 'https://acme.dk/',
+        DU_FAIL_ON_DOWN: 'true',
+        GITHUB_ACTION_PATH: root,
+      }, temp),
+    }),
+    (error) => {
+      assert.equal(error.code, 1);
+      assert.match(`${error.stdout}${error.stderr}`, /sslExpiringSoon/, 'the error does not name the field');
+      return true;
+    },
+  );
 });

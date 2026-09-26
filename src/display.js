@@ -25,6 +25,14 @@
  * their own. `--json` keeps the raw `responseTimeMs`, deliberately, for the
  * same reason as above: `null` is honest in a machine format, `nullms` is not
  * in a human one.
+ *
+ * `markdownCell` and `machinesInUse` are the same idea for two surfaces that
+ * are not a terminal. A Markdown table cell is a place a value can stop being
+ * one cell: a single `|` splits the row and a newline ends it, so a URL can
+ * write the *next* row — including one that claims a site is DOWN. And a
+ * license response is a number we did not measure on this machine, so it is
+ * held to the same bar as a response time: a value that is not a count is
+ * printed as absent, not as text.
  */
 
 /**
@@ -106,4 +114,61 @@ export function safeText(value, { max = DEFAULT_MAX_LENGTH, fallback = '' } = {}
  */
 export function formatMs(value) {
   return Number.isFinite(value) && value >= 0 ? `${value}ms` : '—';
+}
+
+/**
+ * Make one value safe to interpolate into a single Markdown table cell.
+ *
+ * Every DeskUptime table is a human surface that renders a URL the monitored
+ * site did not choose but the *user* did, and a Markdown table is not a
+ * neutral container:
+ *
+ *   | https://a.test/x|forged | https://b.test | DOWN | 500 | | 200 | 12ms | 63 |
+ *
+ * One pipe turns one cell into two, so the rest of the hostile value becomes a
+ * row of its own — and a newline ends the row early, so the tail lands on the
+ * next line where it reads as a measured result. That is how a step summary
+ * came to claim a site was DOWN when every real check was UP. Angle brackets
+ * and `&` are encoded so markup stays text, and the same control bytes
+ * `safeText` sweeps are swept here, because a step summary is a file someone
+ * reads and can be rendered as HTML by a job summary viewer.
+ *
+ * This is the one implementation. The client report and the GitHub Action step
+ * summary are the same table in two places, and a second copy of these rules
+ * is a second thing to forget — see the P1-9 audit note on two surfaces owning
+ * the same fact.
+ *
+ * @param {unknown} value — anything; nullish becomes `—`
+ * @returns {string} safe to place between two `|` in a Markdown table row
+ */
+export function markdownCell(value) {
+  return safeText(value, { max: 0, fallback: '—' })
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/\|/g, '\\|');
+}
+
+/**
+ * How many of a license's machines are in use — or `—` when the license server
+ * did not say a number.
+ *
+ * This is printed on the line that stores the license key, and it comes from a
+ * response this machine did not produce. Interpolated raw, every value that is
+ * not a plain integer printed itself:
+ *
+ *   ✅ Pro activated (7 of 3 machines in use)         — a string "7"
+ *   ✅ Pro activated ([object Object] of 3 machines…)  — an object
+ *   ✅ Pro activated ( of 3 machines in use)           — an empty array
+ *
+ * A customer who reads that has no way to tell a real seat count from a
+ * mangled one, and the next sensible thing to do is buy a second license. So
+ * only a non-negative safe integer is a count of machines; everything else is
+ * absent, and absent prints as `—` like every other number we do not have.
+ *
+ * @param {unknown} value — the server's `devices_in_use`
+ * @returns {string} the count, or `—`
+ */
+export function machinesInUse(value) {
+  return Number.isSafeInteger(value) && value >= 0 ? String(value) : '—';
 }

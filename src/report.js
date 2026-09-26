@@ -26,6 +26,7 @@
 
 import { PRODUCT } from './features.js';
 import { DEFAULT_WINDOW_DAYS, windowSummary } from './history.js';
+import { markdownCell as cell } from './display.js';
 import { SSL_WARN_DAYS, STALE_AFTER_DAYS, checkAgeDays, expiredNote, isCheckStale, readSslState } from './status.js';
 
 export const DEFAULT_REPORT_TITLE = 'Website uptime report';
@@ -219,21 +220,6 @@ export function buildReport(state, { title, now = new Date(), history, windowDay
 /** Machine-readable form: pure JSON on stdout, for CI and for agencies' own systems. */
 export function renderReportJson(report) {
   return JSON.stringify(report, null, 2);
-}
-
-/**
- * Markdown for a mail or a ticket. A cell cannot break the table: newlines are
- * flattened, pipes are escaped, and angle brackets are entity-encoded, so a
- * hostile URL is shown as one cell of text instead of becoming extra rows or
- * markup in whatever renders the report.
- */
-function cell(value) {
-  return String(value ?? '—')
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/\|/g, '\\|')
-    .replace(/[\r\n]+/g, ' ');
 }
 
 function uptimeCell(site) {

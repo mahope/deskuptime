@@ -29,7 +29,7 @@ import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { formatMs, safeText } from '../src/display.js';
+import { formatMs, machinesInUse, markdownCell, safeText } from '../src/display.js';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const CLI = join(ROOT, 'src', 'cli.js');
@@ -307,4 +307,89 @@ test('no DeskUptime surface can print a response time it does not have', () => {
     const interpolations = text.match(/\$\{[^}]*responseTimeMs[^}]*\}ms/g) || [];
     assert.deepEqual(interpolations, [], `${file} interpolates a raw responseTimeMs: ${interpolations.join(', ')}`);
   }
+});
+
+// ── P1-9 punkt 9: step-summary-tabellen var den eneste uhærdede menneske-flade ──
+// Målt før rettelsen: en URL med ét `|` og ét linjeskift fyldte to rækker i
+// $GITHUB_STEP_SUMMARY, hvoraf den anden lignede en målt række:
+//   | https://evil.test/a|<script>x</script>|
+//   | forged-row | https://b.test | DOWN | 500 | | ✅ UP | 200 | 12ms | 90 |
+// Rækken er stykket af URL'en alene, så en rapport der siger "alt grønt" kan
+// vise en DOWN-række for et site der aldrig blev tjekket.
+
+test('markdownCell: a value cannot become a second table row', () => {
+  const hostile = 'https://evil.test/a|<script>x</script>|\n| forged-row | https://b.test | DOWN | 500 |';
+  const cell = markdownCell(hostile);
+
+  assert.doesNotMatch(cell, /[\r\n]/, 'a cell must stay on one line, or it becomes its own row');
+  assert.doesNotMatch(cell, /<script>/, 'markup from the site must not survive as markup');
+  assert.match(cell, /\\\|/, 'a pipe must be escaped or the cell splits the row');
+  // The forged row is still *visible* as text — it is just text now, inside
+  // one cell of one row, instead of a second row a reader would believe.
+  assert.match(cell, /forged-row/);
+});
+
+test('markdownCell: the escaped row still parses as one cell of five', () => {
+  // How a Markdown reader splits a row: on unescaped pipes.
+  const cellsOf = (row) => row.replace(/\\\|/g, '\u0000').split('|').map(c => c.trim());
+
+  const row = `| ${markdownCell('https://a.test/x|extra')} | ✅ UP | 200 | 12ms | 63 |`;
+  assert.equal(cellsOf(row).length, 7, `row did not hold its shape: ${row}`);
+
+  const header = '| URL | Status | HTTP | Response | SSL days |';
+  assert.equal(cellsOf(header).length, cellsOf(row).length, 'row and header must have the same width');
+});
+
+test('markdownCell: entities are encoded once, and control bytes never survive', () => {
+  assert.equal(markdownCell('https://a.test/?a=1&b=2'), 'https://a.test/?a=1&amp;b=2');
+  // A URL that literally contains "&lt;" must not decode into "<".
+  assert.equal(markdownCell('&lt;x&gt;'), '&amp;lt;x&amp;gt;');
+  assert.equal(markdownCell(null), '—', 'an absent value prints like every other absent number');
+  assert.equal(markdownCell(undefined), '—');
+
+  const esc = String.fromCharCode(0x1b);
+  assert.equal(markdownCell(`a${esc}[2Jb`), 'ab', 'a clear-screen must not reach the summary file');
+  assert.equal(markdownCell('a\u202Eb'), 'ab', 'a bidi override must not reorder the cell');
+  assert.equal(markdownCell('a\u0000\u0007b'), 'a b', 'control bytes become a space, not a gap');
+});
+
+test('markdownCell: an ordinary URL is untouched, so no report churns its tables', () => {
+  const url = 'https://mahope.dk/da/';
+  assert.equal(markdownCell(url), url);
+  assert.equal(markdownCell('✅ UP'), '✅ UP');
+  assert.equal(markdownCell(200), '200');
+  assert.equal(markdownCell('—'), '—');
+});
+
+// ── P1-9 punkt 8: devices_in_use var utyperet på den sti, der gemmer en nøgle ──
+// Målt før rettelsen, gennem licens.js:228 (`?? null`) og cli.js:271:
+//   "7" -> (7 of 3 machines in use)      {seats:7} -> ([object Object] of 3 …)
+//   true -> (true of 3 …)                 -1 -> (-1 of 3 …)
+//   1.5 -> (1.5 of 3 …)                   [] -> ( of 3 …)
+
+test('machinesInUse: only a count of machines is a count of machines', () => {
+  assert.equal(machinesInUse(1), '1');
+  assert.equal(machinesInUse(3), '3');
+  assert.equal(machinesInUse(0), '0');
+
+  // Everything a malformed, rolled-back or hostile license response can hold.
+  assert.equal(machinesInUse('2'), '—', 'a string is response text, not a number of machines');
+  assert.equal(machinesInUse(1.5), '—', 'a half machine is not a seat count');
+  assert.equal(machinesInUse(-1), '—', 'a negative count is corrupt, not "one seat freed"');
+  assert.equal(machinesInUse(NaN), '—');
+  assert.equal(machinesInUse(Infinity), '—');
+  assert.equal(machinesInUse(true), '—');
+  assert.equal(machinesInUse({ seats: 7 }), '—', 'an object must not print as [object Object]');
+  assert.equal(machinesInUse([2]), '—', 'an array must not print as an empty or joined string');
+  assert.equal(machinesInUse(null), '—');
+  assert.equal(machinesInUse(undefined), '—');
+});
+
+test('the activate line reads the machine count from features.js, not a literal', () => {
+  // PRODUCT.machines is the owner used by --help, the matrix and the npm
+  // description. A hardcoded 3 here is a fourth claim that can drift.
+  const text = readFileSync(join(ROOT, 'src/cli.js'), 'utf-8');
+  assert.doesNotMatch(text, /of 3 machines in use/, 'cli.js hardcodes the machine total');
+  assert.match(text, /machinesInUse\(res\.meta\.devicesInUse\)/, 'the typed helper is not used');
+  assert.match(text, /\$\{PRODUCT\.machines\} machines in use/, 'PRODUCT.machines is not the source');
 });
