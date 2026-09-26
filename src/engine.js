@@ -8,7 +8,7 @@
 import { checkReachability } from './checkers/ping.js';
 import { checkSSL, SSL_TIMEOUT_MS } from './checkers/ssl.js';
 import { checkContentChange, CONTENT_TIMEOUT_MS } from './checkers/content.js';
-import { assertValidHttpUrls, isHealthyStatus } from './status.js';
+import { assertValidHttpUrls, isHealthyStatus, isSslExpiringSoon } from './status.js';
 
 /**
  * `--timeout` is a budget for the *whole* check, not just the first request.
@@ -119,7 +119,7 @@ export function summarize(result) {
 
   let sslStatus = 'N/A';
   if (result.ssl && result.ssl.validDays !== undefined) {
-    sslStatus = result.ssl.validDays <= 14 ? `${result.ssl.validDays}d ⚠️` : `${result.ssl.validDays}d ✅`;
+    sslStatus = isSslExpiringSoon(result.ssl.validDays) ? `${result.ssl.validDays}d ⚠️` : `${result.ssl.validDays}d ✅`;
   } else if (result.ssl && result.ssl.error) {
     sslStatus = `ERR: ${result.ssl.error}`;
   }

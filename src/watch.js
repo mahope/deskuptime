@@ -17,7 +17,7 @@ import { readFileSync, writeFileSync, mkdirSync, existsSync, renameSync, unlinkS
 import { dirname, posix, win32 } from 'path';
 import { homedir } from 'os';
 import { createHash, randomUUID } from 'crypto';
-import { assertValidHttpUrls } from './status.js';
+import { assertValidHttpUrls, SSL_WARN_DAYS } from './status.js';
 import { recordPass } from './report.js';
 import { safeText } from './display.js';
 import { loadHistory, pruneHistory, recordHistoryPass, saveHistory } from './history.js';
@@ -175,10 +175,10 @@ export async function runPass(state, opts = {}) {
     if (Number.isFinite(validDays)) {
       entry.sslValidDays = validDays;
       const warningActive = entry.sslWarned === true || typeof entry.sslWarned === 'number';
-      if (validDays <= 14 && !warningActive) {
+      if (validDays <= SSL_WARN_DAYS && !warningActive) {
         events.push({ url, type: 'ssl_warning', message: `SSL expires in ${validDays} days ⚠️` });
         entry.sslWarned = true;
-      } else if (validDays > 14) {
+      } else if (validDays > SSL_WARN_DAYS) {
         entry.sslWarned = false;
       }
     } else {

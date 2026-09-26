@@ -1,5 +1,25 @@
 export const DEFAULT_TIMEOUT_MS = 15000;
 
+/**
+ * Days before expiry at which a certificate counts as "renew it soon".
+ *
+ * One definition, because three surfaces report the same certificate: `check`
+ * (summarize), `watch` (the latched ssl_warning event) and the client report.
+ * They used to hardcode 14 in two files and use no threshold at all in the
+ * report, so a bureau forwarding the report to a customer could not see which
+ * site needed a certificate.
+ */
+export const SSL_WARN_DAYS = 14;
+
+/**
+ * True only for a known, finite, non-negative number of days inside the window.
+ * A negative count is not a certificate that expired — it is a corrupt or
+ * hand-edited state file, and a client report must not render it as "renew now".
+ */
+export function isSslExpiringSoon(validDays) {
+  return Number.isFinite(validDays) && validDays >= 0 && validDays <= SSL_WARN_DAYS;
+}
+
 export function isHttpUrl(value) {
   try {
     const url = new URL(value);

@@ -98,6 +98,16 @@ Det er her bureauet bliver solgt, og derfor er reglerne hårde:
   (Site / Status / Uptime (all) / Uptime (window) / Response / SSL / Last check)
   og en resumelinje. DOWN-sites står først, så en kunde ser det vigtigste uden
   at lede.
+- **SSL-kolonnen er et advarselssignal, ikke et tal.** Et certifikat med ≤ 14
+  dage til udløb skrives som `⚠️ 9 d — renew soon`, tælles i resumelinjen
+  ("1 SSL expiring soon") og **navnes på en egen linje** med de URL'er der skal
+  fornyes, så modtageren ikke skal lede i tabellen. 14 dage er samme vindue som
+  `check` og `watch` bruger, defineret ét sted (`SSL_WARN_DAYS` i
+  `src/status.js`) — et certifikat kan ikke advare i terminalen og se fredeligt
+  ud i rapporten. Et site uden kendt udløbsdag viser `—` og advares aldrig; et
+  negativt eller ugyldigt tal fra en håndskrevet state-fil er behandlet som
+  ukendt, ikke som "forfalden nu". I `--json` hedder felterne
+  `sslDaysRemaining`, `sslExpiringSoon` og `summary.sslExpiringSoon`.
 - `--days N`: rapportvinduet, 1–35 (hvor meget historik der faktisk er gemt).
   Uden flag er det 30. Uden for intervallet fejler kommandoen med en besked,
   der siger hvorfor, i stedet for at ignorere tallet.

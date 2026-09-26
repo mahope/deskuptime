@@ -23,6 +23,7 @@
 
 import { PRODUCT } from './features.js';
 import { DEFAULT_WINDOW_DAYS, windowSummary } from './history.js';
+import { SSL_WARN_DAYS, isSslExpiringSoon } from './status.js';
 
 export const DEFAULT_REPORT_TITLE = 'Website uptime report';
 const MAX_TITLE_LENGTH = 120;
@@ -96,6 +97,12 @@ export function buildReport(state, { title, now = new Date(), history, windowDay
     .map(([url, entry]) => {
       const checks = intOrZero(entry.checks);
       const checksUp = intOrZero(entry.checksUp);
+      // A negative or otherwise unusable day count is treated as unknown, never
+      // as a certificate that expired: a hand-edited state file must not be able
+      // to invent an urgent renewal in a report a customer reads.
+      const sslDaysRemaining = Number.isFinite(entry.sslValidDays) && entry.sslValidDays >= 0
+        ? entry.sslValidDays
+        : null;
       return {
         url,
         status: siteStatus(entry),
@@ -105,7 +112,11 @@ export function buildReport(state, { title, now = new Date(), history, windowDay
         checks,
         failures: checks - checksUp,
         responseMs: Number.isFinite(entry.lastResponseMs) ? entry.lastResponseMs : null,
-        sslDaysRemaining: Number.isFinite(entry.sslValidDays) ? entry.sslValidDays : null,
+        sslDaysRemaining,
+        // The same window `check` and `watch` use, so a certificate that is
+        // urgent in the terminal cannot read as routine in the report a client
+        // receives. A site with no known expiry is never "expiring".
+        sslExpiringSoon: isSslExpiringSoon(sslDaysRemaining),
         contentBytes: Number.isFinite(entry.lastContentLength) ? entry.lastContentLength : null,
         lastChecked: typeof entry.lastChecked === 'string' ? entry.lastChecked : null,
         monitoringSince: typeof entry.addedAt === 'string' ? entry.addedAt : null,
@@ -121,6 +132,7 @@ export function buildReport(state, { title, now = new Date(), history, windowDay
     unknown: sites.filter(site => site.status === 'unknown').length,
     checks: sites.reduce((total, site) => total + site.checks, 0),
     failures: sites.reduce((total, site) => total + site.failures, 0),
+    sslExpiringSoon: sites.filter(site => site.sslExpiringSoon).length,
   };
 
   return {
@@ -172,6 +184,11 @@ function windowCell(site, windowDays) {
   return `${window.uptimePercent}% (${window.days} recorded d, ${window.checks} checks${failures})`;
 }
 
+function sslCell(site) {
+  if (site.sslDaysRemaining === null) return '—';
+  return site.sslExpiringSoon ? `⚠️ ${site.sslDaysRemaining} d — renew soon` : `${site.sslDaysRemaining} d`;
+}
+
 const HEADERS = ['Site', 'Status', 'Uptime (all)', 'Uptime (window)', 'Response', 'SSL', 'Last check'];
 
 export function renderReportMarkdown(report) {
@@ -183,7 +200,7 @@ export function renderReportMarkdown(report) {
       cell(uptimeCell(site)),
       cell(windowCell(site, windowDays)),
       cell(site.responseMs === null ? '—' : `${site.responseMs} ms`),
-      cell(site.sslDaysRemaining === null ? '—' : `${site.sslDaysRemaining} d`),
+      cell(sslCell(site)),
       cell(shortTime(site.lastChecked)),
     ];
     return `| ${cells.join(' | ')} |`;
@@ -194,6 +211,16 @@ export function renderReportMarkdown(report) {
     .filter(Boolean)
     .sort()[0];
 
+  // A forwarded report is read once. Naming the certificates that need
+  // renewing turns a column of numbers into something the recipient can act on.
+  const expiring = report.sites.filter(site => site.sslExpiringSoon);
+  const attention = expiring.length === 0
+    ? []
+    : [
+      '',
+      `**SSL certificate${expiring.length === 1 ? '' : 's'} expiring within ${SSL_WARN_DAYS} days — renewal needed:** ${expiring.map(site => cell(`${site.url} (${site.sslDaysRemaining} d)`)).join(', ')}`,
+    ];
+
   return [
     `# ${cell(report.title)}`,
     '',
@@ -203,7 +230,8 @@ export function renderReportMarkdown(report) {
     `|${' --- |'.repeat(HEADERS.length)}`,
     ...(rows.length > 0 ? rows : [`| ${['_no monitored sites_', '—', '—', '—', '—', '—', '—'].join(' | ')} |`]),
     '',
-    `**${report.summary.sites} site(s) · ${report.summary.up} up · ${report.summary.down} down · ${report.summary.checks} checks · ${report.summary.failures} failed**`,
+    `**${report.summary.sites} site(s) · ${report.summary.up} up · ${report.summary.down} down · ${report.summary.checks} checks · ${report.summary.failures} failed${expiring.length > 0 ? ` · ${expiring.length} SSL expiring soon` : ''}**`,
+    ...attention,
     '',
     `Uptime is the share of completed monitoring passes that answered HTTP 200–399. "Uptime (all)" counts every pass since the site was added${since ? ` (earliest ${shortTime(since)})` : ''}; "Uptime (window)" counts the passes recorded in the last ${windowDays} days. A site with no completed pass yet shows — rather than 100%.`,
     '',

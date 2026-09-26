@@ -286,3 +286,94 @@ test('a long or multi-line title is flattened to one short line', () => {
   assert.equal(buildReport({ urls: {} }, { title: 'x'.repeat(300) }).title.length, 120);
   assert.equal(buildReport({ urls: {} }, { title: '   ' }).title, 'Website uptime report');
 });
+
+// ── SSL expiry is a warning the client can act on, not a bare number ──
+//
+// `check` and `watch` have warned inside the 14-day window since early on,
+// hardcoded in two different files. The report had no threshold at all, so the
+// one surface a bureau forwards to its customer was the one that could not say
+// "renew this certificate". These tests lock all three to the same window.
+
+test('a certificate inside the warning window is marked, one day later is not', () => {
+  const build = days => buildReport(
+    proState({ 'https://acme.dk/': upEntry({ sslValidDays: days }) }),
+    { now: NOW },
+  );
+
+  const at14 = build(14);
+  assert.equal(at14.sites[0].sslExpiringSoon, true);
+  assert.equal(at14.summary.sslExpiringSoon, 1);
+  assert.match(renderReportMarkdown(at14), /⚠️ 14 d — renew soon/);
+  assert.match(renderReportMarkdown(at14), /renewal needed:\*\* https:\/\/acme\.dk\/ \(14 d\)/);
+
+  const at15 = build(15);
+  assert.equal(at15.sites[0].sslExpiringSoon, false);
+  assert.equal(at15.summary.sslExpiringSoon, 0);
+  const markdown = renderReportMarkdown(at15);
+  assert.match(markdown, /\| 15 d \|/);
+  assert.doesNotMatch(markdown, /renew soon/);
+  assert.doesNotMatch(markdown, /renewal needed/);
+  assert.doesNotMatch(markdown, /SSL expiring soon/);
+
+  // A site with no known expiry is not an urgent one, and a hostile number in
+  // a hand-edited state file cannot invent a warning either.
+  for (const bogus of [null, undefined, -3, NaN, '9', Infinity]) {
+    const site = buildReport(proState({ 'https://acme.dk/': upEntry({ sslValidDays: bogus }) }), { now: NOW }).sites[0];
+    assert.equal(site.sslExpiringSoon, false, `${bogus} was treated as expiring`);
+    assert.equal(site.sslDaysRemaining, null);
+  }
+  assert.match(renderReportMarkdown(buildReport(proState({ 'https://acme.dk/': upEntry({ sslValidDays: null }) }), { now: NOW })), /\| — \|/);
+});
+
+test('every site that needs renewing is named, and the JSON agrees with the text', () => {
+  const report = buildReport(proState({
+    'https://acme.dk/': upEntry({ sslValidDays: 3 }),
+    'https://shop.dk/': upEntry({ sslValidDays: 9 }),
+    'https://blog.dk/': upEntry({ sslValidDays: 200 }),
+    'https://plain.dk/': upEntry(),
+  }), { now: NOW });
+
+  assert.equal(report.summary.sslExpiringSoon, 2);
+  const markdown = renderReportMarkdown(report);
+  assert.match(markdown, /2 SSL expiring soon/);
+  const named = markdown.split('renewal needed:**')[1].split('\n')[0];
+  assert.match(named, /https:\/\/acme\.dk\/ \(3 d\)/);
+  assert.match(named, /https:\/\/shop\.dk\/ \(9 d\)/);
+  assert.doesNotMatch(named, /blog\.dk/);
+  assert.doesNotMatch(named, /plain\.dk/);
+
+  const json = JSON.parse(renderReportJson(report));
+  assert.equal(json.summary.sslExpiringSoon, 2);
+  assert.deepEqual(
+    json.sites.filter(site => site.sslExpiringSoon).map(site => site.url),
+    ['https://acme.dk/', 'https://shop.dk/'],
+  );
+});
+
+test('the report, check and watch share one expiry threshold', async () => {
+  const { summarize } = await import('../src/engine.js');
+  const { runPass: runWatchPass, loadState: loadWatchState } = await import('../src/watch.js');
+
+  // summarize() — the `check` surface.
+  const ssl = days => ({ validDays: days });
+  assert.match(summarize({ healthy: true, url: 'https://acme.dk/', ssl: ssl(14) }).ssl, /⚠️$/);
+  assert.match(summarize({ healthy: true, url: 'https://acme.dk/', ssl: ssl(15) }).ssl, /✅$/);
+
+  // The latched watch event — the same window, so a certificate cannot warn in
+  // one surface and read as routine in another.
+  const warned = async days => {
+    const home = mkdtempSync(join(tmpdir(), 'deskuptime-ssl-'));
+    try {
+      await runWatchPass(
+        { urls: { 'https://acme.dk/': { wasUp: true, sslWarned: false } } },
+        { stateFile: join(home, 'state.json'), now: NOW, returnResults: true, check: async () => ({ healthy: true, ssl: { validDays: days }, statusCode: 200, responseTimeMs: 10, timestamp: NOW.toISOString() }) },
+      );
+      return JSON.parse(readFileSync(join(home, 'state.json'), 'utf8')).urls['https://acme.dk/'].sslWarned;
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  };
+  assert.equal(await warned(14), true);
+  assert.equal(await warned(15), false);
+  assert.ok(loadWatchState, 'watch state loader is available');
+});

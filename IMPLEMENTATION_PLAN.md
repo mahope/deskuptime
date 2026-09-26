@@ -1,9 +1,9 @@
 # IMPLEMENTATION_PLAN.md
 
 STATUS: I GANG
-Iteration: 20 — 2026-09-26
-Arbejdsgrene: `ceo/timeout-budget` (P1-4)
-Næste handling: **P1-4 er færdig** — `--timeout` var en løfte, brugeren ikke kunne holde. Et check er tre ben (reachability, TLS-handshake, indholdslæsning), men kun det første læste flaget, så **`check --timeout 500` mod en server der sender headere og aldrig kroppen tog 20 094 ms** — målt, ikke antaget. Det er samme kode, der gør et CI-job langsom: `action.yml:67` sender `--timeout` med hvert kald. `checkUrl` sætter nu ét deadline, når der er givet et budget, og hvert ben arver resten; intet ben får mere end sin egen default, så et stort budget kan aldrig gøre et check langsommere end i dag, og uden `--timeout` er stien bit-for-bit uændret. Efter rettelsen: 506 ms. 6 nye tests → **188/188**. Næste iteration: ❓ 2/❓ 3 hvis de er besvaret (planlagte rapporter / flere lokationer), ellers ny research-iteration. P1-1 AC3 (sitekilder) er `BLOCKED` på ❓ 8.
+Iteration: 21 — 2026-09-26
+Arbejdsgrene: `ceo/report-ssl-warning` (P1-2 del D)
+Næste handling: **P1-2 del D er færdig** — kunderapporten kunne ikke se et certifikat, der skulle fornyes. Missionen lover "SSL-udløbsvarsler" som bureau-værdi, men kun den ene af tre overflader, der viser samme certifikat, havde et advarselsvindue: `watch.js` hårdkodede `14` to steder, `engine.js` (summarize) hårdkodede `14`, og **rapporten havde ingen tærskel overhovedet** — den skrev `SSL | 9 d` i den rapport, et bureau sender til sin kunde. Den flade, der er mest synlig for kunden, var den svageste. Nu er `SSL_WARN_DAYS = 14` ét sted i `src/status.js` med `isSslExpiringSoon()`, alle tre overflader bruger det, og rapporten markerer `⚠️ 9 d — renew soon`, tæller i resumelinjen og **navner de URL'er der skal fornyes** på en egen linje; `--json` får `sslExpiringSoon` + `summary.sslExpiringSoon`. Min egen test fandt en reel fejl undervejs: `Number.isFinite(-3)` er sand, så en håndskrevet `sslValidDays: -3` ville have renderet "⚠️ -3 d — renew soon" i en kunderapport — negativt og ugyldigt er nu *ukendt* (`—`), aldrig "forfalden nu". 3 nye tests → **191/191**. Næste iteration: ❓ 2/❓ 3 hvis besvaret, ellers ny research-iteration. P1-1 AC3 (sitekilder) er `BLOCKED` på ❓ 8.
 
 ## Mission
 
@@ -457,6 +457,25 @@ Den aktuelle gate-definition er registreret her:
 - **Test (12 nye, `test/display.test.js`, ingen netværk):** 6 unit (benign tekst uændret inkl. CSP/HSTS/DENY, hele escape-sekvenser væk, OSC-BEL og OSC-ST, de faktisk-reachable bytes, bidi/zero-width, cap + fallback) og 6 end-to-end mod en rå-socket-server: en forfalsket ren sikkerhedsrapport (de 4 ærlige `⬜ missing:`-linjer skal alle være der), redirect-målet neutraliseret af `new URL()` (percentkodet — låst med en test, så en fremtidig ændring ikke kan åbne det), `--json` tabsfrit, den målte parsergrænse for ESC/BEL/DEL (fejlen skal surfaces, `OWNED` må aldrig printes, exit 2), en DOWN-linje der overlever et site, der prøver at reflowe loggen, og en håndskrevet state-fil, der prøver at male URL-listen.
 - **Mutationstest (3):** `safeText` gjort til pass-through → 15 fejl; 8-bit-CSI-stripping fjernet → 7 fejl; kun `headers`-stedet gjort usikkert → 3 fejl.
 - **Bevis:** Node 26.7.0 — `npm ci --ignore-scripts`, **`npm test` grøn med 179/179** (167 + 12), `npm run audit` 0/0, `node --check` alle JS-filer, `node tools/matrix.mjs --check`, `git diff --check` grønne. Ingen afhængighed ændret, ingen ny claim, matrixen urørt.
+
+### P1-2b — FÆRDIG 2026-09-26 — Rapporten skal kunne se et certifikat, der skal fornyes (`ceo/report-ssl-warning`)
+
+**Begrundelse (missionens fokus: "SSL- og domæne-udløbsvarsler" til små bureauer):** Missionen lister SSL-udløbsvarsler som konkret Pro-værdi, men målingen fandt **tre overflader, der viser samme certifikat, med to forskellige adfærd og én uden tærskel**. `src/watch.js:178,181` hårdkodede `validDays <= 14` to steder, `src/engine.js:122` hårdkodede `validDays <= 14`, og `src/report.js` skrev bare `${sslDaysRemaining} d` — altså skrev den flade, et bureau videresender til sin kunde, `9 d` uden at nogen kunne se, at det var i den adversensl zone. Et certifikat kunne advare i terminalen og se fredeligt ud i den samme klients kunderapport.
+
+**Acceptkriterier:**
+
+1. Advarselsvinduet er defineret ét sted og bruges af alle tre overflader. — **Færdig** (`SSL_WARN_DAYS` + `isSslExpiringSoon()` i `src/status.js`; brugt af `summarize()`, `runPass()` og rapporten)
+2. Rapporten markerer et certifikat i vinduet i stedet for at skrive et råt tal. — **Færdig** (`⚠️ 9 d — renew soon`)
+3. Modtageren kan se *hvilke* sites der skal fornyes uden at lede i tabellen. — **Færdig** (resumelinje får "N SSL expiring soon", og de konkrete URL'er med dage navnes på en egen linje)
+4. `--json` er maskinelæsbar på samme sandhed som teksten. — **Færdig** (`sslExpiringSoon` pr. site + `summary.sslExpiringSoon`; testen låser at de to er enige)
+5. Ukendt udløbsdag er `—` og advarser aldrig; et ugyldigt tal kan ikke finde på en advarsel. — **Færdig** (se fundet nedenfor)
+6. `docs/agency-report.md` §4 beskriver SSL-kolonnens betydning. — **Færdig**
+
+**Resultat:** `isSslExpiringSoon()` kræver et **finite og ikke-negativt** antal dage. Det er ikke kosmetik: `Number.isFinite(-3)` er sand, så min egen test fangede at en håndskrevet `sslValidDays: -3` ville have renderet "⚠️ -3 d — renew soon" i en kunderapport — et certifikat, der "forfalder nu" fordi en fil blev redigeret. Negativt, `NaN`, `Infinity` og strenge er nu *ukendt* (`—`) i rapporten, aldrig en advarsel. Brudte tal kan altså kun fjerne en kolonne, aldrig opfinde en.
+
+**Test (3 nye i `test/report.test.js`):** 14 dage markerer og 15 gør ikke, i både Markdown og JSON, og linjen med "renewal needed" med navne på præcis de to af fire sites der er i vinduet; det samme gælder `summarize()` (`⚠️`/`✅`) og den latched `ssl_warning`-event i et rigtigt `runPass` med en stub-check, så de tre overflader låses til *samme* vindue adfærdigt; de seks ugyldige tal giver `sslExpiringSoon: false` og `—`. **Mutationstest (målt, ikke antaget):** at fjerne `>= 0`-gaten i `report.js` giver 1 fejl i 16. Derimod giver det at fjerne `>= 0` *alene* i `isSslExpiringSoon()` 0 fejl, fordi rapporten gater `sslDaysRemaining` til `null` først — de to guards er redundans i dybet (den ene beskytter `summarize()` og `watch`, den anden rapporten), og kun rapportens er dækket af en test. Skrevet ned, så næste iteration ikke "forstærker" en guard to gange eller tror den er testet.
+
+**Bevis:** Node 26.7.0 — `npm test` grøn med **191/191** (188 + 3), `npm run audit` 0/0, `node --check` alle JS-filer, `node tools/matrix.mjs --check`, `sh -n`/`bash -n` og `git diff --check` grønne. **Bemærk til miljøet:** standard-`node` på denne maskine er v22, og de 7 installtests + 5 action-tests fejler korrekt under Node 22 (install.sh og action.yml kræver 24+); med `/opt/homebrew/opt/node@26/bin` i PATH (26.7.0) er alle 191 grønne. Det er samme forbehold planen har noteret siden P0-2.
 
 ### P1-3 — FÆRDIG 2026-09-26 — Pro-grænse må ikke sende betalende kunder i kassen (`ceo/pro-gate-truth`)
 
