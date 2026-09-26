@@ -17,7 +17,7 @@ import { readFileSync, writeFileSync, mkdirSync, existsSync, renameSync, unlinkS
 import { dirname, posix, win32 } from 'path';
 import { homedir } from 'os';
 import { createHash, randomUUID } from 'crypto';
-import { assertValidHttpUrls, expiredNote, isNewerPass, partitionUsableUrls, readContentChange, readEntry, readEvent, readRedirectTarget, readSslState, STALE_AFTER_DAYS, unusableUrlNote } from './status.js';
+import { assertValidHttpUrls, expiredNote, isNewerPass, partitionUsableUrls, readContentChange, readEntry, readEvent, readRedirectTarget, queuedAgeMs, readSslState, STALE_AFTER_DAYS, unusableUrlNote } from './status.js';
 import { recordPass } from './report.js';
 import { formatMs, safeText } from './display.js';
 import { loadHistory, pruneHistory, recordHistoryPass, saveHistory } from './history.js';
@@ -32,6 +32,16 @@ const WEBHOOK_TIMEOUT_MS = 10_000;
 // WEBHOOK_TIMEOUT_MS, so these bounds cannot make the loop slower than it was.
 export const WEBHOOK_ATTEMPTS = 3;
 export const WEBHOOK_RETRY_DELAY_MS = 500;
+// An alert the receiver never took is kept instead of being lost, and tried again
+// on the next pass — measured 2026-09-26: a receiver answering 503 through the
+// whole budget got three attempts, and then the alert was gone for good, because
+// the pass had latched the change, the next pass raised no event, and the state
+// file held no memory of it. Bounded on all three axes, so an outage that never
+// ends cannot grow the state file or the work per pass. See docs/pro-alerts.md §2.
+export const OUTBOX_LIMIT = 20;
+export const OUTBOX_MAX_AGE_MS = 30 * 60 * 1000;
+export const OUTBOX_MAX_ATTEMPTS = 3;
+const OUTBOX_MESSAGE_MAX = 500;
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /**
@@ -90,6 +100,13 @@ function normalizeState(value) {
   const license = normalizeLicense(state.license);
   if (license) state.license = license;
   else delete state.license;
+  // Undelivered alerts are read the same defensive way, and only through the
+  // field list below: a restored or hand-edited file must not be able to put
+  // anything else in the outbox — a webhook URL is a token, and this file is
+  // copied around more than the user thinks.
+  const outbox = normalizeOutbox(state.outbox);
+  if (outbox.length > 0) state.outbox = outbox;
+  else delete state.outbox;
   return state;
 }
 
@@ -532,6 +549,15 @@ export function printStatus(options = {}) {
   if (unusable.length > 0) {
     console.log(`\n⚠️  ${unusableUrlNote(unusable, { checked: usable.length })}`);
   }
+
+  // The same queue the watch loop prints, here because this is the command that
+  // has to answer "is my alerting working?" — including after a restart, when
+  // the loop that raised the alert is gone and the alert is still owed to a
+  // channel nobody is sitting at.
+  const waitingAlerts = normalizeOutbox(state.outbox).filter(entry => !outboxExpired(entry, { now }));
+  if (waitingAlerts.length > 0) {
+    console.log(`\n${outboxWaitingNote(waitingAlerts, { now })}`);
+  }
 }
 
 /**
@@ -782,38 +808,14 @@ export async function sendWebhook(webhookUrl, event, {
   timeoutMs = WEBHOOK_TIMEOUT_MS,
   attempts = WEBHOOK_ATTEMPTS,
   retryDelayMs = WEBHOOK_RETRY_DELAY_MS,
+  kept = false,
   wait = sleep,
 } = {}) {
-  const reading = readEvent(event);
-  // The same two additive fields `check --json` publishes, asked of the same
-  // owner, so one name for the fact holds across every surface. A Pro channel
-  // that had to compare hosts itself to notice that a parked page answered
-  // instead of the customer's site would be re-implementing the one rule
-  // `readRedirectTarget` exists to own — and every channel would get it wrong
-  // separately. `type`, `message` and `timestamp` keep their old meaning, and in
-  // the ordinary case (no cross-host answer) both new fields are `null`/`false`.
-  const redirect = readRedirectTarget({ url: event.url, finalUrl: event.finalUrl });
   // Built once: a retry must deliver the same body, so the `timestamp` still
-  // says when this alert was raised and not when the last attempt was made.
-  const body = JSON.stringify({
-    product: 'deskuptime',
-    type: event.type,
-    url: event.url,
-    message: event.message,
-    timestamp: new Date().toISOString(),
-    // When the site was actually measured — the pass's own time, the same
-    // one written to the state file and shown by `deskuptime status`.
-    measuredAt: typeof event.measuredAt === 'string' ? event.measuredAt : null,
-    // The reading a transition is compared against, and whether DeskUptime
-    // watched the change or merely found it already so.
-    previousChecked: typeof event.previousChecked === 'string' ? event.previousChecked : null,
-    transition: reading.transition,
-    // Where the response came from. A cross-host answer is not DOWN, so the
-    // channel cannot learn it from the event type; without these two fields
-    // a customer's parked or hijacked domain reached Slack as a green "up".
-    finalUrl: redirect.finalUrl,
-    offHostRedirect: redirect.offHost,
-  });
+  // says when this alert was raised and not when the last attempt was made. The
+  // outbox delivers the same shape a day later, which is why the body is the
+  // event's and never the pass's.
+  const body = webhookBody(event);
 
   const deadline = Date.now() + timeoutMs;
   let attempt = 0;
@@ -849,17 +851,209 @@ export async function sendWebhook(webhookUrl, event, {
   }
 
   // One warning, and it has to say the truth about the consequence: the pass
-  // already recorded this change, so nothing resends it. The terminal keeps
-  // reporting the site, but a channel that was set up *because* nobody sits at
-  // the terminal has now missed the alert.
+  // already recorded this change, so nothing *in this pass* resends it. The
+  // terminal keeps reporting the site, but a channel that was set up *because*
+  // nobody sits at the terminal has now missed the alert — unless the caller is
+  // the outbox, which is the one place that does send it again.
   console.error(`⚠️  Webhook alert not delivered — ${reason} (${attempt} attempt${attempt === 1 ? '' : 's'}).`);
-  console.error('    Nothing resends it: this pass already recorded the change. Check this terminal for what was missed.');
+  // `kept` is the caller's promise, not ours: the watch loop and the outbox
+  // flush both put a failed alert back for a later pass, and a message claiming
+  // nothing resends it would then be the one false thing a customer reads.
+  console.error(kept
+    ? '    Kept in the outbox: it is sent again on a later pass, up to 3 tries over 30 minutes.'
+    : '    Nothing resends it: this pass already recorded the change. Check this terminal for what was missed.');
   return false;
 }
 
 /**
- * Start the watch loop. Resolves never — runs until SIGINT.
+ * The one body every delivery is built from — the pass's own alert and an alert
+ * the outbox kept from an earlier pass alike. It has to be one function: a
+ * second copy of this object is how a payload and its documentation start
+ * disagreeing about which fields exist.
  */
+export function webhookBody(event, { now = new Date() } = {}) {
+  const reading = readEvent(event);
+  // The same two additive fields `check --json` publishes, asked of the same
+  // owner, so one name for the fact holds across every surface. A Pro channel
+  // that had to compare hosts itself to notice that a parked page answered
+  // instead of the customer's site would be re-implementing the one rule
+  // `readRedirectTarget` exists to own — and every channel would get it wrong
+  // separately. `type`, `message` and `timestamp` keep their old meaning, and in
+  // the ordinary case (no cross-host answer) both new fields are `null`/`false`.
+  const redirect = readRedirectTarget({ url: event.url, finalUrl: event.finalUrl });
+  return JSON.stringify({
+    product: 'deskuptime',
+    type: event.type,
+    url: event.url,
+    message: event.message,
+    timestamp: now.toISOString(),
+    // When the site was actually measured — the pass's own time, the same
+    // one written to the state file and shown by `deskuptime status`. An alert
+    // the outbox delivers later still carries the time of the pass that measured
+    // it, so a late delivery is visibly late instead of looking fresh.
+    measuredAt: typeof event.measuredAt === 'string' ? event.measuredAt : null,
+    // The reading a transition is compared against, and whether DeskUptime
+    // watched the change or merely found it already so.
+    previousChecked: typeof event.previousChecked === 'string' ? event.previousChecked : null,
+    transition: reading.transition,
+    // Where the response came from. A cross-host answer is not DOWN, so the
+    // channel cannot learn it from the event type; without these two fields
+    // a customer's parked or hijacked domain reached Slack as a green "up".
+    finalUrl: redirect.finalUrl,
+    offHostRedirect: redirect.offHost,
+  });
+}
+
+/**
+ * The undelivered-alert queue. See docs/pro-alerts.md §2 for the spec; the
+ * bounds live in the constants above so the spec, the code and the tests read
+ * the same numbers.
+ *
+ * What is stored is the *event* — the alert as the pass raised it — and never the
+ * address it was sent to. A webhook URL is a token in Slack, Discord and Teams,
+ * and `state.json` is the file users attach to a bug report. The receiver's own
+ * answer is not stored either: it can echo anything back, and it is not needed to
+ * retry. `message` is capped, because for a `down` event it carries the site's
+ * error text and an unbounded one would let a site decide how big the state file
+ * gets.
+ */
+const OUTBOX_EVENT_FIELDS = ['url', 'type', 'message', 'measuredAt', 'previousChecked', 'finalUrl'];
+
+function isoOrNull(value) {
+  if (typeof value !== 'string') return null;
+  const parsed = Date.parse(value);
+  return Number.isNaN(parsed) ? null : new Date(parsed).toISOString();
+}
+
+export function normalizeOutbox(value) {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter(entry => entry && typeof entry === 'object' && !Array.isArray(entry))
+    .map(entry => {
+      const kept = {};
+      for (const field of OUTBOX_EVENT_FIELDS) {
+        const raw = entry[field];
+        kept[field] = field === 'measuredAt' || field === 'previousChecked'
+          ? isoOrNull(raw)
+          : typeof raw === 'string' ? raw : (field === 'message' ? '' : null);
+      }
+      kept.message = kept.message.slice(0, OUTBOX_MESSAGE_MAX);
+      kept.queuedAt = isoOrNull(entry.queuedAt);
+      kept.attempts = Number.isInteger(entry.attempts) && entry.attempts > 0 ? entry.attempts : 0;
+      // An entry without a URL, a type or a queue time cannot be sent or aged,
+      // and a stored attempt count above the bound is not something we wrote.
+      return kept.url && kept.type && kept.queuedAt && kept.attempts <= OUTBOX_MAX_ATTEMPTS ? kept : null;
+    })
+    .filter(Boolean);
+}
+
+function outboxKey(entry) {
+  return `${entry.url}\n${entry.type}`;
+}
+
+function outboxAgeMs(entry, now) {
+  // `queuedAgeMs` is the owner of this age, in status.js with the other ages —
+  // watch.js is not allowed to decide one for itself, and an alert's waiting time
+  // is an age like any other.
+  return queuedAgeMs(entry.queuedAt, now);
+}
+
+function formatOutboxWait(ms) {
+  const seconds = Math.floor(ms / 1000);
+  if (seconds < 60) return `${seconds} s`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes} min`;
+  return `${Math.floor(minutes / 60)} h ${minutes % 60} min`;
+}
+
+/**
+ * Keep one alert per site and kind. A second `down` for a site that is already
+ * waiting is not news — the older alert is the one that says when the outage
+ * began, and replacing it with a newer copy would push that fact forward on every
+ * pass. Returns whether the state changed, so the caller only writes when it did.
+ */
+export function enqueueOutbox(state, event, { now = new Date() } = {}) {
+  const list = normalizeOutbox(state.outbox);
+  const entry = { ...normalizeOutbox([{ ...event, queuedAt: now.toISOString(), attempts: 0 }])[0] };
+  if (!entry) return false;
+  if (list.some(waiting => outboxKey(waiting) === outboxKey(entry))) return false;
+  list.push(entry);
+  // Bounded: the oldest goes first, so the queue cannot grow without limit and
+  // the oldest news is the first thing to go when it does.
+  while (list.length > OUTBOX_LIMIT) list.shift();
+  state.outbox = list;
+  return true;
+}
+
+export function outboxExpired(entry, { now = new Date() } = {}) {
+  return outboxAgeMs(entry, now) >= OUTBOX_MAX_AGE_MS;
+}
+
+/**
+ * What the customer sees while an alert waits, and what they see when it is
+ * given up. One owner per sentence, so the loop, `watch --status` and the
+ * handover to the next pass cannot describe the same waiting alert differently.
+ */
+export function outboxWaitingNote(entries, { now = new Date() } = {}) {
+  const count = entries.length;
+  const lines = entries.map(entry =>
+    `    ${safeText(entry.url, { max: 0 })} ${safeText(entry.message, { max: 0 })} (waiting ${formatOutboxWait(outboxAgeMs(entry, now))}, ${entry.attempts} ${entry.attempts === 1 ? 'try' : 'tries'})`);
+  return [
+    `📬 ${count} alert${count === 1 ? '' : 's'} still waiting for your channel:`,
+    ...lines,
+    '    They are sent on a later pass. Nothing resends them but this loop.',
+  ].join('\n');
+}
+
+export function outboxDroppedNote(entry, { now = new Date() } = {}) {
+  return `Giving up on an alert that was never delivered: ${safeText(entry.url, { max: 0 })} ${safeText(entry.message, { max: 0 })} (waited ${formatOutboxWait(outboxAgeMs(entry, now))}, ${entry.attempts} ${entry.attempts === 1 ? 'try' : 'tries'}). Your channel received nothing about it. Check the webhook URL and that the receiver is up.`;
+}
+
+/**
+ * Try everything that is waiting, oldest first, before the pass's own alerts —
+ * so a channel receives them in the order they happened.
+ *
+ * An entry leaves the queue in exactly one of three ways: delivered, given up,
+ * or still waiting with one more try against it. It is given up when it has used
+ * its tries or outrun its age, and the give-up is said out loud: a silent drop
+ * would be indistinguishable from a delivered alert, which is the failure this
+ * whole queue exists to remove.
+ */
+export async function flushOutbox(webhookUrl, state, { now = new Date(), send = sendWebhook, persist } = {}) {
+  const list = normalizeOutbox(state.outbox);
+  if (list.length === 0) return { delivered: 0, dropped: 0, waiting: 0 };
+  // What the queue looked like before this pass tried anything. Whether the loop
+  // has to write the file is not a question about how many entries are left — a
+  // failed try changes an entry's attempt count in place, so a queue of the same
+  // length can still be a different queue.
+  const before = JSON.stringify(list);
+  const waiting = [];
+  const dropped = [];
+  let delivered = 0;
+  // Oldest first. The timestamps are normalized to ISO above, so a string
+  // comparison is the same order a date comparison gives.
+  for (const entry of [...list].sort((a, b) => a.queuedAt.localeCompare(b.queuedAt))) {
+    if (outboxExpired(entry, { now })) {
+      dropped.push(entry);
+      continue;
+    }
+    const sent = await send(webhookUrl, entry, { kept: true });
+    if (sent) {
+      delivered += 1;
+      continue;
+    }
+    const tried = { ...entry, attempts: entry.attempts + 1 };
+    if (tried.attempts >= OUTBOX_MAX_ATTEMPTS || outboxExpired(tried, { now })) dropped.push(tried);
+    else waiting.push(tried);
+  }
+  state.outbox = waiting;
+  if (persist) persist(JSON.stringify(waiting) !== before);
+  for (const entry of dropped) console.error(`⚠️  ${outboxDroppedNote(entry, { now })}`);
+  if (waiting.length > 0) console.log(outboxWaitingNote(waiting, { now }));
+  return { delivered, dropped: dropped.length, waiting: waiting.length };
+}
+
+
 export async function startWatch(urls, opts = {}) {
   const { webhookUrl } = opts;
   const state = loadState(opts);
@@ -939,10 +1133,27 @@ export async function startWatch(urls, opts = {}) {
     const pass = await runPass(state, { ...opts, returnResults: true });
     printPass(pass, { alertUnchangedDown: false });
     if (pro) {
+      // Before this pass's own alerts, so the channel reads them in the order
+      // they happened: a waiting alert is older than anything raised now.
+      if (webhookUrl) {
+        await flushOutbox(webhookUrl, state, {
+          persist: changed => {
+            if (changed) saveStateOrWarn(state, opts, 'What the channel is still owed will be sent again; the saved copy of it is behind until the file can be written.');
+          },
+        });
+      }
       for (const event of pass.events) {
         if (event.type === 'baseline') continue;
         await notify('DeskUptime', `${event.url} ${event.message}`);
-        if (webhookUrl) await sendWebhook(webhookUrl, event);
+        if (webhookUrl) {
+          const sent = await sendWebhook(webhookUrl, event, { kept: true });
+          // Not delivered is not lost. The pass latched the change, so without
+          // this the next pass raises no event and the channel never hears about
+          // an outage it is being paid to hear about.
+          if (!sent && enqueueOutbox(state, event)) {
+            saveStateOrWarn(state, opts, 'The alert will be sent again on a later pass; the saved copy of it is behind until the file can be written.');
+          }
+        }
       }
     }
     await new Promise(resolve => setTimeout(resolve, interval * 1000));

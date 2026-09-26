@@ -1,3 +1,75 @@
+## Status fra denne iteration (58, P1-42 — en alarm der ikke kom af sted, blev væk)
+
+**Hvorfor denne flade:** ❓ 1–3 er stadig ubesvarede, så iterationen tog den opgave
+P1-41 bevidst lod ligge: en modtager der er nede **gennem hele budgettet** mister
+stadig alarmen. Den krævede en spec først, så den er skrevet først.
+
+**Målt først, nul kode ændret.** Rigtig `watch`-loop, rigtig state-fil med sitet op
+i går (så passet rejser `down`), et lokalt site der svarer 500, Pro fra
+`passthrough`-stubben (aldrig et kald til mahope.tools) og en rigtig modtager der
+svarer 503 på alle tre forsøg:
+
+```
+[21:10:47] 🚨 http://127.0.0.1:56967/ is DOWN — HTTP 500
+⚠️  Webhook alert not delivered — the receiver responded 503 (3 attempts).
+    Nothing resends it: this pass already recorded the change. …
+[21:11:23] · http://127.0.0.1:56967/ remains DOWN — HTTP 500   ← 36 s senere
+
+modtageren fik: 3 POST, og så ingenting. state.json: urls, license — ingen kø.
+```
+
+Sådan så det ud tre dage før dette også ud med ét blip (P1-41), men her var der
+ikke engang en redningsmulighed: ingen tredje forsøg, ingen næste hændelse, ingen
+hukommelse. Betalt kanal, betalt site, intet.
+
+**Efter, samme måling:** 3 POST → alarmen i `state.json` under `outbox` → næste
+pass sender den **før** passets egne hændelser, med passets egen `measuredAt`, så en
+sen levering ser ud som sen.
+
+**Spec skrevet først** (`docs/pro-alerts.md` §2, ny underafsnit): kapacitet 20
+(ældste først), alder 30 min, 3 forsøg *i alt* på tværs af passene, dedupe pr.
+`(url, type)` hvor den ældre alarm bliver stående, og den røde regel for hvad der
+**aldrig** skrives til disk. Det sidste er det vigtigste: en webhook-URL er et
+token i Slack/Discord/Teams, og `state.json` er den fil brugere vedhæfter en
+bugrapport — så køen gemmer *hændelsen*, aldrig adressen den sendes til, aldrig
+modtagerens svartekst, og `message` er afkortet til 500 tegn, så et site ikke kan
+bestemme hvor stor state-filen bliver.
+
+**To fejl fundet undervejs, begge rettet i koden, ikke i testen.** 1) Min egen
+lås-værktøjsfejl fra P1-41 gentaget i mindre skala: `flushOutbox` regnede
+"skal der gemmes?" som `waiting.length !== list.length`, så et **mislykket forsøg**
+(der tæller et forsøg op på posten) ikke blev gemt — efter en genstart lignede
+alarmen aldrig prøvet. Nu sammenlignes køen før og efter. 2) Alvorligere: loopen
+kaldte `sendWebhook` uden at sige at den gemmer, så den løftede advarsel sagde
+`Nothing resends it` — den ene løgn i en rettelse whose hele point var not at lyve.
+`sendWebhook` har nu et `kept`-flag, og **begge** kalder (loopen og outbox-flushen)
+sætter det, fordi kun de to kan svare på om der virkelig sendes igen.
+
+**Én lås måtte udvides, ikke slækkes** (niende gang): `report.test.js`'e "the four
+pass states are decided in one place" tæller `checkAgeMs(` i `status.js` som
+"dens definition og den ene læser". `queuedAgeMs` (outboxens alder) blev den
+tredje. Tællingen er hævet 2 → 3 **og** en ny lås tilføjet på at
+`queuedAgeMs` klipper fortegnet væk — så outboxens alder kan aldrig blive negativ,
+og en tredje læser kan ikke smyge sig ind. Selve invarianten (ingen flade uden for
+ejeren bestemmer en alder) er urørt.
+
+**Ni nye tests i `test/outbox.test.js`** (registreret i `npm test` — samme fælde som
+P1-10) → **391/391** (382 + 9); audit 0/0; `node --check` alle JS-filer,
+`matrix --check` og `git diff --check` grønne på Node 26.7.0. Den målte kunderejse
+ligger i testen med en rigtig modtager: 503 hele budgettet → 3 POST → alarmen
+gemt → modtageren svarer 200 → næste pass leverer præcis den alarm med
+`measuredAt` fra det pass der målte. **Ingen payload-felt ændret** (kunsten flyttet
+til `webhookBody()`, så loopen og outboxen deler én bygger), ingen exit-kode, ingen
+matrix-række, ingen ny claim, ingen deploy-note nødvendig. Diffen er ~330 linjer;
+**ingen review-agent** — over 30-minutters grænse.
+
+**Beslutningen er ikke gratis, og den står her i specen:** en alarm kan komme
+**sent** (ved næste pass, ikke i det den opstod i) og en kan komme **fordi et senere
+pass fejlede**; den kan aldrig komme hvis loopet er stoppet. Den opgives efter 3
+forsøg i alt eller 30 minutter, og opgivelsen *siges* — en stille drop ville være
+uadskillelig fra en levering. `deskuptime status` viser nu også hvad kanalen stadig
+er skyldt, så det overlever en genstart.
+
 ## Status fra denne iteration (56, P1-40 — ❓ 13 besvaret i kode)
 
 **Hvorfor denne flade:** ❓ 1–3 er stadig ubesvarede, og ❓ 13 lå som det eneste
@@ -204,12 +276,15 @@ linje i `sendWebhook` — og den er bevidst *ikke* bygget i denne iteration, for
 den krævede mere tid end den havde, og fordi den rører den betalte kontrakt.
 
 STATUS: I GANG
-Iteration: 57 — 2026-09-26
-Arbejdsgrene: `ceo/webhook-retry` (P1-41, målt + fix)
-Næste handling: **P1-41 er færdig.** Næste opgave: outbox til betalte
-webhook-alarmer (spec først — se afsnittet ovenfor), ellers ❓ 1–3 hvis besvaret,
-ellers en ny målt opgave på en flad der endnu ikke er målt på de samme
-tal-spørgsmål.
+Iteration: 58 — 2026-09-26
+Arbejdsgrene: `ceo/webhook-outbox` (P1-42, målt + spec + fix)
+Næste handling: **P1-42 er færdig** — spec først, så køen til betalte
+webhook-alarmer er bygget med sine grænser og sin rækkefølge. Næste opgave:
+❓ 1–3 hvis besvaret, ellers en ny målt opgave på en flad der endnu ikke er målt
+på de samme tal-spørgsmål. Kandidater der ikke kræver et valg: en *restart* midt i
+et nedbrud (loopet dør, `wasUp` er skrevet, sitet er stadig nede — hvad siger næste
+pass?), og `watch --once` på cron-vejen med en webhook konfigureret i loopet
+(den vej sender ingen alarmer i dag, og det er ikke skrevet nogen steder).
 
 ## Status fra denne iteration (55, P1-39)
 
@@ -2504,6 +2579,37 @@ først (kapacitet, alder, dedupe, hvad kunden ser mens den venter) — den næst
 målte opgave i køen, ikke en linje i `sendWebhook`.
 
 
+
+### P1-42 — FÆRDIG 2026-09-26 (`ceo/webhook-outbox`) — En alarm der ikke kom af sted, blev væk
+
+**Hvad:** en modtager der svarer `5xx` hele budgettet igennem fik tre forsøg, og så
+var alarmen væk: passet skrev `wasUp: false`, næste pass rejste ingen begivenhed,
+og `state.json` holdt ingen kø. Målt med rigtig loop, rigtigt nedet site og rigtig
+modtager — 3 POST, og 36 s senere igen ingenting.
+
+**Rettelse:** `outbox` i `state.json` (kun hændelsen, aldrig webhook-URL'en), flush
+ved passets start **før** de nye hændelser, og tre grænser der alle låser:
+20 poster (ældste ud), 3 forsøg i alt, 30 minutter. Opgivelsen sættes i ordene.
+`sendWebhook` har fået et `kept`-flag, så advarslen ikke kan lyve om at intet
+sender den igen. Spec: `docs/pro-alerts.md` §2, ny underafsnit.
+
+**Acceptkriterier, alle målte:**
+1. Modtager nede hele budgettet → 3 POST, alarmen i køen, ikke tabt. ✅ målt før
+   (ingenting gemt) og efter (gemt og leveret næste pass)
+2. Næste pass leverer **før** passets egne hændelser, med passets `measuredAt`. ✅
+3. 3 forsøg i alt på tværs af passene, så en død modtager ikke koster et forsøg pr.
+   pass i en halv time. ✅
+4. 20 poster, ældste først. ✅
+5. Dedupe pr. `(url, type)`, og den ældre alarm står tilbage. ✅
+6. 30 min: en alarm der er ældre sendes **aldrig** — kun opgives med en besked. ✅
+7. Hændelsens `message` afkortet til 500 tegn; en håndrediget `outbox` kan kun
+   overleve som felter vi skrev, og webhook-URL'en kan ikke komme i filen. ✅ målt
+   på den gemte JSON
+8. `sendWebhook`-advarslen siger "Kept in the outbox" når kalderen gemmer, og
+   "Nothing resends it" når den ikke gør. ✅ målt begge veje
+9. `deskuptime status` viser hvad kanalen stadig er skyldt. ✅
+10. 9 nye tests + den målte kunderejse med rigtig modtager. ✅ → 391/391
+
 ## ❓ Til Mads
 
 13. ~~Hvad skal et site, vi ikke kan tjekke, gøre ved et pass?~~ **Besvaret i kode 2026-09-26 (P1-40, `ceo/skip-unusable-urls`):** (c) + (b), planens egen anbefaling. En nøgle i `state.json` uden scheme springes over, de øvrige sites fortsætter, nøglen nævnes på hvert pass og på `watch --status`, `status` og i rapporten, og exit 2 beholdes **kun** når intet kunne tjekkes. Målt først: ét `kunde.dk` blandt 25 nøgler dræbte passet med exit 1 og nul tjek. **Valget er ikke gratis, og en nøgle uden adresse er aldrig et nedet site** — den grænse til det andet svar ((a): passet fejler) er én linje i `runPass` plus exit-koden, hvis Mads vil have den. Målingen og koden ligger i afsnittet øverst.
@@ -2551,6 +2657,8 @@ målte opgave i køen, ikke en linje i `sendWebhook`.
 - **Release-note P1-2:** matrixen, README, `--help` og npm-beskrivelsen lover nu `deskuptime report`, men kun en build med kode. Gamle installerede CLI'er kender ikke kommandoen og skriver blot `Unknown command` — ingen eksisterende kundeafhængighed brydes ved merge. ❓ 10 (nyt `v0.2.9-cli`-tag) er stadig det, der gør curl-stien komplet.
 
 - **Release-note P1-40:** Ét navn i overvågningslisten, der ikke er en adresse, behøvede før **standse overvågningen af alle dine øvrige sites**. Før skrev `deskuptime watch --once` en rå Node-stacktrace, exit 1, og **intet** site blev tjekket — fordi værktøjet ville læse *alle* nøgler i `state.json` igennem som adresser inden den første request, så ét `kunde.dk` fra en håndredigering, en rodet restore eller et script endte overvågningen af de 24 andre. Det er den vej cron kører, så brugeren så kun en stacktrace i mailen og ingen alarmer. Nu springes nøglen over, de øvrige sites tjekkes som sædvanligt, og du får én advarsel der navnginer den og siger hvad du kan gøre: `Cannot be checked — not a site that is down: 1 saved URL is not a full address (kunde.dk). The other 2 monitored sites were checked as usual. Fix the key, or drop it: deskuptime unwatch 'kunde.dk'` — samme sætning i `watch --status`, i `status` og i kundenrapporten. **Exit 2 er kun tilbage, når intet overhovedet kunne tjekkes**, så et cron-job kan ikke overse det; en kørsel hvor alle nøgler er gyldige er uændret, tegn for tegn. **En nøgle uden adresse er aldrig et nedet site:** den tæller ikke som `up` i listerne og ikke som `UP` i rapporten, men som *status unknown* med grunden — før skrev en rapport `UP` for en `kunde.dk`, den intet pass nogensinde kan måle. Den tager heller ikke længere en af de tre gratis-pladser, og `deskuptime unwatch 'kunde.dk'` virker igen, så du slipper for at redigere `state.json` — filen der også rummer din licensnøgle.
+
+- **Release-note P1-42:** En alarm, din Slack/Discord/Teams-kanal ikke fik, **kan ikke længere forsvinde**. Før blev hver hændelse sendt i det pass den opstod i, og en modtager der svarer `5xx` hele budgettet igennem fik tre forsøg og så intet: passet havde allerede noteret ændringen, så næste pass rejste ingen ny besked, og intet i loopen sendte den igen. Kanalen hørte intet om nedbruddet og fik så en `is UP` om en genopretning den aldrig blev fortalt om. Nu gemmes en alarm der ikke kom af sted, og **næste pass sender den igen — før de nye alarmer**, så din kanal læser dem i den rækkefølge de skete i. Alarmen beholder sit eget målingstidspunkt, så en sen levering ser ud som sen og ikke som frisk. **Grænserne er med vilje:** 3 forsøg i alt på tværs af passene, højst 20 ventende alarmer og 30 minutter — en kanal der var nede længe nok til at den gamle fejl er rettet, får ikke en gammel `is DOWN` i dag. **Og opgivelsen siges den:** `Giving up on an alert that was never delivered: … Your channel received nothing about it. Check the webhook URL and that the receiver is up.` — en stille drop ville være uadskillelig fra en levering. `deskuptime status` viser nu også hvad kanalen stadig er skyldt, så det overlever en genstart. **Webhook-URL'en skrives aldrig til disk** (den er næsten altid et token), og `message` afkortes til 500 tegn. **Ingen payload-felt er ændret**, så en eksisterende adapter er uberørt.
 
 ## Deploy-/release-noter
 
@@ -2646,3 +2754,4 @@ målte opgave i køen, ikke en linje i `sendWebhook`.
 - **Iteration 13 (P1-1 del B):** ❓ 9 blev besvaret i kode frem for i et spørgsmål. `deskuptime status` har nu fem tilstande, hvor `unverified` betyder "licensserveren svarer ikke, nøglen er aldrig afslået" — før hed den `invalid`, hvilket læses som en død nøgle og er den direkte vej til et dobbeltkøb. Tilstanden viser aldrig købslinket (kunden har betalt), mens `invalid` nu alene betyder "serveren afslog nøglen" og fortsat er den eneste tilstand med kasse. Undervejs fundet en fælde i min egen ændring: `isPro()` brugte `status !== 'invalid'`, så den nye tilstand ville automatisk have givet Pro; den er nu en allow-liste over `active`/`cached` plus legacy-state uden status-felt, dækket af en test. Samtidig blev npm-beskrivlingen gjort til den tredje genererede overflade fra `src/features.js` — den nævner Pro, prisen og de byggede kanaler, og kan ikke love en kanal, der ikke findes — og to nye tests i `test/matrix.test.js` låser ét købsflow pr. side (alle Stripe-links er kontraktens; kun de flader, der skal kunne købe, har et). Målingen før rettelsen viste 12 forekomster af kontraktens link og 0 af andre, så intet købsflow var brudt — kun usikkert. +5 tests → **118/118**; mutationstest (skriv `UNVERIFIED` tilbage som `INVALID`) giver 1 fejl i licenstesten. `docs/license-lifecycle.md` §2 er skrevet om til de fem tilstande. Node 26.7.0: `npm ci --ignore-scripts`, `npm test` 118/118, `npm run audit` 0/0, `node --check` alle JS-filer, `sh -n`/`bash -n`, `matrix --check`, ingen tabs og `git diff --check` grønne. Commit `eb2b134` på `ceo/status-unverified`, fast-forward-merget til `main` og pushet 2026-09-25. Næste iteration: P2-1 (deterministiske tests) eller P1-2 del A (spec for bureau-rapport/status-side).
 - **Iteration 14 (P2-1 del A):** Målingen først fandt fire live-`example.com`-tests i `test/test.js`, en vakuum-assertion i watch-testen (promise'en resolver `null` både ved "vi dræbte den" og "den døde alene") og en Action, der **tæller uden at verificere** — `[]`, manglende `healthy` eller færre resultater end URL'er gav `down=0` og grøn kørsel. Da TLS-fixturen kom på plads, faldt en reel P0-fejl ud: `ssl.js` sendte SNI som IP-literal, hvilket Node 24+ afviser med en exception, så intet HTTPS-site overvåget på IP-adresse fik SSL-dage (og Action'en ville have meldt det sunde site som SSL-fejl). Rettet med `net.isIP`-gate. `test/test.js` er nu helt uden live-netværk (lokal HTTP-fixture + selvsigneret cert pr. kørsel via `openssl`, springer over uden openssl), watch-testen kan fejle, og Action'en validerer array, resultatantal og boolsk `healthy` før tællingen, med exit 1 og `::error::` ellers. +6 tests, heraf 5 gennem en stub-CLI der sender payloads den rigtige CLI ikke producerer, plus exit-2/exit-0-verifikation af fejlvejen. Node 26.7.0: `npm ci --ignore-scripts`, `npm test` **124/124**, `npm run audit` 0/0, `node --check`, `sh -n`/`bash -n` (også det udpakkede action-script), YAML tab-fri og `git diff --check` grønne. Mutationstest: genindsat `servername` → 2 fejl i 16; slettet valideringsblok → 2 fejl i 32. Næste iteration: P1-2 del A eller P2-1 del B.
 - **Iteration 14, del 2 (CI-smoke):** Efter merge af del A blev den sidste live-afhængighed i gaten lukket: `ci.yml`'s smoke-step tjekkede `https://example.com`, så et site Mads ikke ejer kunne gøre hele repoets gate rød. Step'en kører nu en lokal fixture med både en UP- og en DOWN-route og fire `jq -e`-assertions, så jq både kan fejle og faktisk fejler på en DOWN. Negativ test lokalt: med `.[1].healthy == true` i stedet for `false` fejler step'en med jq exit 1 under `set -e`. `npm test` 124/124, `npm run audit` 0/0, `node --check`, YAML-parse af alle fem workflows (PyYAML) og `git diff --check` grønne på Node 26.7.0.
+- **Iteration 58 (P1-42, målt + spec + fix):** ❓ 1–3 ubesvarede, så iterationen tog den opgave P1-41 lod ligge: modtageren nede **gennem hele budgettet**. Målt først med rigtig loop, rigtig state-fil, lokalt site på 500 og rigtig modtager på 503: 3 POST, og 36 s senere igen ingenting (`state.json`: `urls, license` — ingen kø), fordi passet latched `wasUp: false`. Spec **først** i `docs/pro-alerts.md` §2 (kapacitet 20 ældste-først, alder 30 min, 3 forsøg i alt, dedupe pr. `(url, type)` med den ældre tilbage, og røde regel for hvad der aldrig gemmes: webhook-URL, modtagerens svartekst; `message` → 500 tegn). **Fix:** `outbox` i state, flush ved passets start **før** nye hændelser, tre grænser der låser, opgivelsen sagt i ordene, `sendWebhook(…, { kept })` så advarslen ikke kan lyve, `webhookBody()` som den ene bygger af payloaden (ingen felt ændret), og `deskuptime status` viser det kanalen er skyldt. **To fejl fundet undervejs, rettet i koden:** `flushOutbox` gemte ikke et mislykket forsøg (tællede længde, ikke indhold — femte gang i mit arbejde at en måle-/låsfejl så ud som dækning), og loopen sagde `Nothing resends it` mens den gemte alarmen. **Én lås udvidet, ikke slækket** (niende gang): `checkAgeMs`-læseren 2 → 3 i `status.js` fordi `queuedAgeMs` er der, **og** en ny lås på at den klipper fortegnet væk; invarianten urørt. 9 nye tests i `test/outbox.test.js` (lagt til i `npm test`) inkl. den målte kunderejse med rigtig modtager (503 hele budgettet → gemt → 200 → leveret med `measuredAt`) → **391/391** (382 + 9); audit 0/0; `node --check`, `matrix --check`, `git diff --check` grønne på Node 26.7.0. Ingen payload-felt, exit-kode, matrix-række eller claim ændret; ingen deploy-note nødvendig. **Næste:** ❓ 1–3, ellers en målt opgave — kandidater uden valg: en restart midt i et nedbrud, og `watch --once` på cron-vejen med en webhook i loopet.
