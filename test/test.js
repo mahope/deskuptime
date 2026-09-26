@@ -100,7 +100,9 @@ test('cli: --help lists commands and does not leak template bugs', async () => {
   assert.match(stdout, /check <urls/);
   assert.match(stdout, /watch <url>/);
   assert.match(stdout, /watch <url> --once\s+Run one monitoring pass and exit/);
-  assert.match(stdout, /watch --status\s+Show status without network checks/);
+  // The help has to say that this command reports *saved* data and marks a pass
+  // that is no longer current — the two facts a reader of the output needs.
+  assert.match(stdout, /watch --status\s+Saved status, no network calls \(marks a pass older than \d+ d as stale\)/);
   assert.match(stdout, /--once exits 0 when all URLs are healthy, 2 when any is DOWN, and 1 for invalid usage/);
   assert.match(stdout, /Node 24\+/);
   assert.doesNotMatch(stdout, /Node 18\+/);

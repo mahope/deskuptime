@@ -17,7 +17,7 @@ import { buildReport, renderReportJson, renderReportMarkdown } from './report.js
 import { readFileSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
-import { invalidHttpUrls } from './status.js';
+import { invalidHttpUrls, readEntry, STALE_AFTER_DAYS } from './status.js';
 import { safeText } from './display.js';
 import { DEFAULT_WINDOW_DAYS, HISTORY_DAYS, loadHistory } from './history.js';
 import { FREE, PRODUCT, renderHelpPro } from './features.js';
@@ -43,7 +43,7 @@ USAGE:
   deskuptime headers <url>      Redirect chain, HTTPS enforcement + security headers
   deskuptime watch <url> [--interval 300] [--webhook URL]  Monitor in background (free: up to ${FREE.urlLimit} URLs)
   deskuptime watch <url> --once                      Run one monitoring pass and exit
-  deskuptime watch --status                         Show status without network checks
+  deskuptime watch --status                         Saved status, no network calls (marks a pass older than ${STALE_AFTER_DAYS} d as stale)
   deskuptime report [--title "Client"] [--days 30] [--json]  Client-ready uptime report (Pro)
   deskuptime activate <key>     Unlock Pro with your license key
   deskuptime deactivate         Free this machine's Pro seat (${PRODUCT.machines} machines per license)
@@ -440,10 +440,17 @@ if (command === 'status') {
     console.log(`  If you have not bought yet: ${BUY_URL}`);
   }
   console.log(`Monitored URLs (${urls.length}):`);
+  // Same reading as `watch --status` and the client report, so the two lists
+  // cannot say different things about the same state file: a stale pass is
+  // marked with its age, a certificate inside the warning window is marked, and
+  // an unusable `sslValidDays` reads as unknown instead of printing itself.
   for (const u of urls) {
-    const e = state.urls[u];
-    const up = e.wasUp === true ? '✅' : e.wasUp === false ? '❌' : '·';
-    console.log(`  ${up} ${safeText(u, { max: 0 })}${e.lastStatus ? ' (' + safeText(e.lastStatus, { max: 0 }) + ')' : ''}${e.sslValidDays != null ? ' — SSL ' + e.sslValidDays + 'd' : ''}`);
+    const e = readEntry(state.urls[u]);
+    const up = e.verdict === 'up' ? '✅' : e.verdict === 'down' ? '❌' : '·';
+    const code = e.statusCode === null ? '' : ` (${e.statusCode})`;
+    const ssl = e.sslNote ? ` — ${e.sslNote}` : '';
+    const stale = e.staleNote ? ` ⚠️ ${e.staleNote}` : '';
+    console.log(`  ${up} ${safeText(u, { max: 0 })}${code}${ssl}${stale}`);
   }
   process.exit(0);
 }

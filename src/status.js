@@ -71,6 +71,64 @@ export function checkAgeDays(lastChecked, now = new Date()) {
   return Math.max(0, Math.floor(age / MS_PER_DAY));
 }
 
+/**
+ * One reading of a state-file entry, shared by every surface that prints one.
+ *
+ * Three facts about a monitored site are all in `state.urls[url]`: whether the
+ * last pass was up, which status code it saw, and how many days the certificate
+ * has left. Two surfaces print that entry — `deskuptime watch --status` and the
+ * URL list on `deskuptime status` — and each used to decide those facts on its
+ * own instead of asking the rules above. Measured on a state file, that gave:
+ *
+ *   - a pass from 41 days ago printing `✅ up` with no age, while the client
+ *     report built from the same file said `⚠️ stale — last check 41 d ago`;
+ *   - a certificate with 9 days left printing `SSL 9d` in plain text, while
+ *     `check`, `watch` and the report all warn inside the 14-day window;
+ *   - `sslValidDays` interpolated straight into the terminal, so escape bytes in
+ *     a hand-edited or restored state file printed as themselves (`^[[2J`), and
+ *     an unusable value printed as a bare `SSL -2d` where the report shows `—`.
+ *
+ * So the claims are decided here, once, and only the layout is left to each
+ * surface: a caller picks its own icon and separator and cannot re-decide
+ * whether a certificate is expiring or how old a pass is.
+ *
+ * Every value returned is a fixed word or a checked number — nothing from the
+ * state file is carried through as text — so an unusable field can only become
+ * `null`, never a claim the caller did not check.
+ */
+export function readEntry(entry, { now = new Date() } = {}) {
+  const value = entry && typeof entry === 'object' ? entry : {};
+  // Same rule as the report's SSL cell: only a known, finite, non-negative day
+  // count is a number of days. A negative value is a corrupt or hand-edited
+  // state file, not a certificate that expired — and a string, a boolean or
+  // NaN is not a day count either.
+  const sslDays = Number.isFinite(value.sslValidDays) && value.sslValidDays >= 0
+    ? value.sslValidDays
+    : null;
+  // A field that is present but unreadable is reported as unknown, the same as
+  // the report's `—`. A field that was never there says nothing at all, so
+  // plain-HTTP monitoring does not grow a column of dashes.
+  const sslUnknown = sslDays === null && value.sslValidDays !== undefined && value.sslValidDays !== null;
+  const stale = isCheckStale(value.lastChecked, now);
+  const ageDays = checkAgeDays(value.lastChecked, now);
+
+  return {
+    verdict: value.wasUp === true ? 'up' : value.wasUp === false ? 'down' : 'unknown',
+    statusCode: Number.isInteger(value.lastStatus) ? value.lastStatus : null,
+    sslDays,
+    // Without a leading separator: the two surfaces punctuate differently, but
+    // neither can change what is being said about the certificate.
+    sslNote: sslDays === null
+      ? (sslUnknown ? 'SSL —' : '')
+      : isSslExpiringSoon(sslDays) ? `SSL ⚠️ ${sslDays}d — renew soon` : `SSL ${sslDays}d`,
+    ageDays,
+    stale,
+    staleNote: stale
+      ? (ageDays === null ? 'stale — last check unreadable' : `stale — last check ${ageDays} d ago`)
+      : '',
+  };
+}
+
 export function isHttpUrl(value) {
   try {
     const url = new URL(value);

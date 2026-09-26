@@ -17,7 +17,7 @@ import { readFileSync, writeFileSync, mkdirSync, existsSync, renameSync, unlinkS
 import { dirname, posix, win32 } from 'path';
 import { homedir } from 'os';
 import { createHash, randomUUID } from 'crypto';
-import { assertValidHttpUrls, SSL_WARN_DAYS } from './status.js';
+import { assertValidHttpUrls, readEntry, SSL_WARN_DAYS, STALE_AFTER_DAYS } from './status.js';
 import { recordPass } from './report.js';
 import { safeText } from './display.js';
 import { loadHistory, pruneHistory, recordHistoryPass, saveHistory } from './history.js';
@@ -242,6 +242,8 @@ export function printPass(pass, { alertUnchangedDown = true } = {}) {
   }
 }
 
+const VERDICT_ICON = { up: '✅ up', down: '🚨 down', unknown: '❔ unknown' };
+
 export function printStatus(options = {}) {
   const state = loadState(options);
   const entries = Object.entries(state.urls);
@@ -249,12 +251,36 @@ export function printStatus(options = {}) {
     console.log('No URLs monitored. Start with: deskuptime watch <url>');
     return;
   }
-  console.log(`📋 ${entries.length} monitored URL(s):\n`);
-  for (const [url, entry] of entries) {
-    const status = entry.wasUp === true ? '✅ up' : entry.wasUp === false ? '🚨 down' : '❔ unknown';
-    const ssl = entry.sslValidDays != null ? `, SSL ${entry.sslValidDays}d` : '';
-    const checked = entry.lastChecked ? ` @ ${entry.lastChecked}` : '';
-    console.log(`  ${status}  ${safeText(url, { max: 0 })} (${safeText(entry.lastStatus, { fallback: '—', max: 0 })}${ssl})${checked}`);
+  // readEntry() is the same reading `check`, `watch` and the client report use,
+  // so a pass from six weeks ago cannot print here as a site that is up now,
+  // and a certificate inside the warning window cannot print as routine. This
+  // command makes no request — which is exactly why the age of the last pass is
+  // part of what it says.
+  const now = options.now instanceof Date ? options.now : new Date();
+  const rows = entries.map(([url, entry]) => ({ url, entry, ...readEntry(entry, { now }) }));
+
+  console.log(`📋 ${rows.length} monitored URL(s):\n`);
+  for (const row of rows) {
+    const code = row.statusCode === null ? '—' : row.statusCode;
+    const ssl = row.sslNote ? `, ${row.sslNote}` : '';
+    // lastChecked is state-file text, so it is flattened like the URL beside it.
+    const checked = row.entry.lastChecked ? ` @ ${safeText(row.entry.lastChecked, { max: 0 })}` : '';
+    const stale = row.staleNote ? ` ⚠️ ${row.staleNote}` : '';
+    console.log(`  ${VERDICT_ICON[row.verdict]}  ${safeText(row.url, { max: 0 })} (${code}${ssl})${checked}${stale}`);
+  }
+
+  // A stale site is the reader's most consequential line and a per-row marker
+  // is easy to miss in a list, so the dead ones are named — the same "say it
+  // once, out loud" rule the client report follows. This is also the only
+  // command that can tell the user their *monitoring* stopped, which is the
+  // question this command exists to answer.
+  const staleRows = rows.filter(row => row.stale);
+  if (staleRows.length > 0) {
+    console.log(`\n⚠️  No monitoring pass in the last ${STALE_AFTER_DAYS} days for ${staleRows.length} of ${rows.length} site(s) — the numbers above are that old, not now:`);
+    for (const row of staleRows) {
+      console.log(`    ${safeText(row.url, { max: 0 })} (last pass ${row.ageDays === null ? 'at an unreadable time' : `${row.ageDays} d ago`})`);
+    }
+    console.log('    Monitoring has probably stopped. Run: deskuptime watch <url> --once');
   }
 }
 
