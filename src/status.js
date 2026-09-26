@@ -190,6 +190,64 @@ export function readRedirectTarget({ url = '', finalUrl = null } = {}) {
   };
 }
 
+/** A page title, but only a real one: a string with something in it. */
+function titleText(value) {
+  return typeof value === 'string' && value.trim() !== '' ? value.trim() : null;
+}
+
+/**
+ * What a `content_changed` alert can honestly say.
+ *
+ * Measured 26/9 with the real CLI and a real receiver: a page whose bytes change
+ * without changing length — a price, a name, a CSRF token, a timestamp of the
+ * same width — produced
+ *
+ *     🔄 https://kunde.dk/ content changed (124 → 124 bytes)
+ *
+ * The claim and its own evidence contradict each other. The change is real — the
+ * hashes differ, and that is what fired the event — but the one number printed
+ * beside it says the page is byte-for-byte the size it was, which is the reading
+ * a bureau takes to mean "nothing changed". A same-size change is not an edge
+ * case: it is the common case, and it is the case a customer is most likely to
+ * want to hear about, because a page that still renders at its old size is often
+ * a page that is serving a broken deploy.
+ *
+ * So the size is only evidence when the size moved. When it did not, the alert
+ * says that plainly instead of printing the same number twice, and it names the
+ * one part of the page DeskUptime reads anyway: the `<title>`. `content.js` has
+ * extracted the title on every pass since the beginning and no surface used it,
+ * so the title is a measurement that costs nothing and is thrown away — and it is
+ * the human-readable part of the change. A title that changed is the strongest
+ * signal here, because a title is what a customer would recognise in a screenshot.
+ *
+ * Returns the message plus whether the title actually moved, so the caller does
+ * not re-derive it. A page with no readable `<title>`, or one whose title did not
+ * change, gets the honest size sentence rather than a guess.
+ */
+export function readContentChange({ previousLength = null, length = null, previousTitle = null, title = null } = {}) {
+  const before = titleText(previousTitle);
+  const after = titleText(title);
+  const titleChanged = before !== null && after !== null && before !== after;
+  const sameSize = Number.isFinite(previousLength) && Number.isFinite(length) && previousLength === length;
+
+  if (sameSize) {
+    return {
+      titleChanged,
+      message: titleChanged
+        ? `content changed — page title: "${before}" → "${after}" (same size, ${length} bytes)`
+        : `content changed — same size (${length} bytes): the page's bytes differ`,
+    };
+  }
+
+  // The size moved, or one side of it is not a number we can print. The old
+  // wording, unchanged, including the `?` for a baseline with no length: it is
+  // correct in every case where the numbers actually differ.
+  return {
+    titleChanged,
+    message: `content changed (${Number.isFinite(previousLength) ? previousLength : '?'} → ${Number.isFinite(length) ? length : '?'} bytes)`,
+  };
+}
+
 /** The three states a judged security header can be in. */
 export const SECURITY_HEADER = {
   /** The site sent the header with a value. */

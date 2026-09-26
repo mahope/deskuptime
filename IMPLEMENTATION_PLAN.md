@@ -1,9 +1,44 @@
 STATUS: I GANG
-Iteration: 50 — 2026-09-26
-Arbejdsgrene: `ceo/webhook-contract` (P1-34, målt + fix)
-Næste handling: **P1-34 er færdig.** Den betalte webhook var den **eneste** flad, der aldrig var målt med rigtig CLI — `test/webhook.test.js` skrev alle otte events i hånden, så det kodevej-loopen reelt går (rigtig `runPass` → rigtig `sendWebhook` → rigtig modtager) var utestet. Målt med rigtig CLI, rigtig watch-loop, rigtig licens-stub og rigtig modtager: kanalen fik **seks** typer, `docs/pro-alerts.md` §2 — kontrakten et Slack/Discord-adapter skrives imod — navngav **fem**. `redirect` (P1-27's cross-host-hændelse) stod i hverken enum'en, payload-eksemplet eller `transition`-afsnittet, og de to felter der bærer kendsgyningen (`finalUrl`, `offHostRedirect`) stod heller ikke i eksemplet. Nu: ét kodeejet vocabulary (`EVENT_TYPES`/`WEBHOOK_EVENT_TYPES`), specen rettet, og en målt lås så de to ikke kan glide fra hinanden igen. Næste opgave: ❓ 1–3, eller en ny målt opgave.
+Iteration: 51 — 2026-09-26
+Arbejdsgrene: `ceo/content-change-truth` (P1-35, målt + fix)
+Næste handling: **P1-35 er færdig.** Den betalte `content_changed`-alarm modsagde sig selv i sit **mest almindelige** tilfælde: en side hvis indhold ændrer sig uden at ændre størrelse — en pris, et navn, et CSRF-token, et tidsstempel i samme bredde — skrev `🔄 … content changed (124 → 124 bytes)`. Påstanden og dens eget bevis var uforenelige, og det tal der stod ved siden af sig var præcis det læseren bruger til at dømme "inget ændret". Samme størrelse er ikke et hjørne-case, det er det normale skift, og det er det skift en kunde først og fremmest vil høre om. Rettelsen: **størrelsen er kun bevis når den flytter sig**; når den ikke gør, siger alarmen det i ord, og navngiver den ene del af siden DeskUptime alligevel læser — `<title>`, som `content.js` har målt på hvert pass siden starten og ingen flade har brugt. Fire tilfælde målt med rigtig CLI, rigtig `runPass` og rigtig state-fil før *og* efter: de to der skal ændre sætning gør det, og de to der skal være tegn for tegn som før (`90 → 104 bytes`, `? → 104 bytes`) er uændrede. Næste opgave: ❓ 1–3, eller en ny målt opgave.
 
-## Status fra denne iteration (50, P1-34)
+## Status fra denne iteration (51, P1-35)
+
+**Hvorfor denne flade:** `content changed` er den *eneste* alarm i pakken, der siger noget om indholdet frem for om tilgængeligheden, og den står i npm-beskrivelsen som første evne ("uptime, SSL expiry and content-change alerts"). Den går ud i alle tre betalte kanaler — terminal, desktop-notification og webhook-payloadens `message` — så dens sætning er det, en bureau læser og en kunde ser.
+
+**Målt først, nul kode ændret.** Rigtig `deskuptime watch <url> --once` to gange mod en rigtig lokal fixture, hvis side læses fra en fil pr. request, så byte-længden kan holdes *konstant* mens indholdet skifter. Pass 1 (baseline), pass 2 (uændret side → `✓ all monitored sites OK`), pass 3 (samme længde, anden tekst og anden titel):
+
+```
+[15:55:09 PM] 🔄 http://127.0.0.1:5904/ content changed (124 → 124 bytes)
+```
+
+Ét tal på hver side af en pil, og de er ens. Alarmen siger "indholdet ændrede sig" og viser et bevis, der siger det modsatte. Til sammenligning: de tre øvrige alarmer har hver ét tal der peger på noget, der faktisk skete — `is DOWN — HTTP 503`, `SSL expires in 3 days`, `answered by another host`. Denne ene bar et tal, der ikke peger på noget.
+
+**Måleforhindring, målt og noteret (anden gang, samme som P1-34):** `test/fixtures/license-stub.mjs` erstatter `globalThis.fetch` **helt** og svarer 500 på alt uden for `/activate|/validate|/deactivate`, så den kan ikke måle en kommando der selv foretager requests. Første kørsel endte i `baseline recorded: DOWN — other side closed` fordi fixture-serveren døde med en fejl, og `report` sagde `needs an active Pro license` fordi stub'en aldrig blev nået. Målingen blev gentaget med en **gennemløbende** stub, der kun svarer på de tre licens-endpoints. Dette er nu den andre iteration i træk, der spoler på den samme fælde — det er grunden til at næste iteration bør tilføje et `passthrough`-scenario til fixture'en i stedet for at skrive en ny stub i /tmp igen.
+
+**Rettelsen:** én ejer, `readContentChange()` i `src/status.js`, beslutter sætningen udelukkende fra de facts passet har. Størrelsen er bevis **kun når den flytter sig**; ellers siger alarmen `content changed — same size (124 bytes): the page's bytes differ`, og når `<title>` flyttede sig, `content changed — page title: "Forside A" → "Forside B" (same size, 124 bytes)`. Titlen er ikke en tilføjelse: `content.js` har kaldt `extractTitle()` på hvert pass siden den første commit, `engine.js` har ført resultatet hele vejen, og **ingen forbruger læste det** — den var en måling, der blev smidt væk. `runPass` gemmer nu `lastTitle`, trimmet, og kun når siden stadig har en læsbar titel, så et pass der ikke kunne læse en ikke udsletter den sidste rigtige.
+
+**Målt efter, alle fire tilfælde med rigtig CLI:**
+
+```
+A  titlen flyttede, længden samme   →  content changed — page title: "Forside A" → "Forside B" (same size, 124 bytes)
+B  ingen <title>, længden samme     →  content changed — same size (66 bytes): the page's bytes differ
+C  længden flyttede sig            →  content changed (90 → 104 bytes)                     ← tegn for tegn som før
+D  håndredigeret lastTitle: 42     →  exit 0, ingen `content_changed`, ingen crash
+```
+
+C og D er de to, der skulle være uændrede, og de er det. Tilfælde A er det nye: det er det skift, der før var umuligt at bruge.
+
+**Låsen er målt, ikke hævdet.** Én strukturel lås + to adfærdstester i `test/status.test.js` (filen er allerede i `npm test`). Låsen kræver at `watch.js` spørger `readContentChange(` ved navn, forbyder `content changed (` i loopen, og tæller at kun ejeren skriver sætningen (to former, én kilde). Adfærdstesten tager fire rigtige `runPass` med forskellige facts og forventer den målte sætning hver gang. **Tre mutationer målt, alle døde:** den gamle sætning genindsat i loopen (5 fejl), `titleChanged` altid `false` (1 fejl), og `sameSize` gjort alt sand (3 fejl — de to bevarede tilfælde C og `? → 104 bytes` dør med).
+
+**Ingen ny claim, ingen matrix-række, ingen exit-kode, ingen ny payload-nøgle, intet README/`--help`-rør.** `message` er den eneste overflade der ændrer sig, og §2's payload-eksempel viser en `down`-besked, så kontrakten i `docs/pro-alerts.md` er uændret. Webhookens ti felter og seks typer sendes præcis som før. `state.json` får ét nyt felt pr. URL (`lastTitle`, en kort streng) — samme fil rummer allerede `lastHash` og `lastContentLength`, så den grænser sig selv. Ingen deploy-note nødvendig (CLI-repo uden live-deploytarget).
+
+## Status fra tidligere iteration (50, P1-34)
+
+**P1-34 (kort):** Den betalte webhook var den **eneste** flad, der aldrig var målt med rigtig CLI. Den betalte webhook var den **eneste** flad, der aldrig var målt med rigtig CLI — `test/webhook.test.js` skrev alle otte events i hånden, så det kodevej-loopen reelt går (rigtig `runPass` → rigtig `sendWebhook` → rigtig modtager) var utestet. Målt med rigtig CLI, rigtig watch-loop, rigtig licens-stub og rigtig modtager: kanalen fik **seks** typer, `docs/pro-alerts.md` §2 — kontrakten et Slack/Discord-adapter skrives imod — navngav **fem**. `redirect` (P1-27's cross-host-hændelse) stod i hverken enum'en, payload-eksemplet eller `transition`-afsnittet, og de to felter der bærer kendsgyningen (`finalUrl`, `offHostRedirect`) stod heller ikke i eksemplet. Nu: ét kodeejet vocabulary (`EVENT_TYPES`/`WEBHOOK_EVENT_TYPES`), specen rettet, og en målt lås så de to ikke kan glide fra hinanden igen. Næste opgave: ❓ 1–3, eller en ny målt opgave.
+
+## Status fra tidligere iteration (50, P1-34)
 
 **Hvorfor denne flade:** Webhook er den eneste overflade en *maskine* læser, og `docs/pro-alerts.md` §2 er den eneste beskrivelse af den, kunden kan skrive en kanal imod. Alt andet i rækken P1-13→P1-33 var menneskeudskrift; her er fejltypen den modsatte: **ikke at noget ligner forkert, men at der er en type kunden aldrig har hørt om.** Den kommer præcis i det tilfælde, der betaler sig bedst — et udløbet kunde-domæne der er parkeret, et hijacket domæne der peger på en phishing-side, en tastefejl der lander på registrarens side. HTTP-koden er 200, så uden `redirect`-typen nåede alle tre som et grønt `up`.
 
@@ -115,7 +150,7 @@ Dette offentlige repo leverer den gratis, fuldt brugbare DeskUptime-CLI (MIT). D
 Den aktuelle gate-definition er registreret her:
 
 - Root: `npm ci --ignore-scripts` skal lykkes med den committede lockfil.
-- Root: `npm test` (334 tests, 334 passed på Node 26.7.0 efter P1-31: 329 + 5 nye tests om de fire pass-tilstande, ejeren og dens sætning på alle tre flader; tællet stiger med hver målte iteration, så læs tallet herfra `npm test` selv). **Bemærk:** på en maskine med kun Node 22 fejler de 7 installtests + action-testen, fordi `install.sh` og `action.yml` korrekt kræver Node 24+; brug den installerede `PATH`-node (26.7.0) — på Mads' maskine `/opt/homebrew/opt/node@26/bin/node` — ellers er gate ikke grøn af miljøårsager.
+- Root: `npm test` (349 tests, 349 passed på Node 26.7.0 efter P1-35: 346 + 3 nye tests om `content_changed`-sætningen, dens ejer og titlen der bevares; tællet stiger med hver målte iteration, så læs tallet herfra `npm test` selv). **Bemærk:** på en maskine med kun Node 22 fejler de 7 installtests + action-testen, fordi `install.sh` og `action.yml` korrekt kræver Node 24+; brug den installerede `PATH`-node (26.7.0) — på Mads' maskine `/opt/homebrew/opt/node@26/bin/node` — ellers er gate ikke grøn af miljøårsager.
 - Root: `npm run audit` skal rapportere 0 sårbarheder.
 - Root: `npm run lint` findes ikke i `package.json`; rapporteres som manglende gate, ikke som grønt.
 - Root: `npm run build` findes ikke i `package.json`; der er ingen JS-build/typecheck-script.
@@ -1790,6 +1825,29 @@ Rettelsen: `windowSummary()` (src/history.js) får `lastChecked` og skelner *ind
 **Fejl i mine egne tests, målt og rettet:** den nye adfærdstest lukkede modtageren *efter* assertionerne, så mutationen "loopet sender ikke `redirect`" hang i 180 s med en lyttende server i stedet for at blive rød. Modtageren lukkes nu i `finally` i begge nye tests; samme mutation dør på 3,1 ms. P2-1's vakuum-assertion-klasse i en ny udgave: en fejl, der ikke kan rapporteres, er værre end ingen fejl.
 
 - **Release-note P1-34:** Hvis du har bygget en Slack-, Discord- eller egen webhook-modtager ud fra `docs/pro-alerts.md`, så er der **én** hændelsestype, du kan møde, som ikke stod i spec'en. Når et kunde-domæne udløber og bliver parkeret — eller bliver hijacket og peger på en phishing-side — eller en tastefejl lander på registrarens "mente du"-side, svarer serveren normalt med HTTP 200, og det første du så var: **et grønt `up` om kundens site**. Nu kommer den som `type: "redirect"` med beskeden *"answered by another host — the response came from …, not …"*, plus to additive felter, `finalUrl` (hvor svaret faktisk kom fra) og `offHostRedirect` (`true` præcis når det ikke er den vært, du bad om — `:80`/`:443`-varianter af samme vært er ikke cross-host). **Bemærk at typen ikke er en fejl:** koden er 200, så en alarm dér ville være en falsk alarm på et sundt netværk — en kanal skal **vise** beskeden, ikke melde nedbrud. Beskeden sendes **én** gang pr. skiftende vært, ikke pr. pass, så et domæne der bliver liggende parkeret ikke fylder din kanal. Spec'en, din kanal er skrevet imod, er rettet, og **payloaden er ellers uændret** — de ti felter, de seks typer, `timestamp` som leveringstid og `transition` som læst i dag. Fremtidige tilføjelser kan ikke komme uden at stå i specen: en type i koden uden en linje i §2 giver en rød gate.
+
+### P1-35 — FÆRDIG 2026-09-26 — Et skift af samme størrelse må ikke modsige sig selv (`ceo/content-change-truth`)
+
+**Begrundelse:** `content changed` er den eneste alarm i pakken, der siger noget om *indhold* frem for tilgængelighed, og den er første evne i npm-beskrivelsen. Målt med rigtig CLI og en fixture hvis byte-længde aldrig ændrer sig: `🔄 … content changed (124 → 124 bytes)`. Påstanden og dens eget bevis modsagde hinanden, og et tal der står ens på begge sider af en pil er præcis det, en bureau-læser bruger til at dømme "inget ændret". Samme størrelse er det **normale** skift (pris, navn, CSRF-token, tidsstempel i samme bredde) og det mest værdifulde at blive varslet om. Samtidig: `extractTitle()` har kørt på hvert pass siden første commit, `engine.js` har ført titlen hele vejen, og ingen forbruger læste den.
+
+**Acceptkriterier:**
+
+1. Rigtig CLI, rigtig `runPass`, rigtig state-fil, målt **før** ændring, med optaget output. — ✅ målingen i toppen af planen
+2. En alarm med uændret størrelse trykker ikke det samme tal to gange, men siger at størrelsen er uændret og at bytene er forskellige. — ✅ `content changed — same size (66 bytes): the page's bytes differ`
+3. En flyttet `<title>` navngives, fordi den er den menneskelæselige del af skiftet. — ✅ `content changed — page title: "Forside A" → "Forside B" (same size, 124 bytes)`
+4. De tilfælde hvor størrelsen **flytter** sig er tegn for tegn uændrede, inklusive `?` for en baseline uden længde. — ✅ målt `90 → 104 bytes` og `? → 104 bytes`
+5. Ét sted ejer sætningen; strukturel lås forbyder at loopen bygger den selv, og kun ejeren må skrive den. — ✅ lås i `test/status.test.js`
+6. En håndredigeret `lastTitle` (ikke-streng, tom, `null`) giver ingen påstand og ingen crash. — ✅ målt exit 0; låst i adfærdstesten
+7. `lastTitle` bevares på tværs af passer, trimmet, så et senere skift stadig kan navngive den gamle side. — ✅ `Forside B` gemt som `'Forside B'`, ikke `'  Forside B  '`
+8. Gate grøn; ingen eksisterende lås rettet. — ✅ 349/349 (346 + 3), audit 0/0, `node --check`, `matrix --check`, `git diff --check` grønne på Node 26.7.0
+
+**Resultat:** Kun `message` ændrer sig. Ingen ny payload-nøgle (de ti felter og seks typer sendes præcis som før, låst af P1-34's kontrakt-test), ingen ny claim, ingen matrix-række, ingen exit-kode, intet README/`--help`-rør. `state.json` får ét nyt kort streng-felt pr. URL. **Tre mutationer målt, alle døde:** gammel sætning i loopen (5 fejl), `titleChanged` altid `false` (1 fejl), `sameSize` alt sand (3 fejl — de to bevarede tilfælde dør med).
+
+**Fejl i min egen måling, fundet og rettet:** første kørsel skrev fixture-serveren til `page-live` (manglede `.html`), så den døde med `ENOENT` og `watch` meldte `baseline recorded: DOWN — other side closed` — et **uventet nedbrud i mit eget fixture**, ikke i værktøjet. Anden fejl: `report` krævede en Pro-licens, jeg ikke havde aktiveret. Begge rettet og genmålt; noteret fordi en agent der springer over login-målingen ville konkludere at nedbruddet er en fejl i `watch`.
+
+**Bevidst valgt-fra:** at vedlægge et diff af den ændrede tekst. Det kræver at gemme forrige side i state-filen (ubegrænset indhold pr. URL), og `docs/agency-report.md` §5 gør `rm ~/.deskuptime/history.json` til en komplet sletning — to hele sider gemt pr. site ville gøre den løfte falsk. Titlen er den lille, målte, slettende del.
+
+- **Release-note P1-35:** Har du overvåget en side, der ændrer indhold uden at ændre størrelse — en pris, et navn, et billede der fylder det samme — fik du en alarm, der modsagde sig selv: **`content changed (124 → 124 bytes)`**. Det er ikke en fejl i målingen: DeskUptime så godt nok, at bytene var forskellige, og det var derfor alarmen gik. Men det ene tal den viste, var det tal du bruger til at dømme om noget er ændret, og det sagde "nej". Nu siger størrelsen kun noget, når den faktisk flytter sig. Ved uændret størrelse skriver alarmen **`content changed — same size (124 bytes): the page's bytes differ`**, og når sidens `<title>` flytter sig — hvilket er det, du ville genkende på et skærmbillede — navngiver den den: **`content changed — page title: "Forside A" → "Forside B" (same size, 124 bytes)`**. Titlen har DeskUptime læst på hvert pass hele tiden; den var bare aldrig brugt. **En side hvis størrelse rent faktisk ændrer sig er uændret**, byte for byte: `content changed (90 → 104 bytes)`, og en baseline uden længde siger stadig `? → … bytes`. Der kommer **intet nyt felt** i din webhook-payload — kun `message` har en ny sætning, så en eksisterende modtager skal ikke ændres. Det er heller ikke et diff af den ændrede tekst: den forrige side bliver ikke gemt, så `rm ~/.deskuptime/history.json` stadig er en komplet sletning af historikken.
 
 ## ❓ Til Mads
 

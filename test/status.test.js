@@ -10,7 +10,7 @@ import { fileURLToPath } from 'node:url';
 import { checkUrl, checkUrls } from '../src/engine.js';
 import { checkReachability } from '../src/checkers/ping.js';
 import { getStateFile, loadState, runPass, saveState, isPro } from '../src/watch.js';
-import { readChain, readDisclosure, readEntry, readHttpsState, readRedirectTarget, readSecurityHeaders, SECURITY_HEADER, urlScheme } from '../src/status.js';
+import { readChain, readContentChange, readDisclosure, readEntry, readHttpsState, readRedirectTarget, readSecurityHeaders, SECURITY_HEADER, urlScheme } from '../src/status.js';
 import { buildReport, renderReportMarkdown } from '../src/report.js';
 
 const run = promisify(execFile);
@@ -1429,6 +1429,135 @@ function watchResult(overrides = {}) {
     ...overrides,
   };
 }
+
+test('content_changed: et skift af samme størrelse må ikke modsige sig selv', async (t) => {
+  // Målt 26/9 med rigtig CLI og rigtig fixture, hvis byte-længde aldrig ændrer
+  // sig: `🔄 … content changed (124 → 124 bytes)`. Påstanden og dens eget
+  // bevis modsagde hinanden, og en størrelse der ikke flytter sig er det mest
+  // almindelige reelle skift — en pris, et navn, et CSRF-token.
+  //
+  // Her måles de fire tilfælde med rigtig `runPass`, ikke kun ejeren: to der
+  // skal ændre sætning (titel flyttet, ingen titel) og to der skal være
+  // tegn for tegn som før (størrelsen flyttede sig, ingen baseline-længde).
+  const url = 'http://watch.test/same-size';
+  const home = mkdtempSync(join(tmpdir(), 'deskuptime-content-'));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  const options = { env: { HOME: home, USERPROFILE: home } };
+
+  const pass = async ({ previousLength, previousTitle, length, title }) => {
+    const state = watchState(url);
+    const entry = state.urls[url];
+    entry.wasUp = true;
+    entry.lastHash = 'a'.repeat(64);
+    entry.lastContentLength = previousLength;
+    if (previousTitle !== undefined) entry.lastTitle = previousTitle;
+    const result = await runPass(state, {
+      ...options,
+      check: async () => watchResult({
+        content: {
+          fetched: true, contentLength: length, hash: 'b'.repeat(64),
+          changed: true, previousHash: entry.lastHash, title,
+        },
+      }),
+      returnResults: true,
+    });
+    return result.events.find(event => event.type === 'content_changed')?.message;
+  };
+
+  // 1. Titlen flyttede sig, og det er den menneskelæselige del af skiftet:
+  //    `content.js` har målt den på hvert pass siden starten, og ingen flade
+  //    brugte den.
+  assert.equal(
+    await pass({ previousLength: 124, previousTitle: 'Forside A', length: 124, title: 'Forside B' }),
+    'content changed — page title: "Forside A" → "Forside B" (same size, 124 bytes)',
+  );
+  // 2. Samme størrelse, men siden har ingen `<title>` overhovedet. Sætningen
+  //    siger det ærlige, og trykker ikke det samme tal to gange.
+  assert.equal(
+    await pass({ previousLength: 66, previousTitle: undefined, length: 66, title: null }),
+    "content changed — same size (66 bytes): the page's bytes differ",
+  );
+  // 3. Størrelsen flyttede sig: den gamle sætning, tegn for tegn. Den var
+  //    korrekt, fordi de to tal faktisk siger noget forskelligt.
+  assert.equal(
+    await pass({ previousLength: 90, previousTitle: 'Forside A', length: 104, title: 'Forside A' }),
+    'content changed (90 → 104 bytes)',
+  );
+  // 4. Ingen baseline-længde: `?` er stadig det ærlige, og den nye sætning
+  //    må ikke gøre et ukendt tal til et kendt.
+  assert.equal(
+    await pass({ previousLength: null, previousTitle: 'Forside A', length: 104, title: 'Forside A' }),
+    'content changed (? → 104 bytes)',
+  );
+});
+
+test('content_changed: ejeren tager bare de facts den kan bruge', () => {
+  // En håndredigeret eller halvgemt state-fil må ikke få sætningen til at
+  // hævde noget. Målt med rigtig CLI: `lastTitle: 42` gav exit 0 og ingen
+  // `content_changed`, fordi hashen da var den samme — her er det ejeren alene,
+  // så grænsen låses.
+  const same = { previousLength: 10, length: 10, previousTitle: 'Samme', title: 'Samme' };
+  assert.deepEqual(readContentChange(same), { titleChanged: false, message: "content changed — same size (10 bytes): the page's bytes differ" });
+
+  // En titel der ikke er en streng, eller som er tom, er ikke en titel. Uden
+  // begge sider kan der ikke være et titelskift at navngive.
+  for (const bad of [42, null, undefined, '', '   ', {}]) {
+    assert.equal(readContentChange({ previousLength: 10, length: 10, previousTitle: bad, title: 'Nyt' }).titleChanged, false, `previousTitle ${JSON.stringify(bad)} must not count as a title`);
+    assert.equal(readContentChange({ previousLength: 10, length: 10, previousTitle: 'Gammelt', title: bad }).titleChanged, false, `title ${JSON.stringify(bad)} must not count as a title`);
+  }
+  // Uden en læsbar titel på den side der flyttede sig, er det stadig ikke et
+  // titelskift — kun to forskellige læsbare titler er det.
+  assert.equal(readContentChange({ previousLength: 10, length: 10, previousTitle: null, title: 'Nyt' }).titleChanged, false);
+
+  // Titlen overlever en pass der ikke kunne læse en, så et senere skift stadig
+  // kan navngive den gamle side. Målt i praksis via `runPass` ovenfor: et
+  // `title: null` skriver ikke `lastTitle`.
+  assert.equal(readContentChange({}).message, 'content changed (? → ? bytes)');
+  // `null` er ikke `0`: en længde på 0 bytes er en måling, en manglende er ikke.
+  assert.equal(readContentChange({ previousLength: 0, length: 5 }).message, 'content changed (0 → 5 bytes)');
+  assert.equal(readContentChange({ previousLength: 5, length: 0 }).message, 'content changed (5 → 0 bytes)');
+  assert.equal(readContentChange({ previousLength: 0, length: 0 }).message, "content changed — same size (0 bytes): the page's bytes differ");
+});
+
+test('content_changed: sætningen er besluttet ét sted, og titlen bevares', async (t) => {
+  // To ejere af den samme sætning kan svare forskelligt, og det her gjorde de:
+  // `runPass` skrev den, og det var den eneste overflade der skrev den. Låsen
+  // kræver at spørgeren ved navn, så den ikke kan bygge sin egen.
+  const watch = readFileSync(join(ROOT, 'src', 'watch.js'), 'utf8')
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/^\s*\/\/.*$/gm, '');
+  assert.match(watch, /readContentChange\(/, 'the loop must ask the owner for the sentence');
+  assert.doesNotMatch(watch, /content changed \(/, 'the loop must not build the sentence from the two sizes itself');
+  assert.doesNotMatch(watch, /entry\.lastTitle = result\.content\.title;$/m, 'the title must be trimmed by the same rule the owner uses');
+
+  const status = readFileSync(join(ROOT, 'src', 'status.js'), 'utf8')
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/^\s*\/\/.*$/gm, '');
+  assert.equal(
+    (status.match(/content changed —/g) || []).length, 2,
+    'only the owner may write the sentence, and it writes it once per form',
+  );
+
+  // Titlen skal overleve i state-filen, ellers er næste skift igen navnløst.
+  const url = 'http://watch.test/title-kept';
+  const home = mkdtempSync(join(tmpdir(), 'deskuptime-title-'));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  const options = { env: { HOME: home, USERPROFILE: home } };
+  const state = watchState(url);
+  state.urls[url].wasUp = true;
+  state.urls[url].lastHash = 'a'.repeat(64);
+  state.urls[url].lastContentLength = 90;
+  state.urls[url].lastTitle = 'Forside A';
+  await runPass(state, {
+    ...options,
+    check: async () => watchResult({
+      content: { fetched: true, contentLength: 90, hash: 'b'.repeat(64), changed: true, previousHash: 'a'.repeat(64), title: '  Forside B  ' },
+    }),
+    returnResults: true,
+  });
+  // Trimmet, så et skift ikke kan udløses af en servers whitespace.
+  assert.equal(loadState(options).urls[url].lastTitle, 'Forside B');
+});
 
 function watchState(url) {
   return {

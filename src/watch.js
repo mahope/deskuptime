@@ -17,7 +17,7 @@ import { readFileSync, writeFileSync, mkdirSync, existsSync, renameSync, unlinkS
 import { dirname, posix, win32 } from 'path';
 import { homedir } from 'os';
 import { createHash, randomUUID } from 'crypto';
-import { assertValidHttpUrls, expiredNote, isNewerPass, readEntry, readEvent, readRedirectTarget, readSslState, STALE_AFTER_DAYS } from './status.js';
+import { assertValidHttpUrls, expiredNote, isNewerPass, readContentChange, readEntry, readEvent, readRedirectTarget, readSslState, STALE_AFTER_DAYS } from './status.js';
 import { recordPass } from './report.js';
 import { formatMs, safeText } from './display.js';
 import { loadHistory, pruneHistory, recordHistoryPass, saveHistory } from './history.js';
@@ -271,7 +271,16 @@ export async function runPass(state, opts = {}) {
     }
 
     if (result.content?.changed === true) {
-      events.push(event('content_changed', `content changed (${entry.lastContentLength ?? '?'} → ${result.content.contentLength} bytes)`));
+      // The sentence, the title and the size are all one decision, asked of the
+      // one owner. This used to be built here from two numbers, which printed
+      // `124 → 124 bytes` for a change whose two sides are the same size.
+      const change = readContentChange({
+        previousLength: entry.lastContentLength,
+        length: result.content.contentLength,
+        previousTitle: entry.lastTitle,
+        title: result.content.title,
+      });
+      events.push(event('content_changed', change.message));
     }
 
     // The same reading of this pass's time the events carry, so the state file
@@ -285,6 +294,11 @@ export async function runPass(state, opts = {}) {
     recordHistoryPass(history, url, result, { now });
     if (result.content?.hash) entry.lastHash = result.content.hash;
     if (Number.isFinite(result.content?.contentLength)) entry.lastContentLength = result.content.contentLength;
+    // The title, so the next pass can say *what* changed and not only that the
+    // bytes differ. `content.js` has always measured it; this is the first
+    // surface to keep it. Only overwritten when the page still offers one, so a
+    // pass that could not read a title does not erase the last real one.
+    if (typeof result.content?.title === 'string' && result.content.title.trim() !== '') entry.lastTitle = result.content.title.trim();
   }
 
   saveState(state, opts);
