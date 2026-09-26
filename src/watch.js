@@ -78,6 +78,55 @@ function stateFileFrom(options) {
   return options.stateFile || getStateFile(options);
 }
 
+/**
+ * A state file we cannot write is a fact the user has to see — and it is not a
+ * reason to stop monitoring.
+ *
+ * Measured 2026-09-26 with the real CLI, a real `--webhook` receiver and a
+ * `~/.deskuptime` that could not be written (a full disk, a read-only mount or
+ * a quota — here an immutable directory, so the errno is EPERM and nothing else
+ * was touched): the process died with a raw Node stack trace, exit 1, and the
+ * receiver got **zero** deliveries while a monitored site answered 500. The
+ * throw came out of `saveState()` — first from `recheckLicense()` before the
+ * loop had even started, and from `runPass()` once it had. So the customer who
+ * pays for alerts got none, learned nothing except a stack trace naming a temp
+ * file, and their monitoring was over.
+ *
+ * The state file holds the counters; the events hold the alert. When only the
+ * first can be written, the second is the one worth keeping — the same rule
+ * `saveHistory()` below already follows for the same reason, and the same
+ * comment. What is lost is named here and in the message: this pass's counters
+ * and its day in the report, until the file can be written again. In the loop
+ * the in-memory entry survives, so a site that stays down is not re-announced
+ * every interval; across a restart it is, because without a saved verdict we
+ * cannot know it was already said. Announcing twice beats staying silent about
+ * an outage.
+ *
+ * One owner for the sentence, so the loop, a `--once` pass and a license
+ * re-check cannot each describe the same failure differently.
+ */
+/**
+ * One sentence for "DeskUptime cannot write its own state", so a cron pass, a
+ * running loop and `unwatch` cannot each hand the user a different stack trace.
+ * It names the file and the errno because those are the two things the user can
+ * act on, and says what is broken — nothing is remembered — rather than leaving
+ * it to be guessed from a temp filename.
+ */
+export function stateWriteErrorMessage(error, stateFile) {
+  return `Could not write the monitoring state — ${error?.code || error?.message || 'unknown error'} — ${stateFile}. Nothing is remembered while this lasts: check free disk space and that the file and its folder are writable.`;
+}
+
+function saveStateOrWarn(state, options, what) {
+  try {
+    saveState(state, options);
+    return true;
+  } catch (error) {
+    console.error(`⚠️  ${stateWriteErrorMessage(error, stateFileFrom(options))}`);
+    console.error(`    ${what}`);
+    return false;
+  }
+}
+
 export function loadState(options = {}) {
   const stateFile = stateFileFrom(options);
   if (!existsSync(stateFile)) return emptyState();
@@ -301,7 +350,9 @@ export async function runPass(state, opts = {}) {
     if (typeof result.content?.title === 'string' && result.content.title.trim() !== '') entry.lastTitle = result.content.title.trim();
   }
 
-  saveState(state, opts);
+  // The counters go to disk here; the alerts this pass just produced are already
+  // decided. A write that fails must not take them with it — see saveStateOrWarn.
+  const stateSaved = saveStateOrWarn(state, opts, 'Monitoring and alerts keep working, but this pass is not remembered: the uptime counters and the report will miss it until the file can be written again.');
   try {
     // Pruned on write, so the history file is bounded no matter how long the
     // loop runs. A failure here must never take down monitoring: the state file
@@ -315,6 +366,9 @@ export async function runPass(state, opts = {}) {
     events,
     results,
     healthy: results.every(result => result.healthy),
+    // False when the pass ran but could not be written — the caller can say so
+    // instead of inferring it from a missing counter.
+    stateSaved,
   };
   return opts.returnResults ? pass : events;
 }
@@ -508,33 +562,50 @@ function removeStaleStateLock(lockFile) {
   }
 }
 
+/**
+ * The state lock keeps two passes from writing over each other. It is taken
+ * before anything is measured, so a directory we cannot write to is discovered
+ * here first — and it used to be discovered as a throw: `watch --once`, the
+ * command a cron job runs, died with a raw stack trace naming the *lock* file
+ * (measured 2026-09-26 with a read-only `~/.deskuptime`: `EACCES … state.json.lock`,
+ * exit 1, no site checked). "Another pass is running" and "this disk is full"
+ * are different problems with different fixes, so they stay different answers:
+ * a reason instead of an exception.
+ */
 function acquireStateLock(stateFile) {
   const lockFile = `${stateFile}.lock`;
   const token = randomUUID();
-  mkdirSync(dirname(stateFile), { recursive: true });
+  try {
+    mkdirSync(dirname(stateFile), { recursive: true });
+  } catch (error) {
+    return { error };
+  }
 
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
       writeFileSync(lockFile, JSON.stringify({ pid: process.pid, createdAt: Date.now(), token }), { flag: 'wx', mode: 0o600 });
-      return () => {
-        try {
-          const owner = JSON.parse(readFileSync(lockFile, 'utf8'));
-          if (owner.token === token) unlinkSync(lockFile);
-        } catch {}
+      return {
+        release: () => {
+          try {
+            const owner = JSON.parse(readFileSync(lockFile, 'utf8'));
+            if (owner.token === token) unlinkSync(lockFile);
+          } catch {}
+        },
       };
     } catch (error) {
-      if (error.code !== 'EEXIST') throw error;
+      if (error.code !== 'EEXIST') return { error };
       if (attempt === 0 && removeStaleStateLock(lockFile)) continue;
-      return null;
+      return { busy: true };
     }
   }
-  return null;
+  return { busy: true };
 }
 
 export async function runOnce(urls, opts = {}) {
   assertValidHttpUrls(urls);
-  const release = acquireStateLock(stateFileFrom(opts));
-  if (!release) return { events: [], results: [], healthy: false, added: 0, busy: true };
+  const lock = acquireStateLock(stateFileFrom(opts));
+  if (lock.error) return { events: [], results: [], healthy: false, added: 0, stateError: lock.error };
+  if (lock.busy) return { events: [], results: [], healthy: false, added: 0, busy: true };
 
   try {
     const state = loadState(opts);
@@ -549,7 +620,7 @@ export async function runOnce(urls, opts = {}) {
     const pass = await runPass(state, { ...opts, returnResults: true });
     return { ...pass, added };
   } finally {
-    release();
+    lock.release();
   }
 }
 
@@ -577,8 +648,9 @@ export async function runOnce(urls, opts = {}) {
  */
 export function unwatchUrls(urls, opts = {}) {
   const wanted = [...new Set(urls)];
-  const release = acquireStateLock(stateFileFrom(opts));
-  if (!release) return { removed: [], missing: wanted, busy: true, remaining: null };
+  const lock = acquireStateLock(stateFileFrom(opts));
+  if (lock.error) return { removed: [], missing: wanted, busy: false, stateError: lock.error };
+  if (lock.busy) return { removed: [], missing: wanted, busy: true, remaining: null };
   try {
     const state = loadState(opts);
     const removed = [];
@@ -594,7 +666,7 @@ export function unwatchUrls(urls, opts = {}) {
     if (removed.length > 0) saveState(state, opts);
     return { removed, missing, busy: false, remaining: Object.keys(state.urls).length };
   } finally {
-    release();
+    lock.release();
   }
 }
 
@@ -691,7 +763,7 @@ export async function startWatch(urls, opts = {}) {
     if (!isPro(state)) return false;
     const result = await refreshLicense(state.license);
     state.license = result.license;
-    saveState(state, opts);
+    saveStateOrWarn(state, opts, 'The license is still in use on this machine; only the saved copy is behind.');
     if (!result.pro) console.error(`⚠️  Pro license not active: ${result.reason}`);
     return result.pro;
   }
@@ -721,7 +793,9 @@ export async function startWatch(urls, opts = {}) {
     throw new Error('No URLs to monitor.');
   }
   mergePersistedState(state, opts);
-  saveState(state, opts);
+  // Registers the URLs with the loop even if the file cannot take them yet — the
+  // pass below then measures them, and the warning repeats until the write works.
+  saveStateOrWarn(state, opts, 'Monitoring starts anyway; the saved copy of this list is behind until the file can be written.');
 
   console.log(`\n👀 Monitoring ${Object.keys(state.urls).length} URL(s), every ${interval}s.${pro ? ' [Pro]' : ' [free tier]'}.${pro && webhookUrl ? ' Webhook alerts on.' : ''} Ctrl+C to stop.\n`);
 

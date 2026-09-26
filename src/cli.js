@@ -13,7 +13,7 @@
  */
 
 import { checkUrls, summarize } from './engine.js';
-import { startWatch, runOnce, printStatus, printPass, loadState, saveState, freeLimitMessage, isPro, unwatchUrls } from './watch.js';
+import { startWatch, runOnce, printStatus, printPass, loadState, saveState, freeLimitMessage, isPro, unwatchUrls, getStateFile, stateWriteErrorMessage } from './watch.js';
 import { buildReport, renderReportJson, renderReportMarkdown } from './report.js';
 import { readFileSync } from 'fs';
 import { join, dirname } from 'path';
@@ -521,6 +521,12 @@ if (command === 'watch') {
     if (pass.busy) {
       console.error('❌ Error: another watch pass is already running. Try again after it finishes.');
       process.exitCode = 1;
+    } else if (pass.stateError) {
+      // A full disk or a read-only folder, found before a single site was
+      // checked. A stack trace naming a lock file is not something the user of
+      // a cron job can act on.
+      console.error(`❌ Error: ${stateWriteErrorMessage(pass.stateError, getStateFile())}`);
+      process.exitCode = 1;
     } else if (pass.rejected) {
       for (const url of pass.rejected) console.error(`❌ Error: ${freeLimitMessage(url)}`);
       process.exitCode = 1;
@@ -569,6 +575,10 @@ if (command === 'unwatch') {
   const result = await unwatchUrls(rawArgs);
   if (result.busy) {
     console.error('❌ Error: another watch pass is already running. Try again after it finishes.');
+    process.exitCode = 1;
+  } else if (result.stateError) {
+    console.error(`❌ Error: ${stateWriteErrorMessage(result.stateError, getStateFile())}`);
+    console.error('       Nothing was changed.');
     process.exitCode = 1;
   } else {
     for (const url of result.removed) console.log(`✅ No longer monitoring: ${safeText(url, { max: 0 })}`);
