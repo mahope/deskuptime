@@ -10,7 +10,7 @@ import { fileURLToPath } from 'node:url';
 import { checkUrl, checkUrls } from '../src/engine.js';
 import { checkReachability } from '../src/checkers/ping.js';
 import { getStateFile, loadState, runPass, saveState, isPro } from '../src/watch.js';
-import { readChain, readHttpsState, readSecurityHeaders, urlScheme } from '../src/status.js';
+import { readChain, readDisclosure, readHttpsState, readSecurityHeaders, SECURITY_HEADER, urlScheme } from '../src/status.js';
 
 const run = promisify(execFile);
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
@@ -1113,6 +1113,167 @@ test('headers: the three-state reading has exactly one owner', () => {
   assert.match(cli, /readSecurityHeaders\(/);
   assert.match(cli, /securityEmpty: security\.empty/);
   assert.doesNotMatch(cli, /filter\(\(\[, v\]\) => !v\)/, 'the terminal must not re-decide it with falsiness');
+});
+
+// ── headers: a disclosure header sent with no value is not a silent site (P1-25) ──
+//
+// Measured with a real CLI against one local server, before any code changed:
+//
+//   x-powered-by:          (no value)
+//     headers        ->  no line at all
+//     headers --json ->  "poweredBy": null, "server": null
+//
+// The last of the three `|| null` that P1-24 found by grep. `X-Powered-By
+// exposed` is a named warning a bureau puts in a client's report, and an empty
+// value deleted it: the site was sending the header, and the tool said the site
+// disclosed no stack. An empty value here is not the same as a header that never
+// arrived — it names no stack, which is a smaller finding, and a third thing.
+
+test('disclosure: sent-with-no-value, never-sent and sent are three different things', () => {
+  const reading = readDisclosure({ server: 'nginx/1.24.0', poweredBy: '' });
+  assert.equal(reading.server.state, SECURITY_HEADER.PRESENT);
+  assert.equal(reading.server.value, 'nginx/1.24.0');
+  assert.equal(reading.poweredBy.state, SECURITY_HEADER.EMPTY);
+  assert.equal(reading.poweredBy.value, '', 'the empty value is kept, not flattened to null');
+
+  // The one the finding turned on: the same field, two values, two verdicts.
+  assert.equal(readDisclosure({ poweredBy: 'PHP/8.2.1' }).poweredBy.state, SECURITY_HEADER.PRESENT);
+  assert.equal(readDisclosure({ poweredBy: '' }).poweredBy.state, SECURITY_HEADER.EMPTY);
+  assert.equal(readDisclosure({ poweredBy: null }).poweredBy.state, SECURITY_HEADER.ABSENT);
+  assert.equal(readDisclosure({ poweredBy: undefined }).poweredBy.state, SECURITY_HEADER.ABSENT);
+  // The HTTP layer strips optional whitespace, so a value that is only spaces
+  // arrives as '' — the same case as a judged header (P1-24).
+  assert.equal(readDisclosure({ server: '   ' }).server.state, SECURITY_HEADER.EMPTY);
+
+  // A site that sent neither discloses nothing, and says so with an empty list.
+  assert.deepEqual(readDisclosure({}).empty, []);
+  assert.deepEqual(readDisclosure(null).empty, []);
+  // Named by the wire name, so a consumer reads the same spelling as the header.
+  assert.deepEqual(readDisclosure({ server: '', poweredBy: '' }).empty, ['server', 'x-powered-by']);
+  assert.deepEqual(readDisclosure({ server: 'nginx', poweredBy: '' }).empty, ['x-powered-by']);
+});
+
+test('headers: a disclosure header sent with no value is reported, not swallowed', async (t) => {
+  const server = createServer((req, res) => {
+    res.writeHead(200, {
+      'content-type': 'text/html',
+      // Sent, and carrying nothing — a site that publishes the marker without
+      // naming a stack.
+      'x-powered-by': '',
+      server: '  ',
+      'x-frame-options': 'DENY',
+    });
+    res.end('ok');
+  });
+  const port = await listen(server);
+  t.after(() => close(server));
+  const url = `http://127.0.0.1:${port}/`;
+
+  const out = (await run(process.execPath, [CLI, 'headers', url, '--timeout', REQUEST_TIMEOUT])).stdout;
+  assert.match(out, /⚠️  X-Powered-By sent with no value/);
+  assert.doesNotMatch(out, /X-Powered-By exposed: \s*$/m, 'an empty value is not a stack name');
+  // Everything the fix does not touch still prints exactly as before.
+  assert.match(out, /✅ x-frame-options: DENY/);
+  assert.match(out, /⬜ missing: strict-transport-security/);
+
+  const json = JSON.parse((await run(process.execPath, [CLI, 'headers', url, '--json', '--timeout', REQUEST_TIMEOUT])).stdout);
+  assert.equal(json.poweredBy, '', 'the JSON must keep the empty value, not flatten it to null');
+  assert.equal(json.server, '');
+  assert.deepEqual(json.disclosureEmpty, ['server', 'x-powered-by']);
+  assert.equal(json.securityChecked, true);
+  // The five judged headers and their own list are untouched by this fix.
+  assert.equal(Object.keys(json.security).length, 5);
+  assert.deepEqual(json.securityEmpty, []);
+});
+
+test('headers: a real stack name and a silent site are unchanged by the empty case', async (t) => {
+  const named = createServer((req, res) => {
+    res.writeHead(200, { 'content-type': 'text/html', 'x-powered-by': 'PHP/8.2.1', server: 'nginx/1.24.0' });
+    res.end('ok');
+  });
+  const namedPort = await listen(named);
+  t.after(() => close(named));
+  const namedOut = (await run(process.execPath, [CLI, 'headers', `http://127.0.0.1:${namedPort}/`, '--timeout', REQUEST_TIMEOUT])).stdout;
+  assert.match(namedOut, /⚠️  X-Powered-By exposed: PHP\/8\.2\.1/);
+  assert.doesNotMatch(namedOut, /sent with no value/, 'a header with a value is a header with a value');
+  const namedJson = JSON.parse((await run(process.execPath, [CLI, 'headers', `http://127.0.0.1:${namedPort}/`, '--json', '--timeout', REQUEST_TIMEOUT])).stdout);
+  assert.equal(namedJson.poweredBy, 'PHP/8.2.1');
+  assert.equal(namedJson.server, 'nginx/1.24.0');
+  assert.deepEqual(namedJson.disclosureEmpty, []);
+
+  const silent = createServer((req, res) => {
+    res.writeHead(200, { 'content-type': 'text/html' });
+    res.end('ok');
+  });
+  const silentPort = await listen(silent);
+  t.after(() => close(silent));
+  const silentOut = (await run(process.execPath, [CLI, 'headers', `http://127.0.0.1:${silentPort}/`, '--timeout', REQUEST_TIMEOUT])).stdout;
+  assert.doesNotMatch(silentOut, /X-Powered-By/, 'a site that sends no X-Powered-By has said nothing');
+  const silentJson = JSON.parse((await run(process.execPath, [CLI, 'headers', `http://127.0.0.1:${silentPort}/`, '--json', '--timeout', REQUEST_TIMEOUT])).stdout);
+  assert.equal(silentJson.poweredBy, null, 'a header that never arrived stays null');
+  assert.equal(silentJson.server, null);
+  assert.deepEqual(silentJson.disclosureEmpty, [], 'an empty list, not a list of everything');
+});
+
+test('headers: the three-state disclosure reading has exactly one owner', () => {
+  // A behavioural test cannot prove a surface stopped owning the rule — as in
+  // P1-13…P1-24, the duplicated `|| null` answers identically in every test above.
+  const checker = readFileSync(join(ROOT, 'src', 'checkers', 'headers.js'), 'utf8')
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/^\s*\/\/.*$/gm, '');
+  assert.match(checker, /server: h\['server'\] \?\? null/, 'the checker must keep an empty value');
+  assert.match(checker, /poweredBy: h\['x-powered-by'\] \?\? null/);
+  assert.doesNotMatch(checker, /h\['server'\] \|\|/, 'the checker must not collapse an empty value back into "not sent"');
+  assert.doesNotMatch(checker, /h\['x-powered-by'\] \|\|/);
+
+  const cli = readFileSync(join(ROOT, 'src', 'cli.js'), 'utf8')
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/^\s*\/\/.*$/gm, '');
+  assert.match(cli, /readDisclosure\(/);
+  assert.match(cli, /disclosureEmpty: disclosure\.empty/);
+  assert.doesNotMatch(cli, /if \(r\.poweredBy\)/, 'the terminal must not re-decide it with falsiness');
+});
+
+test('watch: an empty lastHash is no baseline, which is not the same code as a header', async (t) => {
+  // P1-25 measured the other two `||` this task listed, on a hand-written
+  // `state.json`, and left them alone — the asymmetry has a reason. An empty
+  // `X-Powered-By` is something a real server sends on the wire, so losing it
+  // falsifies a measurement. An empty `lastHash` is something DeskUptime has
+  // never written: `watch` only ever stores a 64-hex sha256. It is a corrupt or
+  // restored file, and "we had no baseline" is the honest reading of one.
+  //
+  // Measured with the real CLI on a monitored site, `lastHash: ""`, `null` and a
+  // real baseline respectively: the first two behaved identically — no event, no
+  // change claim — and both were repaired to the real hash by that same pass,
+  // while a genuine baseline reported "content changed".
+  const url = 'http://watch.test/empty-hash';
+  const home = mkdtempSync(join(tmpdir(), 'deskuptime-hash-'));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  const options = { env: { HOME: home, USERPROFILE: home } };
+  const hash = 'a'.repeat(64);
+  const seen = [];
+
+  for (const lastHash of ['', null]) {
+    const state = watchState(url);
+    state.urls[url].wasUp = true;
+    state.urls[url].lastHash = lastHash;
+    const pass = await runPass(state, {
+      ...options,
+      check: async (_url, { contentHash }) => {
+        seen.push(contentHash);
+        return watchResult({ content: { fetched: true, contentLength: 10, hash, changed: contentHash ? contentHash !== hash : null, previousHash: contentHash } });
+      },
+      returnResults: true,
+    });
+    // No false "content changed" for a file that never had a usable baseline:
+    // the site is up and stays up, so the pass has nothing to report.
+    assert.deepEqual(pass.events.map(event => event.type), [], `lastHash ${JSON.stringify(lastHash)} must not claim a change`);
+    // And the same pass repairs it, so the next pass has a real baseline.
+    assert.equal(loadState(options).urls[url].lastHash, hash);
+  }
+
+  // Both readings reach the checker as the same thing: "no baseline".
+  assert.deepEqual(seen, [null, null]);
 });
 
 function watchResult(overrides = {}) {
