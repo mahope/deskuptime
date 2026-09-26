@@ -8,7 +8,7 @@
 import { checkReachability } from './checkers/ping.js';
 import { checkSSL, SSL_TIMEOUT_MS } from './checkers/ssl.js';
 import { checkContentChange, CONTENT_TIMEOUT_MS } from './checkers/content.js';
-import { assertValidHttpUrls, isHealthyStatus, isSslExpiringSoon } from './status.js';
+import { assertValidHttpUrls, isHealthyStatus, readSslState, expiredNote } from './status.js';
 
 /**
  * `--timeout` is a budget for the *whole* check, not just the first request.
@@ -117,11 +117,24 @@ export async function checkUrls(urls, opts = {}) {
 export function summarize(result) {
   const status = result.healthy ? 'UP' : 'DOWN';
 
-  let sslStatus = 'N/A';
-  if (result.ssl && result.ssl.validDays !== undefined) {
-    sslStatus = isSslExpiringSoon(result.ssl.validDays) ? `${result.ssl.validDays}d ⚠️` : `${result.ssl.validDays}d ✅`;
-  } else if (result.ssl && result.ssl.error) {
+  // One reading of the certificate, from the one owner — the same call the
+  // status lists and the client report make. This used to gate on
+  // `validDays !== undefined` and print the number it found, so an unusable
+  // value rendered as `-3d ✅` and a lapsed certificate as `0d ✅`.
+  const ssl = readSslState({
+    days: result.ssl?.validDays,
+    expired: result.ssl?.isExpired,
+    expiredDays: result.ssl?.expiredDays,
+  });
+  let sslStatus;
+  if (ssl.expired) {
+    sslStatus = `🔴 ${expiredNote(ssl.expiredDays)}`;
+  } else if (ssl.days !== null) {
+    sslStatus = `${ssl.days}d ${ssl.expiringSoon ? '⚠️' : '✅'}`;
+  } else if (result.ssl?.error) {
     sslStatus = `ERR: ${result.ssl.error}`;
+  } else {
+    sslStatus = 'N/A';
   }
 
   return {
@@ -130,6 +143,8 @@ export function summarize(result) {
     statusCode: result.statusCode,
     responseTime: `${result.responseTimeMs}ms`,
     ssl: sslStatus,
+    /** The icon `check` prints next to the same line, decided by the same call. */
+    sslIcon: ssl.expired ? '🔴' : ssl.expiringSoon ? '⚠️' : ssl.days !== null ? '🔒' : result.ssl?.error ? '🔓' : '—',
     lastChecked: result.timestamp,
   };
 }

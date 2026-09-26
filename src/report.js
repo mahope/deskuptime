@@ -26,7 +26,7 @@
 
 import { PRODUCT } from './features.js';
 import { DEFAULT_WINDOW_DAYS, windowSummary } from './history.js';
-import { SSL_WARN_DAYS, STALE_AFTER_DAYS, checkAgeDays, isCheckStale, isSslExpiringSoon } from './status.js';
+import { SSL_WARN_DAYS, STALE_AFTER_DAYS, checkAgeDays, expiredNote, isCheckStale, readSslState } from './status.js';
 
 export const DEFAULT_REPORT_TITLE = 'Website uptime report';
 const MAX_TITLE_LENGTH = 120;
@@ -122,12 +122,17 @@ export function buildReport(state, { title, now = new Date(), history, windowDay
     .filter(([url, entry]) => typeof url === 'string' && url && entry && typeof entry === 'object')
     .map(([url, entry]) => {
       const { checks, failures } = counters(entry);
-      // A negative or otherwise unusable day count is treated as unknown, never
-      // as a certificate that expired: a hand-edited state file must not be able
-      // to invent an urgent renewal in a report a customer reads.
-      const sslDaysRemaining = Number.isFinite(entry.sslValidDays) && entry.sslValidDays >= 0
-        ? entry.sslValidDays
-        : null;
+      // One reading of the certificate, from the one owner — the same call the
+      // terminal surfaces make. The report used to carry its own copy of the
+      // day-count rule, and it had no way to say a certificate had *lapsed*:
+      // `sslValidDays` is clamped to 0, so an expired certificate and one
+      // expiring tonight both read "renew soon" in the document a customer reads.
+      const ssl = readSslState({
+        days: entry.sslValidDays,
+        expired: entry.sslExpired,
+        expiredDays: entry.sslExpiredDays,
+      });
+      const sslDaysRemaining = ssl.days;
       // The report is a read of the last completed pass and re-checks nothing, so
       // "how old is that pass" is part of the claim. A site whose newest pass is
       // older than the window keeps its observed status — the pass really did
@@ -147,8 +152,11 @@ export function buildReport(state, { title, now = new Date(), history, windowDay
         sslDaysRemaining,
         // The same window `check` and `watch` use, so a certificate that is
         // urgent in the terminal cannot read as routine in the report a client
-        // receives. A site with no known expiry is never "expiring".
-        sslExpiringSoon: isSslExpiringSoon(sslDaysRemaining),
+        // receives. A site with no known expiry is never "expiring", and a
+        // lapsed certificate is never "expiring soon" — it is expired.
+        sslExpiringSoon: ssl.expiringSoon,
+        sslExpired: ssl.expired,
+        sslExpiredDays: ssl.expiredDays,
         contentBytes: Number.isFinite(entry.lastContentLength) ? entry.lastContentLength : null,
         lastChecked: typeof entry.lastChecked === 'string' ? entry.lastChecked : null,
         monitoringSince: typeof entry.addedAt === 'string' ? entry.addedAt : null,
@@ -170,6 +178,7 @@ export function buildReport(state, { title, now = new Date(), history, windowDay
     checks: sites.reduce((total, site) => total + site.checks, 0),
     failures: sites.reduce((total, site) => total + site.failures, 0),
     sslExpiringSoon: sites.filter(site => site.sslExpiringSoon).length,
+    sslExpired: sites.filter(site => site.sslExpired).length,
   };
 
   return {
@@ -230,6 +239,7 @@ function windowCell(site, windowDays) {
 }
 
 function sslCell(site) {
+  if (site.sslExpired) return `🔴 ${expiredNote(site.sslExpiredDays)}`;
   if (site.sslDaysRemaining === null) return '—';
   return site.sslExpiringSoon ? `⚠️ ${site.sslDaysRemaining} d — renew soon` : `${site.sslDaysRemaining} d`;
 }
@@ -258,7 +268,16 @@ export function renderReportMarkdown(report) {
 
   // A forwarded report is read once. Naming the certificates that need
   // renewing turns a column of numbers into something the recipient can act on.
+  const expired = report.sites.filter(site => site.sslExpired);
   const expiring = report.sites.filter(site => site.sslExpiringSoon);
+  // A lapsed certificate comes first and is named separately: "renew soon" about
+  // a certificate that has already broken the site is worse than no line at all.
+  const expiredLines = expired.length === 0
+    ? []
+    : [
+      '',
+      `**🔴 SSL certificate${expired.length === 1 ? ' has' : 's have'} expired — the site is affected:** ${expired.map(site => cell(`${site.url} (${expiredNote(site.sslExpiredDays)})`)).join(', ')}`,
+    ];
   const attention = expiring.length === 0
     ? []
     : [
@@ -286,7 +305,8 @@ export function renderReportMarkdown(report) {
     `|${' --- |'.repeat(HEADERS.length)}`,
     ...(rows.length > 0 ? rows : [`| ${['_no monitored sites_', '—', '—', '—', '—', '—', '—'].join(' | ')} |`]),
     '',
-    `**${report.summary.sites} site(s) · ${report.summary.up} up · ${report.summary.down} down · ${report.summary.checks} checks · ${report.summary.failures} failed${expiring.length > 0 ? ` · ${expiring.length} SSL expiring soon` : ''}${stale.length > 0 ? ` · ${stale.length} stale (no check in the last ${STALE_AFTER_DAYS} d)` : ''}**`,
+    `**${report.summary.sites} site(s) · ${report.summary.up} up · ${report.summary.down} down · ${report.summary.checks} checks · ${report.summary.failures} failed${expiring.length > 0 ? ` · ${expiring.length} SSL expiring soon` : ''}${expired.length > 0 ? ` · ${expired.length} SSL EXPIRED` : ''}${stale.length > 0 ? ` · ${stale.length} stale (no check in the last ${STALE_AFTER_DAYS} d)` : ''}**`,
+    ...expiredLines,
     ...attention,
     ...staleLines,
     '',

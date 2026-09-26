@@ -986,3 +986,45 @@ test('cli: status names the license state and never prints the key', async (t) =
   assert.doesNotMatch(unverified, new RegExp(LICENSE_KEY));
   assert.doesNotMatch(unverified, /deskuptime-maskine/);
 });
+
+test('action: the certificate window is the CLI window, and a lapsed certificate fails', async (t) => {
+  // `check`, `watch` and the client report all warn at exactly `days` remaining,
+  // and the Action used `< days`, so a certificate on the boundary passed here
+  // and failed everywhere else. `sslDaysRemaining` is clamped to 0, so the window
+  // alone could not express "expired" either — a lapsed certificate and one
+  // expiring tonight both read 0.
+  const site = (extra) => ({
+    url: 'https://acme.dk/', healthy: true, statusCode: 200, responseTimeMs: 20,
+    sslError: null, sslDaysRemaining: null, ...extra,
+  });
+  const cases = [
+    { name: 'exactly on the boundary warns', payload: [site({ sslDaysRemaining: 14 })], fail: true },
+    { name: 'one day outside the window does not', payload: [site({ sslDaysRemaining: 15 })], fail: false },
+    { name: 'inside the window fails', payload: [site({ sslDaysRemaining: 9 })], fail: true },
+    { name: 'a lapsed certificate fails', payload: [site({ sslDaysRemaining: 0, sslExpired: true, sslExpiredDays: 30 })], fail: true },
+    { name: 'zero days left is the boundary case', payload: [site({ sslDaysRemaining: 0, sslExpired: false })], fail: true },
+    { name: 'an unusable value is unknown, not urgent', payload: [site({ sslDaysRemaining: '9' })], fail: false },
+    { name: 'a negative value is not urgent either', payload: [site({ sslDaysRemaining: -3 })], fail: false },
+    { name: 'an unreadable certificate is a failure', payload: [site({ sslError: 'handshake failed' })], fail: true },
+    { name: 'a healthy certificate passes', payload: [site({ sslDaysRemaining: 63 })], fail: false },
+  ];
+
+  for (const { name, payload, fail } of cases) {
+    const { root, temp } = stubAction(t, JSON.stringify(payload));
+    const env = actionEnv({
+      DU_URLS: 'https://acme.dk/',
+      DU_FAIL_ON_DOWN: 'false',
+      DU_SSL_DAYS: '14',
+      GITHUB_ACTION_PATH: root,
+    }, temp);
+    const error = await run('bash', ['-c', actionScript()], { cwd: temp, env }).catch((e) => e);
+    // `run` rejects on a non-zero exit, so a resolved call has already passed.
+    const code = error.code ?? 0;
+    if (fail) {
+      assert.equal(code, 3, `${name}: expected exit 3`);
+      assert.match(`${error.stdout}${error.stderr}`, /SSL certificates expiring/, name);
+    } else {
+      assert.equal(code, 0, `${name}: expected exit 0, got ${code}: ${error.stdout}${error.stderr}`);
+    }
+  }
+});

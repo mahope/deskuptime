@@ -21,6 +21,74 @@ export function isSslExpiringSoon(validDays) {
 }
 
 /**
+ * How long a certificate has been expired, in whole days. `0` means it lapsed
+ * today. `null` when the expiry itself is unknown, which is not the same as
+ * "not expired" — see `readSslState`.
+ */
+function expiredDaysCount(value) {
+  return Number.isFinite(value) && value >= 0 ? Math.floor(value) : null;
+}
+
+/**
+ * One reading of a certificate, shared by every surface that shows one.
+ *
+ * `check`, `watch --status`, `status`, the client report and the GitHub Action
+ * all answer the same two questions about the same certificate: is it inside the
+ * renewal window, and has it already lapsed. The checker computed both
+ * (`isExpired` from the certificate's own `validTo`) and **no surface read
+ * `isExpired`** — `validDays` was clamped to `Math.max(0, …)`, so a certificate
+ * that lapsed on 1 February 2020 and one expiring tonight both rendered as
+ * `0d ⚠️` / "renew soon". Measured against a real expired certificate:
+ *
+ *   checkSSL  -> {"validDays":0,"isExpired":true,"expiresSoon":true}
+ *   `check`   ->  🔒 SSL:  0d ✅   (and `0d ⚠️` once inside the window)
+ *
+ * For a bureau whose headline feature is expiry warnings, "renew soon" about a
+ * certificate that broke the site last week is the worst possible answer, and it
+ * is the one a customer reads.
+ *
+ * So the facts are decided here, once, from whatever a caller has:
+ *
+ *   - `days` is only a day count when it is finite and non-negative. A negative
+ *     is a corrupt or hand-edited state file, not an expired certificate.
+ *   - `expired` is decided by the checker's own `isExpired` (or by an explicit
+ *     `expiredDays`), never by `days === 0`. A certificate expiring tonight is
+ *     not expired, and conflating the two is the bug this replaces.
+ *   - `expiringSoon` is false for an expired certificate: a lapsed certificate
+ *     is not "renew soon", it is broken, and the two must not share a message.
+ *
+ * Callers pick their own icon and punctuation and cannot re-decide any of it.
+ *
+ * @param {object} ssl — `{ days, expired, expiredDays }`; `days` is the
+ *   checker's `validDays` or the state entry's `sslValidDays`.
+ */
+export function readSslState(ssl) {
+  const value = ssl && typeof ssl === 'object' ? ssl : {};
+  const days = Number.isFinite(value.days) && value.days >= 0 ? Math.floor(value.days) : null;
+  const expiredDays = expiredDaysCount(value.expiredDays);
+  const expired = value.expired === true || expiredDays !== null;
+  return {
+    days,
+    expired,
+    expiredDays,
+    expiringSoon: !expired && isSslExpiringSoon(days),
+    // A field that was present but unreadable is reported as unknown; a field
+    // that was never there says nothing at all, so plain-HTTP monitoring does
+    // not grow a column of dashes.
+    unreadable: value.days !== undefined && value.days !== null && days === null && !expired,
+  };
+}
+
+/**
+ * The fixed wording for a lapsed certificate, in one place: `expired 12d ago`,
+ * `expired today`, or an honest "unknown" when only the fact is known.
+ */
+export function expiredNote(expiredDays) {
+  if (expiredDays === null) return 'expired — expiry date unknown';
+  return expiredDays === 0 ? 'expired today' : `expired ${expiredDays}d ago`;
+}
+
+/**
  * How old the newest completed pass may be before a report stops presenting it
  * as current.
  *
@@ -98,29 +166,26 @@ export function checkAgeDays(lastChecked, now = new Date()) {
  */
 export function readEntry(entry, { now = new Date() } = {}) {
   const value = entry && typeof entry === 'object' ? entry : {};
-  // Same rule as the report's SSL cell: only a known, finite, non-negative day
-  // count is a number of days. A negative value is a corrupt or hand-edited
-  // state file, not a certificate that expired — and a string, a boolean or
-  // NaN is not a day count either.
-  const sslDays = Number.isFinite(value.sslValidDays) && value.sslValidDays >= 0
-    ? value.sslValidDays
-    : null;
-  // A field that is present but unreadable is reported as unknown, the same as
-  // the report's `—`. A field that was never there says nothing at all, so
-  // plain-HTTP monitoring does not grow a column of dashes.
-  const sslUnknown = sslDays === null && value.sslValidDays !== undefined && value.sslValidDays !== null;
+  const ssl = readSslState({
+    days: value.sslValidDays,
+    expired: value.sslExpired,
+    expiredDays: value.sslExpiredDays,
+  });
   const stale = isCheckStale(value.lastChecked, now);
   const ageDays = checkAgeDays(value.lastChecked, now);
 
   return {
     verdict: value.wasUp === true ? 'up' : value.wasUp === false ? 'down' : 'unknown',
     statusCode: Number.isInteger(value.lastStatus) ? value.lastStatus : null,
-    sslDays,
+    sslDays: ssl.days,
+    sslExpired: ssl.expired,
     // Without a leading separator: the two surfaces punctuate differently, but
     // neither can change what is being said about the certificate.
-    sslNote: sslDays === null
-      ? (sslUnknown ? 'SSL —' : '')
-      : isSslExpiringSoon(sslDays) ? `SSL ⚠️ ${sslDays}d — renew soon` : `SSL ${sslDays}d`,
+    sslNote: ssl.expired
+      ? `SSL 🔴 ${expiredNote(ssl.expiredDays)}`
+      : ssl.days === null
+        ? (ssl.unreadable ? 'SSL —' : '')
+        : ssl.expiringSoon ? `SSL ⚠️ ${ssl.days}d — renew soon` : `SSL ${ssl.days}d`,
     ageDays,
     stale,
     staleNote: stale

@@ -7,6 +7,7 @@ import https from 'https';
 import tls from 'tls';
 import net from 'net';
 import { URL } from 'url';
+import { isSslExpiringSoon } from '../status.js';
 
 /** Default deadline for the handshake. `--timeout` lowers it, never raises it. */
 export const SSL_TIMEOUT_MS = 10_000;
@@ -61,6 +62,7 @@ export function checkSSL(url, { timeoutMs = SSL_TIMEOUT_MS } = {}) {
         const validTo = new Date(cert.valid_to);
         const validDays = Math.round((validTo - now) / (1000 * 60 * 60 * 24));
         const totalDays = Math.round((validTo - validFrom) / (1000 * 60 * 60 * 24));
+        const isExpired = now > validTo;
 
         settled = true;
         socket.end();
@@ -71,8 +73,17 @@ export function checkSSL(url, { timeoutMs = SSL_TIMEOUT_MS } = {}) {
           validTo: cert.valid_to,
           validDays: Math.max(0, validDays),
           totalDays,
-          isExpired: now > validTo,
-          expiresSoon: validDays <= 30,
+          isExpired,
+          // How long the certificate has been lapsed — the fact `validDays`
+          // cannot carry, because it is clamped to 0. Without it every surface
+          // rendered a certificate that expired in 2020 as "0 days left".
+          expiredDays: isExpired
+            ? Math.max(0, Math.floor((now - validTo) / (1000 * 60 * 60 * 24)))
+            : null,
+          // One threshold, from the one owner: the checker's own copy of the
+          // renewal window used to be 30 days, so it disagreed with `check`,
+          // `watch` and the client report (14) — and nothing read it anyway.
+          expiresSoon: isSslExpiringSoon(Math.max(0, validDays)),
           serialNumber: cert.serialNumber,
           fingerprint: cert.fingerprint,
           cipher: cipher.name,

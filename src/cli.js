@@ -17,7 +17,7 @@ import { buildReport, renderReportJson, renderReportMarkdown } from './report.js
 import { readFileSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
-import { invalidHttpUrls, readEntry, STALE_AFTER_DAYS } from './status.js';
+import { invalidHttpUrls, isSslExpiringSoon, readEntry, STALE_AFTER_DAYS } from './status.js';
 import { safeText } from './display.js';
 import { DEFAULT_WINDOW_DAYS, HISTORY_DAYS, loadHistory } from './history.js';
 import { FREE, PRODUCT, renderHelpPro } from './features.js';
@@ -130,6 +130,9 @@ if (command === 'check') {
       statusCode: r.statusCode,
       responseTimeMs: r.responseTimeMs,
       sslDaysRemaining: r.ssl?.validDays ?? null,
+      sslExpired: r.ssl?.isExpired ?? false,
+      sslExpiredDays: r.ssl?.expiredDays ?? null,
+      sslExpiringSoon: isSslExpiringSoon(r.ssl?.validDays) && r.ssl?.isExpired !== true,
       sslError: r.ssl?.error ?? null,
       contentLength: r.content?.contentLength ?? null,
       contentHash: r.content?.hash ?? null,
@@ -144,7 +147,7 @@ if (command === 'check') {
     for (const result of results) {
       const summary = summarize(result);
       const statusSymbol = result.healthy ? '✅' : '❌';
-      const sslEmoji = result.ssl?.validDays <= 14 ? '⚠️' : result.ssl?.validDays > 0 ? '🔒' : result.ssl?.error ? '🔓' : '—';
+      const sslEmoji = summary.sslIcon;
       const changedEmoji = result.content?.changed === true ? '🔄' : result.content?.changed === false ? '⏸️' : '—';
       const httpStatus = result.statusCode || 'N/A';
 

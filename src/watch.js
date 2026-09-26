@@ -17,7 +17,7 @@ import { readFileSync, writeFileSync, mkdirSync, existsSync, renameSync, unlinkS
 import { dirname, posix, win32 } from 'path';
 import { homedir } from 'os';
 import { createHash, randomUUID } from 'crypto';
-import { assertValidHttpUrls, readEntry, SSL_WARN_DAYS, STALE_AFTER_DAYS } from './status.js';
+import { assertValidHttpUrls, expiredNote, readEntry, readSslState, STALE_AFTER_DAYS } from './status.js';
 import { recordPass } from './report.js';
 import { safeText } from './display.js';
 import { loadHistory, pruneHistory, recordHistoryPass, saveHistory } from './history.js';
@@ -135,7 +135,7 @@ function fmtNow() {
 
 /**
  * One monitoring pass over all tracked URLs.
- * Returns list of change events: [{ url, type: 'up'|'down'|'ssl_warning'|'content_changed', message }]
+ * Returns list of change events: [{ url, type: 'up'|'down'|'ssl_warning'|'ssl_expired'|'content_changed', message }]
  */
 export async function runPass(state, opts = {}) {
   const events = [];
@@ -171,18 +171,43 @@ export async function runPass(state, opts = {}) {
       events.push({ url, type: 'down', message: `is DOWN${result.error ? ' — ' + result.error : ''}` });
     }
 
-    const validDays = result.ssl?.validDays;
-    if (Number.isFinite(validDays)) {
-      entry.sslValidDays = validDays;
+    // One reading of the certificate, so the event, the persisted entry and
+    // every later report agree. The writer used `Number.isFinite(validDays)`
+    // alone — a weaker gate than every reader had — so a negative day count was
+    // announced as "SSL expires in -3 days ⚠️", pushed to the desktop
+    // notification and the customer's webhook, and persisted into every report
+    // afterwards. A lapsed certificate is now its own event and its own fact.
+    const ssl = readSslState({
+      days: result.ssl?.validDays,
+      expired: result.ssl?.isExpired,
+      expiredDays: result.ssl?.expiredDays,
+    });
+    if (ssl.expired) {
+      delete entry.sslValidDays;
+      entry.sslExpired = true;
+      if (ssl.expiredDays !== null) entry.sslExpiredDays = ssl.expiredDays;
+      if (entry.sslExpiredWarned !== true) {
+        events.push({ url, type: 'ssl_expired', message: `SSL certificate ${expiredNote(ssl.expiredDays)} 🔴` });
+        entry.sslExpiredWarned = true;
+      }
+      entry.sslWarned = false;
+    } else if (ssl.days !== null) {
+      delete entry.sslExpired;
+      delete entry.sslExpiredDays;
+      entry.sslExpiredWarned = false;
+      entry.sslValidDays = ssl.days;
       const warningActive = entry.sslWarned === true || typeof entry.sslWarned === 'number';
-      if (validDays <= SSL_WARN_DAYS && !warningActive) {
-        events.push({ url, type: 'ssl_warning', message: `SSL expires in ${validDays} days ⚠️` });
+      if (ssl.expiringSoon && !warningActive) {
+        events.push({ url, type: 'ssl_warning', message: `SSL expires in ${ssl.days} days ⚠️` });
         entry.sslWarned = true;
-      } else if (validDays > SSL_WARN_DAYS) {
+      } else if (!ssl.expiringSoon) {
         entry.sslWarned = false;
       }
     } else {
       delete entry.sslValidDays;
+      delete entry.sslExpired;
+      delete entry.sslExpiredDays;
+      entry.sslExpiredWarned = false;
     }
 
     if (result.content?.changed === true) {
@@ -219,7 +244,7 @@ export async function runPass(state, opts = {}) {
 }
 
 function eventIcon(type) {
-  return { down: '🚨', up: '✅', baseline: '•', ssl_warning: '⚠️ ', content_changed: '🔄' }[type] || '•';
+  return { down: '🚨', up: '✅', baseline: '•', ssl_warning: '⚠️ ', ssl_expired: '🔴 ', content_changed: '🔄' }[type] || '•';
 }
 
 export function printPass(pass, { alertUnchangedDown = true } = {}) {

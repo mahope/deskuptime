@@ -106,7 +106,15 @@ runs:
           const r = JSON.parse(require("fs").readFileSync("deskuptime-results.json","utf8"));
           let n = 0;
           for (const x of r) {
-            if (days > 0 && x.sslDaysRemaining !== null && x.sslDaysRemaining < days) n++;
+            // A lapsed certificate is its own fact. `sslDaysRemaining` is clamped
+            // to 0, so it cannot express "expired 3 months ago" — reading the
+            // window alone made an expired site look like one expiring tonight.
+            if (days > 0 && x.sslExpired === true) n++;
+            // `<=`, not `<`: the CLI, `watch` and the client report all warn at
+            // exactly `days` remaining, so a certificate on the boundary used to
+            // pass here and fail everywhere else. An unusable value (a string, a
+            // negative number) is unknown, not urgent — the report shows — for it.
+            else if (days > 0 && typeof x.sslDaysRemaining === "number" && x.sslDaysRemaining >= 0 && x.sslDaysRemaining <= days) n++;
             else if (days > 0 && x.healthy && x.url.startsWith("https") && x.sslError) n++;
           }
           console.log(n);
@@ -128,7 +136,9 @@ runs:
               const r = JSON.parse(require("fs").readFileSync("deskuptime-results.json","utf8"));
               for (const x of r) {
                 const s = x.healthy ? "✅ UP" : "❌ DOWN";
-                const ssl = x.sslDaysRemaining === null ? "—" : String(x.sslDaysRemaining);
+                const ssl = x.sslExpired === true
+                  ? `🔴 expired${x.sslExpiredDays > 0 ? ` ${x.sslExpiredDays}d ago` : ""}`
+                  : x.sslDaysRemaining === null ? "—" : String(x.sslDaysRemaining);
                 console.log(`| ${x.url} | ${s} | ${x.statusCode ?? "—"} | ${x.responseTimeMs ?? "—"}ms | ${ssl} |`);
               }
             '
