@@ -139,6 +139,45 @@ export function checkAgeDays(lastChecked, now = new Date()) {
   return Math.max(0, Math.floor(age / MS_PER_DAY));
 }
 
+/**
+ * The fixed wording for a stale pass, in one place.
+ *
+ * The client report had its own copy of this sentence and `readEntry` had
+ * another, so the two could drift; a surface that says "stale" without saying
+ * how stale is the exact gap P1-6 opened.
+ */
+export function staleAgeNote(ageDays) {
+  return ageDays === null ? 'stale — last check unreadable' : `stale — last check ${ageDays} d ago`;
+}
+
+/**
+ * The fixed wording for a site the state file cannot vouch for, in one place.
+ *
+ * "not checked yet" is a claim about *history*, and until now only the client
+ * report made it. Measured on one state file, the two terminal lists said
+ * nothing at all about it, and two genuinely different states printed the very
+ * same row:
+ *
+ *   deskuptime status
+ *     · https://never.dk            ← wasUp: null, no pass has ever run
+ *     · https://handedit.dk         ← wasUp: null, a pass ran 3 h ago
+ *
+ * A user reading that cannot tell "this was never monitored" from "the last pass
+ * exists but its verdict is unreadable", and a URL added to the watch list
+ * whose loop never ran is the same silent failure P1-10 measured in the alerts:
+ * nothing says it. So the two cases get their own words, taken from the report's
+ * rule, and an unknown verdict names the age of the pass behind it — "unknown"
+ * without an age reads as "no data" too.
+ *
+ * @param {object} state — `{ lastChecked, ageDays }`; `ageDays` is
+ *   `checkAgeDays(lastChecked)`.
+ */
+export function unknownNote({ lastChecked, ageDays } = {}) {
+  if (!lastChecked) return 'not checked yet';
+  if (ageDays === null || ageDays === undefined) return 'status unknown (last check unreadable)';
+  return `status unknown (last check ${ageDays} d ago)`;
+}
+
 /** A recorded pass time we can order, or null when it is absent or unreadable. */
 function passTime(value) {
   if (typeof value !== 'string' || !value) return null;
@@ -246,9 +285,16 @@ export function readEntry(entry, { now = new Date() } = {}) {
   });
   const stale = isCheckStale(value.lastChecked, now);
   const ageDays = checkAgeDays(value.lastChecked, now);
+  const neverChecked = !value.lastChecked;
 
   return {
     verdict: verdictFor(value.wasUp),
+    // "No pass has ever run" and "the last pass ran but its verdict cannot be
+    // read" are different facts that used to print identically, in both
+    // terminal lists and in the report. The two surfaces now ask for the same
+    // sentence, so neither can discover the difference on its own.
+    neverChecked,
+    unknownNote: unknownNote({ lastChecked: value.lastChecked, ageDays }),
     statusCode: Number.isInteger(value.lastStatus) ? value.lastStatus : null,
     sslDays: ssl.days,
     sslExpired: ssl.expired,
@@ -261,9 +307,7 @@ export function readEntry(entry, { now = new Date() } = {}) {
         : ssl.expiringSoon ? `SSL ⚠️ ${ssl.days}d — renew soon` : `SSL ${ssl.days}d`,
     ageDays,
     stale,
-    staleNote: stale
-      ? (ageDays === null ? 'stale — last check unreadable' : `stale — last check ${ageDays} d ago`)
-      : '',
+    staleNote: stale ? staleAgeNote(ageDays) : '',
   };
 }
 

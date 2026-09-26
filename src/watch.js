@@ -306,8 +306,12 @@ export function printStatus(options = {}) {
     const ssl = row.sslNote ? `, ${row.sslNote}` : '';
     // lastChecked is state-file text, so it is flattened like the URL beside it.
     const checked = row.entry.lastChecked ? ` @ ${safeText(row.entry.lastChecked, { max: 0 })}` : '';
+    // A bare `❔ unknown` used to cover both "never monitored" and "a pass ran
+    // but its verdict is unreadable", and this is the command a user runs to
+    // find out whether their monitoring works at all.
+    const unknown = row.verdict === 'unknown' ? ` — ${row.unknownNote}` : '';
     const stale = row.staleNote ? ` ⚠️ ${row.staleNote}` : '';
-    console.log(`  ${VERDICT_ICON[row.verdict]}  ${safeText(row.url, { max: 0 })} (${code}${ssl})${checked}${stale}`);
+    console.log(`  ${VERDICT_ICON[row.verdict]}  ${safeText(row.url, { max: 0 })} (${code}${ssl})${checked}${unknown}${stale}`);
   }
 
   // A stale site is the reader's most consequential line and a per-row marker
@@ -322,6 +326,20 @@ export function printStatus(options = {}) {
       console.log(`    ${safeText(row.url, { max: 0 })} (last pass ${row.ageDays === null ? 'at an unreadable time' : `${row.ageDays} d ago`})`);
     }
     console.log('    Monitoring has probably stopped. Run: deskuptime watch <url> --once');
+  }
+
+  // A URL that has never been checked is the other half of the same question:
+  // the watch list says it is monitored, and nothing has ever measured it. A
+  // stale pass is named because the numbers are old; this is named because there
+  // are no numbers at all, and a per-row `not checked yet` is easy to scroll
+  // past. Disjoint from the block above: a site with no pass is not stale.
+  const neverRows = rows.filter(row => row.neverChecked);
+  if (neverRows.length > 0) {
+    console.log(`\n⚠️  Never checked: ${neverRows.length} of ${rows.length} site(s) are on the list but no pass has ever measured them:`);
+    for (const row of neverRows) {
+      console.log(`    ${safeText(row.url, { max: 0 })}`);
+    }
+    console.log('    Run: deskuptime watch <url> --once');
   }
 }
 

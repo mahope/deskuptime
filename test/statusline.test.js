@@ -333,3 +333,69 @@ test('status: a state file cannot start a second line', { timeout: 30000 }, asyn
   assertInert(stdout, 'status');
   assert.equal(stdout.includes('second line'), false, 'a state file printed a second line');
 });
+
+// ── A site the state file cannot vouch for (P1-14) ──
+
+/**
+ * Measured before any line was changed, on one state file with two entries that
+ * are both `unknown` and were not distinguishable in either list:
+ *
+ *   deskuptime status
+ *     · https://never.dk
+ *     · https://handedit.dk
+ *
+ * The first has never been measured. The second has a pass from three hours ago
+ * whose verdict cannot be read (a restored or hand-edited state file). A user
+ * reading that list cannot tell them apart, and a URL on the watch list that no
+ * pass has ever measured is the same silent failure P1-10 measured in the alert
+ * channels: nothing says it. The client report has said "not checked yet" since
+ * P1-13 — these two surfaces now read the same sentence from `unknownNote`.
+ */
+test('the two lists name what they cannot vouch for, and never for a site they can', { timeout: 30000 }, async (t) => {
+  const urls = {
+    'https://never.dk/': { wasUp: null, addedAt: ago(30) },
+    'https://handedit.dk/': { wasUp: 'yes', lastStatus: 200, lastChecked: ago(0.125), addedAt: ago(30) },
+    'https://fresh.dk/': { wasUp: true, lastStatus: 200, lastChecked: ago(0.01), addedAt: ago(30) },
+  };
+  const env = withState(t, urls);
+  const [list, watch] = await Promise.all([run(['status'], { env }), run(['watch', '--status'], { env })]);
+
+  for (const { stdout } of [list, watch]) {
+    assertInert(stdout, 'unknown rows');
+    // Never monitored, and monitored-but-unreadable, are different sentences.
+    assert.match(line(stdout, 'never.dk'), /not checked yet/, 'a site with no pass did not say so');
+    assert.match(line(stdout, 'handedit.dk'), /status unknown \(last check \d+ d ago\)/,
+      'a site with an unreadable verdict did not name the age of its pass');
+    // A site we can vouch for is not given either sentence.
+    const fresh = line(stdout, 'fresh.dk');
+    assert.equal(fresh.includes('not checked yet'), false, 'a fresh up-site was called unchecked');
+    assert.equal(fresh.includes('status unknown'), false, 'a fresh up-site was called unknown');
+  }
+  // The two entries rendered the same line before this change, which is the
+  // defect: they are not allowed to collapse back into one another.
+  assert.notEqual(line(list.stdout, 'never.dk').replace('never', ''), line(list.stdout, 'handedit.dk').replace('handedit', ''));
+});
+
+test('watch --status names the sites no pass has ever measured, once', { timeout: 30000 }, async (t) => {
+  const env = withState(t, {
+    'https://never.dk/': { wasUp: null, addedAt: ago(30) },
+    'https://stale.dk/': { wasUp: true, lastStatus: 200, lastChecked: ago(41), addedAt: ago(60) },
+    'https://fine.dk/': { wasUp: true, lastStatus: 200, lastChecked: ago(0.01), addedAt: ago(60) },
+  });
+  const { stdout } = await run(['watch', '--status'], { env });
+  // Named out loud, like the stale block: a per-row marker is easy to scroll past
+  // and this command exists to answer "is my monitoring working?".
+  const blocks = stdout.split('\n\n').filter(block => block.includes('Never checked'));
+  assert.equal(blocks.length, 1, 'the never-checked block is missing or repeated');
+  assert.match(blocks[0], /1 of 3 site\(s\)/);
+  assert.match(blocks[0], /https:\/\/never\.dk\//);
+  assert.match(blocks[0], /deskuptime watch <url> --once/);
+  // Disjoint from the stale block: a site with no pass is not old data, it is
+  // no data — and the two must not both claim it.
+  const staleBlock = stdout.split('\n\n').find(block => block.includes('No monitoring pass'));
+  assert.equal(staleBlock.includes('never.dk'), false, 'a never-checked site was also reported as stale');
+  assert.equal(stdout.split('Never checked').length - 1, 1, 'the block is printed more than once');
+  // A site that has been measured is never in that block.
+  assert.equal(blocks[0].includes('fine.dk'), false, 'a measured site was named as never checked');
+  assert.equal(blocks[0].includes('stale.dk'), false, 'a stale site was named as never checked');
+});

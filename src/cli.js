@@ -452,8 +452,13 @@ if (command === 'status') {
     const up = e.verdict === 'up' ? '✅' : e.verdict === 'down' ? '❌' : '·';
     const code = e.statusCode === null ? '' : ` (${e.statusCode})`;
     const ssl = e.sslNote ? ` — ${e.sslNote}` : '';
+    // A `·` used to be the whole row, so "never monitored" and "the last pass
+    // ran but its verdict cannot be read" printed identically. The sentence is
+    // the report's, read from readEntry, and it is fixed words plus a checked
+    // day count, so it cannot carry anything out of the state file.
+    const unknown = e.verdict === 'unknown' ? ` — ${e.unknownNote}` : '';
     const stale = e.staleNote ? ` ⚠️ ${e.staleNote}` : '';
-    console.log(`  ${up} ${safeText(u, { max: 0 })}${code}${ssl}${stale}`);
+    console.log(`  ${up} ${safeText(u, { max: 0 })}${code}${ssl}${unknown}${stale}`);
   }
   process.exit(0);
 }

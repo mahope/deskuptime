@@ -27,7 +27,7 @@
 import { PRODUCT } from './features.js';
 import { DEFAULT_WINDOW_DAYS, windowSummary } from './history.js';
 import { markdownCell as cell } from './display.js';
-import { SSL_WARN_DAYS, STALE_AFTER_DAYS, checkAgeDays, expiredNote, isCheckStale, readSslState, verdictFor } from './status.js';
+import { SSL_WARN_DAYS, STALE_AFTER_DAYS, checkAgeDays, expiredNote, isCheckStale, readSslState, staleAgeNote, unknownNote, verdictFor } from './status.js';
 
 export const DEFAULT_REPORT_TITLE = 'Website uptime report';
 const MAX_TITLE_LENGTH = 120;
@@ -113,23 +113,20 @@ export function uptimePercent(entry) {
 /**
  * Status words for a verdict the state file cannot read.
  *
- * "not checked yet" is a claim about history, and the report used to make it
- * for every `unknown` site. Measured on a state file that was hand-edited or
- * restored from a backup, one row said all three of these at once:
+ * The wording lives in `unknownNote` (src/status.js) because three surfaces now
+ * print one: the Status column here, the `status` URL list and `watch --status`.
+ * It used to live only here, which is why the two terminal lists said nothing at
+ * all about it — see that function for the measurement.
+ *
+ * "not checked yet" is a claim about history, and this used to make it for every
+ * `unknown` site. Measured on a state file that was hand-edited or restored from
+ * a backup, one row said all three of these at once:
  *
  *   | https://kunde.dk | not checked yet | 75% (4 checks, 1 failed) | … | 2026-09-25 23:00 UTC |
  *
  * A customer reads that as "this site was never monitored" while the same row
- * carries four completed passes and a timestamp from an hour ago. So the two
- * cases get their own words: no pass has ever run → never monitored; a pass ran
- * and its verdict cannot be read → the status is unknown, and the age of that
- * pass is named, because "unknown" without an age reads as "no data" too.
+ * carries four completed passes and a timestamp from an hour ago.
  */
-function unknownStatus(site) {
-  if (!site.lastChecked) return 'not checked yet';
-  if (site.ageDays === null) return 'status unknown (last check unreadable)';
-  return `status unknown (last check ${site.ageDays} d ago)`;
-}
 
 const STATUS_RANK = { down: 0, unknown: 1, up: 2 };
 
@@ -299,13 +296,8 @@ function statusCell(site) {
     ? `UP${site.statusCode ? ` (${site.statusCode})` : ''}`
     : site.status === 'down'
       ? `DOWN${site.statusCode ? ` (${site.statusCode})` : ''}`
-      : unknownStatus(site);
-  return site.stale ? `${observed} ⚠️ ${staleNote(site)}` : observed;
-}
-
-/** How the age is worded, or null when it cannot be known. */
-function staleNote(site) {
-  return site.ageDays === null ? 'stale — last check unreadable' : `stale — last check ${site.ageDays} d ago`;
+      : unknownNote(site);
+  return site.stale ? `${observed} ⚠️ ${staleAgeNote(site.ageDays)}` : observed;
 }
 
 /**

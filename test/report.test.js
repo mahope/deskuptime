@@ -779,4 +779,32 @@ test('a duplicated verdict owner is caught by reading the source, not the output
   assert.match(reportSrc, /verdictFor\(entry\?\.wasUp\)/, 'and it must still ask for the verdict');
   assert.equal((statusSrc.match(/export function verdictFor\(/g) || []).length, 1, 'one definition');
   assert.match(statusSrc, /verdict: verdictFor\(value\.wasUp\)/, 'readEntry asks the same owner');
+
+  // P1-14: the same trap, twice more. "not checked yet" and "stale — last check
+  // N d ago" each had a copy here *and* one in readEntry, while the two terminal
+  // lists said neither — three surfaces, three owners, two of them silent.
+  assert.doesNotMatch(reportSrc, /'not checked yet'/, 'the report must ask unknownNote(), not own the sentence');
+  assert.doesNotMatch(reportSrc, /stale — last check/, 'the report must ask staleAgeNote(), not own the sentence');
+  assert.match(reportSrc, /unknownNote\(site\)/, 'and it must still ask for the unknown wording');
+  assert.match(reportSrc, /staleAgeNote\(site\.ageDays\)/, 'and for the stale wording');
+  assert.equal((statusSrc.match(/export function unknownNote\(/g) || []).length, 1, 'one unknown wording');
+  assert.equal((statusSrc.match(/export function staleAgeNote\(/g) || []).length, 1, 'one stale wording');
+});
+
+test('the report and the terminal lists say the same thing about a site they cannot vouch for', () => {
+  // The sentence three surfaces print, from one function, for the three states a
+  // hand-edited or half-written state file produces.
+  const cases = [
+    { entry: { wasUp: null }, expected: 'not checked yet' },
+    { entry: { wasUp: null, lastChecked: 'not-a-date' }, expected: 'status unknown (last check unreadable)' },
+    { entry: { wasUp: 'yes', lastChecked: '2026-08-20T09:30:00.000Z' }, expected: 'status unknown (last check 36 d ago)' },
+  ];
+  for (const { entry, expected } of cases) {
+    assert.equal(readEntry(entry, { now: NOW }).unknownNote, expected, JSON.stringify(entry));
+    assert.equal(readEntry(entry, { now: NOW }).neverChecked, !entry.lastChecked, JSON.stringify(entry));
+    // And the report built from the same state file carries the same sentence.
+    const report = buildReport(proState({ 'https://x.dk/': { addedAt: '2026-08-01T08:00:00.000Z', ...entry } }), { now: NOW });
+    assert.equal(report.sites[0].status, 'unknown', JSON.stringify(entry));
+    assert.match(renderReportMarkdown(report), new RegExp(expected.replace(/[()]/g, String.raw`\$&`)));
+  }
 });
