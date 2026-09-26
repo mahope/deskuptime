@@ -18,7 +18,7 @@ import { buildReport, renderReportJson, renderReportMarkdown } from './report.js
 import { readFileSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
-import { invalidHttpUrls, readChain, readContentState, readDisclosure, readEntry, readRedirectTarget, readSecurityHeaders, readSslState, contentSkipNote, SECURITY_HEADER, STALE_AFTER_DAYS } from './status.js';
+import { invalidHttpUrls, partitionUsableUrls, readChain, readContentState, readDisclosure, readEntry, readRedirectTarget, readSecurityHeaders, readSslState, contentSkipNote, unusableUrlNote, SECURITY_HEADER, STALE_AFTER_DAYS } from './status.js';
 import { formatMs, machinesInUse, safeText } from './display.js';
 import { DEFAULT_WINDOW_DAYS, HISTORY_DAYS, loadHistory } from './history.js';
 import { FREE, PRODUCT, proExtras, renderHelpPro } from './features.js';
@@ -567,7 +567,14 @@ if (command === 'unwatch') {
     console.error('Usage: deskuptime unwatch <url> [url2 ...]');
     process.exit(1);
   }
-  const invalidUrls = invalidHttpUrls(rawArgs);
+  // A saved key that is not an address is still a key this command has to be
+  // able to remove — it is the way out of a state file a script or a half-write
+  // left with `kunde.dk` in it, and the alternative is hand-editing the file
+  // that also holds the license key. So the address check only rejects an
+  // argument that is *not* one of the saved keys: a typo on the command line is
+  // still a typo, a broken key in the file is a real row to delete.
+  const savedKeys = Object.keys(loadState().urls);
+  const invalidUrls = invalidHttpUrls(rawArgs).filter(url => !savedKeys.includes(url));
   if (invalidUrls.length > 0) {
     for (const url of invalidUrls) console.error(`❌ Error: Invalid URL: ${url}`);
     process.exit(1);
@@ -652,6 +659,14 @@ if (command === 'status') {
     // report showed the impossible date. The verdict is untouched.
     const ahead = e.clockAhead ? ` ⚠️ ${e.clockAhead}` : '';
     console.log(`  ${up} ${safeText(u, { max: 0 })}${code}${ssl}${unknown}${stale}${redirect}${ahead}`);
+  }
+  // A key that is not an address prints above like any other row — as a site
+  // whose verdict is merely unknown — although it was never measured and never
+  // can be, and a monitoring pass skips it. Named here with the owner's
+  // sentence, so this list cannot claim a broken key is a quiet customer site.
+  const { usable, unusable } = partitionUsableUrls(urls);
+  if (unusable.length > 0) {
+    console.log(`⚠️  ${unusableUrlNote(unusable, { checked: usable.length })}`);
   }
   process.exit(0);
 }

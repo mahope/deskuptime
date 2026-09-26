@@ -27,7 +27,7 @@
 import { PRODUCT } from './features.js';
 import { DEFAULT_WINDOW_DAYS, windowCoverage, windowSummary } from './history.js';
 import { markdownCell as cell } from './display.js';
-import { SSL_WARN_DAYS, STALE_AFTER_DAYS, clockAheadNote, expiredNote, isCheckStale, passAge, readPassTime, readRedirectTarget, readResponseMs, readSslState, readStatusCode, sslLapsedNote, staleAgeNote, unknownNote, verdictFor } from './status.js';
+import { SSL_WARN_DAYS, STALE_AFTER_DAYS, clockAheadNote, expiredNote, isCheckStale, isHttpUrl, passAge, readPassTime, readRedirectTarget, readResponseMs, readSslState, readStatusCode, sslLapsedNote, staleAgeNote, unknownNote, unusableUrlNote, verdictFor } from './status.js';
 
 export const DEFAULT_REPORT_TITLE = 'Website uptime report';
 const MAX_TITLE_LENGTH = 120;
@@ -155,6 +155,10 @@ export function normalizeTitle(title) {
  * day inside it gets `window: null`, which renders as — and never as 100 %.
  */
 export function buildReport(state, { title, now = new Date(), history, windowDays = DEFAULT_WINDOW_DAYS } = {}) {
+  // A key in the saved list that is not an address still gets a row — dropping
+  // it would move `summary.sites` and every other number — but it can never be
+  // measured, so the row says "status unknown" with the reason and the key is
+  // counted apart from the sites (P1-40).
   const sites = Object.entries(state?.urls ?? {})
     .filter(([url, entry]) => typeof url === 'string' && url && entry && typeof entry === 'object')
     .map(([url, entry]) => {
@@ -207,7 +211,13 @@ export function buildReport(state, { title, now = new Date(), history, windowDay
       const coverage = windowCoverage({ window, history, monitoringSince, days: windowDays, now });
       return {
         url,
-        status: verdictFor(entry?.wasUp),
+        // A key that is not an address can never be measured, and its stored
+        // `wasUp` is whatever the file says — so a client report said `UP` for a
+        // `kunde.dk` that no pass has ever been able to check (P1-40). The row is
+        // "status unknown" with the reason, and the key is counted apart from
+        // the sites.
+        uncheckable: !isHttpUrl(url),
+        status: isHttpUrl(url) ? verdictFor(entry?.wasUp) : 'unknown',
         stale,
         ageDays: pass.ageDays,
         statusCode: readStatusCode(entry.lastStatus),
@@ -302,6 +312,11 @@ export function buildReport(state, { title, now = new Date(), history, windowDay
     // days printed as `95.83%` next to "the last 30 days", with the shortfall
     // visible only as the word "recorded" inside the cell.
     windowGaps: sites.filter(site => site.windowGap).length,
+    // Additive: how many of the listed URLs are not addresses at all. They are
+    // counted in `sites` above (removing them would move every other number),
+    // so before this the document gave a client a row of dashes for a key that
+    // no monitoring pass has ever been able to check.
+    uncheckable: sites.filter(site => site.uncheckable).length,
   };
 
   return {
@@ -397,7 +412,9 @@ function statusCell(site) {
     : site.status === 'down'
       ? `DOWN${site.statusCode ? ` (${site.statusCode})` : ''}`
       // Asked about the fact, not about the readable time — see `unknownNote`.
-      : unknownNote({ passRecorded: site.passRecorded, ageDays: site.ageDays, clockAhead: site.clockAhead });
+      : site.uncheckable
+        ? unusableUrlNote([site.url], { brief: true })
+        : unknownNote({ passRecorded: site.passRecorded, ageDays: site.ageDays, clockAhead: site.clockAhead });
   // A 200 from another host is still a 200 — the row keeps its verdict — but the
   // customer reading this must see whose server answered, or "UP" is a claim
   // about a URL nobody asked about (a parked domain, a hijacked domain, a typo).
@@ -562,6 +579,18 @@ export function renderReportMarkdown(report) {
       `**Fewer days recorded than the window for ${gaps.length} site${gaps.length === 1 ? '' : 's'} — the uptime above covers part of the period, not all of it:** ${gaps.map(site => cell(`${site.url} (${site.windowRecordedDays} of ${site.windowMissingDays + site.windowRecordedDays} d)`)).join(', ')}`,
     ];
 
+  // A key that is not an address gets a row of dashes in the table, which a
+  // client reads as "we checked this site and have nothing to report" — or as a
+  // site the agency forgot. It is neither: no pass can check it. Named out
+  // loud, with the same words the terminal uses for the same key.
+  const uncheckable = report.sites.filter(site => site.uncheckable);
+  const uncheckableLines = uncheckable.length === 0
+    ? []
+    : [
+      '',
+      `**${uncheckable.length === 1 ? 'One listed URL is' : `${uncheckable.length} listed URLs are`} not a full address, so no monitoring pass can check ${uncheckable.length === 1 ? 'it' : 'them'} — the row above is empty because nothing was measured, not because the site was quiet:** ${uncheckable.map(site => cell(site.url)).join(', ')}`,
+    ];
+
   return [
     `# ${cell(report.title)}`,
     '',
@@ -571,15 +600,16 @@ export function renderReportMarkdown(report) {
     `|${' --- |'.repeat(HEADERS.length)}`,
     ...(rows.length > 0 ? rows : [`| ${['_no monitored sites_', '—', '—', '—', '—', '—', '—'].join(' | ')} |`]),
     '',
-    `**${report.summary.sites} site(s) · ${buckets.up} up · ${buckets.down} down${unknownWords(buckets)} · ${report.summary.checks} checks · ${report.summary.failures} failed${expiring.length > 0 ? ` · ${expiring.length} SSL expiring soon` : ''}${expired.length > 0 ? ` · ${expired.length} SSL EXPIRED` : ''}${lapsed.length > 0 ? ` · ${lapsed.length} SSL may be expired` : ''}${stale.length > 0 ? ` · ${stale.length} stale (no check in the last ${STALE_AFTER_DAYS} d)` : ''}${crossed.length > 0 ? ` · ${crossed.length} answered by another host` : ''}${gaps.length > 0 ? ` · ${gaps.length} with an incomplete window` : ''}**`,
+    `**${report.summary.sites} site(s) · ${buckets.up} up · ${buckets.down} down${unknownWords(buckets)} · ${report.summary.checks} checks · ${report.summary.failures} failed${expiring.length > 0 ? ` · ${expiring.length} SSL expiring soon` : ''}${expired.length > 0 ? ` · ${expired.length} SSL EXPIRED` : ''}${lapsed.length > 0 ? ` · ${lapsed.length} SSL may be expired` : ''}${stale.length > 0 ? ` · ${stale.length} stale (no check in the last ${STALE_AFTER_DAYS} d)` : ''}${crossed.length > 0 ? ` · ${crossed.length} answered by another host` : ''}${gaps.length > 0 ? ` · ${gaps.length} with an incomplete window` : ''}${uncheckable.length > 0 ? ` · ${uncheckable.length} not a full address` : ''}**`,
     ...expiredLines,
     ...lapsedLines,
     ...attention,
     ...staleLines,
     ...crossedLines,
     ...gapLines,
+    ...uncheckableLines,
     '',
-    `Uptime is the share of completed monitoring passes that answered HTTP 200–399. "Uptime (all)" counts every pass since the site was added${since ? ` (earliest ${shortTime(since)})` : ''}; "Uptime (window)" counts the passes recorded in the last ${windowDays} days. A site with no completed pass yet shows — rather than 100%. "Uptime (window)" is counted from a separate daily history file, so a row can show a recent check with an empty window column; that column then names the file that is missing the pass rather than claiming the site was not monitored. A site that was already being monitored when the window opened, but has fewer recorded days than the window, is named below the table with both counts, so the share and the period are not read as covering days nobody watched. The counts in the summary line are a partition: every site is in exactly one of up, down, not checked, status unknown or stale. "Up" and "down" describe sites checked within the last ${STALE_AFTER_DAYS} days; a site whose monitoring stopped is counted as stale and keeps the status from its last pass in the table, named with the age of that pass. "Status unknown" means a pass ran but its result cannot be read from the state file. The SSL column is what the last pass read, so its day count is the deadline the certificate had at that moment. A reading less than a day old is shown as measured; one old enough that the certificate may have lapsed since is named as such and is not counted as a renewal to schedule — run \`deskuptime check <url>\` for a fresh reading.`,
+    `Uptime is the share of completed monitoring passes that answered HTTP 200–399. "Uptime (all)" counts every pass since the site was added${since ? ` (earliest ${shortTime(since)})` : ''}; "Uptime (window)" counts the passes recorded in the last ${windowDays} days. A site with no completed pass yet shows — rather than 100%. "Uptime (window)" is counted from a separate daily history file, so a row can show a recent check with an empty window column; that column then names the file that is missing the pass rather than claiming the site was not monitored. A site that was already being monitored when the window opened, but has fewer recorded days than the window, is named below the table with both counts, so the share and the period are not read as covering days nobody watched. The counts in the summary line are a partition: every site is in exactly one of up, down, not checked, status unknown or stale. "Up" and "down" describe sites checked within the last ${STALE_AFTER_DAYS} days; a site whose monitoring stopped is counted as stale and keeps the status from its last pass in the table, named with the age of that pass. "Status unknown" means a pass ran but its result cannot be read from the state file. A listed URL that is not a full address can never be measured at all: it is named below the table and counted separately, so its empty row is never read as a site that was simply quiet. The SSL column is what the last pass read, so its day count is the deadline the certificate had at that moment. A reading less than a day old is shown as measured; one old enough that the certificate may have lapsed since is named as such and is not counted as a renewal to schedule — run \`deskuptime check <url>\` for a fresh reading.`,
     '',
     `Generated on one machine, without an account: no page content, response headers or license data is included, and nothing was uploaded.`,
   ].join('\n');

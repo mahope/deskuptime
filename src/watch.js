@@ -17,7 +17,7 @@ import { readFileSync, writeFileSync, mkdirSync, existsSync, renameSync, unlinkS
 import { dirname, posix, win32 } from 'path';
 import { homedir } from 'os';
 import { createHash, randomUUID } from 'crypto';
-import { assertValidHttpUrls, expiredNote, isNewerPass, readContentChange, readEntry, readEvent, readRedirectTarget, readSslState, STALE_AFTER_DAYS } from './status.js';
+import { assertValidHttpUrls, expiredNote, isNewerPass, partitionUsableUrls, readContentChange, readEntry, readEvent, readRedirectTarget, readSslState, STALE_AFTER_DAYS, unusableUrlNote } from './status.js';
 import { recordPass } from './report.js';
 import { formatMs, safeText } from './display.js';
 import { loadHistory, pruneHistory, recordHistoryPass, saveHistory } from './history.js';
@@ -192,7 +192,16 @@ function fmtNow() {
 export async function runPass(state, opts = {}) {
   const events = [];
   const urls = Object.keys(state.urls);
-  assertValidHttpUrls(urls);
+  // A key in the saved list that is not an address is skipped and named, not
+  // fatal: measured 2026-09-26, one `kunde.dk` among 25 working keys threw
+  // `TypeError: Invalid URL` out of runPass and startWatch before the first
+  // request, so the pass exited 1 with no output and the other 24 sites were
+  // never checked — on the cron path, where the user only ever sees a stack
+  // trace in the mail. See partitionUsableUrls() for the measurement.
+  const { usable, unusable } = partitionUsableUrls(urls);
+  if (unusable.length > 0) {
+    console.error(`⚠️  ${unusableUrlNote(unusable, { checked: usable.length })}`);
+  }
   const check = opts.check || checkUrl;
   // Daily counters for the client report's "last 30 days" column. Recorded for
   // every tier: history is two integers per site per day, and a free user who
@@ -200,13 +209,13 @@ export async function runPass(state, opts = {}) {
   const now = opts.now instanceof Date ? opts.now : new Date();
   const history = loadHistory(opts);
 
-  const results = await Promise.all(urls.map((url) => {
+  const results = await Promise.all(usable.map((url) => {
     const entry = state.urls[url];
     return check(url, { contentHash: entry.lastHash || null });
   }));
 
   for (let index = 0; index < results.length; index++) {
-    const url = urls[index];
+    const url = usable[index];
     const entry = state.urls[url];
     const result = results[index];
     // The previous verdict, read through readEntry() like every other surface.
@@ -365,7 +374,12 @@ export async function runPass(state, opts = {}) {
   const pass = {
     events,
     results,
-    healthy: results.every(result => result.healthy),
+    // `[] .every()` is true, so a list of nothing but unusable keys would have
+    // reported a green pass for a pass that measured nothing — the one thing
+    // this tool must never do. A pass over at least one address keeps the
+    // ordinary rule; a pass that had addresses and could check none of them is
+    // not healthy, so a cron job's exit code still says "look at me".
+    healthy: urls.length > 0 && results.length === 0 ? false : results.every(result => result.healthy),
     // False when the pass ran but could not be written — the caller can say so
     // instead of inferring it from a missing counter.
     stateSaved,
@@ -435,6 +449,7 @@ export function printStatus(options = {}) {
   // command makes no request — which is exactly why the age of the last pass is
   // part of what it says.
   const now = options.now instanceof Date ? options.now : new Date();
+  const { usable, unusable } = partitionUsableUrls(entries.map(([url]) => url));
   const rows = entries.map(([url, entry]) => ({ url, entry, ...readEntry(entry, { now, url }) }));
 
   console.log(`📋 ${rows.length} monitored URL(s):\n`);
@@ -489,6 +504,25 @@ export function printStatus(options = {}) {
     }
     console.log('    Run: deskuptime watch <url> --once');
   }
+
+  // The list above prints every key in the state file, and a key that is not an
+  // address prints like any other — as a site that is merely unknown, which is
+  // what the row for a half-written `kunde.dk` did until P1-40. It was never
+  // measured and never can be, and this is the command whose whole job is to
+  // say whether the monitoring works. Named out loud, with the owner's sentence.
+  if (unusable.length > 0) {
+    console.log(`\n⚠️  ${unusableUrlNote(unusable, { checked: usable.length })}`);
+  }
+}
+
+/**
+ * How many of the saved keys are addresses we can actually monitor. A key that
+ * is not an address cannot be checked, so it must not hold one of the free
+ * tier's three slots: it used to, and the only way to get the slot back was to
+ * hand-edit `state.json` — the file that also holds the license key.
+ */
+export function monitoredCount(state) {
+  return partitionUsableUrls(Object.keys(state?.urls ?? {})).usable.length;
 }
 
 function addMonitoredUrls(state, urls, pro) {
@@ -496,7 +530,11 @@ function addMonitoredUrls(state, urls, pro) {
   let added = 0;
   for (const url of urls) {
     if (state.urls[url]) continue;
-    if (Object.keys(state.urls).length >= limit) {
+    // A saved key that is not an address cannot be monitored, so it must not
+    // hold a slot: on the free tier it used to consume one of the three, and
+    // the only way to get the slot back was to hand-edit `state.json` — the
+    // file that also holds the license key. `unwatch <key>` is the way out.
+    if (monitoredCount(state) >= limit) {
       console.log(pro
         ? `⚠️  Skipping duplicate/extra URL: ${url}`
         : `⚠️  ${freeLimitMessage(url)}`);
@@ -611,7 +649,7 @@ export async function runOnce(urls, opts = {}) {
     const state = loadState(opts);
     const pro = isPro(state);
     if (!pro) {
-      const available = Math.max(FREE.urlLimit - Object.keys(state.urls).length, 0);
+      const available = Math.max(FREE.urlLimit - monitoredCount(state), 0);
       const rejected = [...new Set(urls)].filter(url => !state.urls[url]).slice(available);
       if (rejected.length > 0) return { events: [], results: [], healthy: false, added: 0, rejected };
     }
@@ -756,7 +794,16 @@ export async function sendWebhook(webhookUrl, event, { timeoutMs = WEBHOOK_TIMEO
 export async function startWatch(urls, opts = {}) {
   const { webhookUrl } = opts;
   const state = loadState(opts);
-  assertValidHttpUrls([...urls, ...Object.keys(state.urls)]);
+  // The typed arguments are still checked strictly — the caller is at fault
+  // there and can be told, which is what the CLI's own check does before it
+  // gets here — but the *saved* keys are not: a key that is not an address is
+  // named and skipped instead of stopping the loop before it has measured
+  // anything.
+  assertValidHttpUrls(urls);
+  const saved = partitionUsableUrls(Object.keys(state.urls));
+  if (saved.unusable.length > 0) {
+    console.error(`⚠️  ${unusableUrlNote(saved.unusable, { checked: saved.usable.length })}`);
+  }
   let pro = false;
 
   async function recheckLicense() {

@@ -266,8 +266,12 @@ test('status: a hand-edited state file cannot repaint the URL list', { timeout: 
   const { stdout } = await run(['status'], { env: { HOME: home, USERPROFILE: home } });
   assertInert(stdout, 'status');
   // The NEL did not become a line break, so the URL and its verdict stay together.
+  // Extended, not loosened (P1-40): with a control byte in it the key is also not
+  // an address a pass can check, so the list may now name it once more below the
+  // rows — also flattened to a single inert line. What the count guarded, no
+  // line break from the state file, is now asserted directly.
   assert.match(stdout, /sneaky\.example UP \(200\)/);
-  assert.equal(stdout.split('\n').filter(line => line.includes('sneaky.example')).length, 1);
+  assert.equal(stdout.includes(NEL), false, 'a line break the state file wrote must not reach the terminal');
 });
 
 /**

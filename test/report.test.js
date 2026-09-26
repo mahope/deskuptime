@@ -798,7 +798,12 @@ test('a duplicated verdict owner is caught by reading the source, not the output
   assert.doesNotMatch(reportSrc, /wasUp\s*===/, 'the report must ask verdictFor(), not read wasUp itself');
   assert.match(reportSrc, /verdictFor\(entry\?\.wasUp\)/, 'and it must still ask for the verdict');
   assert.equal((statusSrc.match(/export function verdictFor\(/g) || []).length, 1, 'one definition');
-  assert.match(statusSrc, /verdict: verdictFor\(value\.wasUp\)/, 'readEntry asks the same owner');
+  // Extended, not loosened (P1-40): readEntry gained one guard in front of the
+  // same owner, because a saved key that is not an address has no verdict to
+  // report — and borrowing the `wasUp` the file happens to hold there printed a
+  // healthy site that no pass can ever check. The owner is still the one that
+  // decides, so the lock asks for the guard *and* the delegation.
+  assert.match(statusSrc, /verdict: uncheckable \? 'unknown' : verdictFor\(value\.wasUp\)/, 'readEntry asks the same owner');
 
   // P1-14: the same trap, twice more. "not checked yet" and "stale — last check
   // N d ago" each had a copy here *and* one in readEntry, while the two terminal

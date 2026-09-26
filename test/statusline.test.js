@@ -265,8 +265,13 @@ test('watch --status: a state file cannot drive the terminal', { timeout: 30000 
   assert.match(line(stdout, 'ssl.example'), /SSL —/);
   assert.match(line(stdout, 'time.example'), /stale — last check unreadable/);
   // The escape in a URL is removed whole — sequence and visible residue alike —
-  // so the row is one line and the verdict stays attached to its site.
-  assert.match(line(stdout, 'url.example'), /✅ up .*\(200\)/);
+  // so the row is one line and whatever is said about it stays attached to its
+  // site. What it says is now the truth about that key: with the escape still in
+  // it, it is not an address a pass can send a request to (P1-40), so the row
+  // reads "unknown — not a full address" instead of borrowing the `wasUp: true`
+  // this very state file wrote there. The lock on this test is the terminal, not
+  // the verdict, and the escape still does not survive.
+  assert.match(line(stdout, 'url.example'), /❔ unknown .*not a full address/);
 });
 
 test('watch --status: an empty state file still explains what to do', { timeout: 30000 }, async (t) => {

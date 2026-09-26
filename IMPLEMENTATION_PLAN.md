@@ -1,3 +1,103 @@
+## Status fra denne iteration (56, P1-40 — ❓ 13 besvaret i kode)
+
+**Hvorfor denne flade:** ❓ 1–3 er stadig ubesvarede, og ❓ 13 lå som det eneste
+konkrete fund i køen med et åbent valg. P1-39 målte det og lagde det tilbage,
+fordi valget rører exit-koder. Det er truffet i denne iteration, og det er
+planens egen anbefaling: **(c) + (b)** — fortsæt med de øvrige, nævn nøglen
+hvert pass, og behold exit 2 kun når intet kunne tjekkes.
+
+**Målt først, nul kode ændret.** Rigtig CLI, rigtig state-fil med to gode sites
+på lokale fixtures (200 og 500), en nøgle `kunde.dk`, temp-HOME og
+`passthrough`-stub (aldrig et kald til mahope.tools):
+
+```
+watch --once  → exit 1, stdout tom, ingen site tjekket
+  TypeError: Invalid URL: kunde.dk
+      at assertValidHttpUrls (src/status.js:1319)
+      at runPass (src/watch.js:195)   ← før første request
+      at runOnce (src/watch.js:620)
+```
+
+Én halvskrevet nøgle — en håndredigering, en rodet restore, et script der
+omskrev `urls` — gjorde overvågningen af *alle* andre sites til intet, på den
+dokumenterede cron-vej, hvor brugeren kun ser en stacktrace i cron-mailen.
+
+**Efter, samme måling:**
+
+```
+watch --once  → exit 2, 1 hændelse for det nedede site, 0 for nøglen
+  | [19:50] 🚨 http://127.0.0.1:49225/ is DOWN — HTTP 500
+  ⚠️  Cannot be checked — not a site that is down: 1 saved URL is not a full
+      address (kunde.dk). The other 2 monitored sites were checked as usual.
+      Fix the key, or drop it: deskuptime unwatch 'kunde.dk'
+watch (loop)  → starter, kører videre, nøglen nævnt hvert pass
+```
+
+**Målingen fandt to fejl, som kun den kunne finde.** 1) `[].every()` er sand, så
+et pass over *kun* ubrugelige nøgler rapporterede sig selv grønt — exit 0 for en
+pass der målte ingenting, altså præcis det en cron-job ikke må se. 2) Værre: en
+nøgle med `wasUp: true` i filen blev vist som `✅ up` i **begge** lister og som
+`UP` i **kundenrapporten** — en påstand om et site i et kundedokument, bygget på
+et tal ingen kan måle. Rettelsen er i `readEntry` (én ejer, som altid): en
+nøgle der ikke er en adresse har intet verdict, så den er `unknown` med
+ejerens egen grund, og rapporten tæller den **uden for** sites.
+
+**Ejerskab følger rækken.** `partitionUsableUrls()` i `src/status.js` er den ene
+ejer af "hvad kan tjekkes" — den er præcis `invalidHttpUrls()` i den anden
+retning, så en nøgle ikke kan være dødelig her og gyldig der. `unusableUrlNote()`
+ejer sætningen, med en kort form til en række og en celle, så passet, begge
+lister og rapporten ikke kan beskrive den samme nøgle hver for sig.
+`assertValidHttpUrls()` står, hvor *calleren* har skylden og kan fortales det:
+`check` og de URL'er der er skrevet på en `watch`/`unwatch`-linje.
+
+**To følger af målingen, som også er produktrettelser.** En ubrugelig nøgle tog
+en af de tre gratis-pladser, så den eneste vej til den igen var at håndredigere
+`state.json` — filen der også rummer licensnøglen; `monitoredCount()` tæller kun
+nøgler der kan tjekkes. Og `unwatch` afviste sin egen henstilling: kommandoen
+`deskuptime unwatch 'kunde.dk'` svarede `Invalid URL`, så beskeden ville have
+været en løgn. Nu afviser `unwatch` kun en skrivefejl der *ikke* står i filen.
+
+**To eksisterende låse måtte udvides, ikke slækkes** — ottende gang en lås følger
+en målt rettelse. `test/report.test.js`'e "a duplicated verdict owner" søgte på
+literalet `verdict: verdictFor(value.wasUp)`; `readEntry` har nu ét værende foran
+den samme ejer, så låsen kræver værtern *og* delegeringen. Og
+`test/display.test.js`'e "a hand-edited state file cannot repaint the URL list"
+tællede linjer med en nøgle med en NEL-byte i sig; med P1-40 er den nøgle også
+en nøgle der ikke kan tjekkes, så den kan nævnes én gang mere under rækkerne —
+hvad lågen egentlig vogtede (at et linjeskift fra filen ikke når terminalen) er
+nu hævdet direkte. Begge tests fangede altså rigtigt: de så en ændret
+overflade, ikke en svækket invariant.
+
+**Én fejl i min egen måling, noteret:** jeg målte `unwatch 'kunde.dk'` i samme
+kørsel som to state-skrivninger, der havde skrevet nøglen væk igen — så
+kommandoen svarede `Invalid URL`, korrekt, fordi nøglen ikke længere stod i
+filen. Målingen var forkert, ikke koden; gentaget med nøglen på plads.
+
+**Ni nye tests i `test/uncheckable.test.js`** (registreret i `npm test` — samme
+fælde som P1-10) + **fem mutationer målt, alle døde:** partition uden filter
+(4 fejl), `[].every()`-reglen (1), plads-tællingen (1), rapportens verdict (1),
+`readEntry`s verdict (2) → **374/374** (365 + 9); audit 0/0; `node --check` alle
+JS-filer, `matrix --check` og `git diff --check` grønne på Node 26.7.0.
+Ingen exit-kode for en kørsel med gyldige nøgler ændret (målt med og uden den
+beskadigede nøgle), ingen matrix-række, ingen ny claim, ingen deploy-note
+nødvendig. Diffen er ~190 linjer; **ingen review-agent** — over 30-minutters
+grænse.
+
+**Beslutningen er ikke gratis, og det står her:** en nøgle vi ikke kan tjekke
+tæller *ikke* som et nedet site nogen steder, og et pass der intet kunne tjekke
+giver exit 2, så et cron-job kan ikke overse det. Den grænse til den anden side
+er dokumenteret ovenfor: nøglen bliver liggende i `state.json`, indtil en
+menneske retter eller fjerner den.
+
+STATUS: I GANG
+Iteration: 56 — 2026-09-26
+Arbejdsgrene: `ceo/skip-unusable-urls` (P1-40, målt + fix — besvarer ❓ 13)
+Næste handling: **P1-40 er færdig.** ❓ 13 er besvaret i kode med planens egen
+anbefaling, (c) + (b); hvis Mads vil have (a) — at passet *fejler* — er det en
+linje i `runPass` plus exit-koden, og målingen til den ligger ovenfor. Næste
+opgave: ❓ 1–3 hvis besvaret, ellers en ny målt opgave på en flad der endnu ikke
+er målt på de samme tal-spørgsmål.
+
 ## Status fra denne iteration (55, P1-39)
 
 **Hvorfor denne flade:** ❓ 1–3 er stadig ubesvarede, så målingen gik på den
@@ -2219,7 +2319,7 @@ fælde som P1-19's mutation uden betydning — en grøn mutationstest kan være
 vished, ikke dækning.
 
 
-### P1-40 — MÅLT 2026-09-26, ikke rettet — Ét beskadiget URL-nøgle i `state.json` dræber alle andre sites
+### P1-40 — FÆRDIG 2026-09-26 (`ceo/skip-unusable-urls`) — Ét beskadiget URL-nøgle dræber ikke længere de andre sites
 
 **Målt** i P1-39's kørsel, nul kode ændret, rigtig CLI og rigtig state-fil med
 to gode sites + `kunde.dk` som nøgle:
@@ -2240,7 +2340,9 @@ til intet. Det er den dokumenterede cron-vej (`watch --once`), og det er den
 måde en kunde opdager det: cron-mailen med en stacktrace og ingen alarmer.
 Samme familie som P1-39, en anden hovedindgang.
 
-**Spørgsmålet der kræver et valg (❓ til Mads, ikke besvaret):** et site vi ikke
+**Valget er truffet 2026-09-26 (iteration 56) — (c) + (b), måling og kode ovenfor.** Ét nøgle-format afsnit nede besvarer ❓ 13.
+
+**Spørgsmålet der krævede et valg (❓ til Mads, svar i ovenstående afsnit):** et site vi ikke
 kan tjekke er *ikke* et nedet site — exit 2 ville være en løgn om kundens eget
 site, og det er den betalte rapport der skal kunne læses. Men det må heller ikke
 være usynligt. Tre mulige svar: (a) nævn det på hver pass og fortsæt med de
@@ -2259,12 +2361,7 @@ for en kørsel hvor alle nøgler er gyldige; 6) mutationer målt.
 
 ## ❓ Til Mads
 
-13. **Hvad skal et site, vi ikke kan tjekke, gøre ved et pass?** Ét nøgle i
-`state.json` uden scheme tager i dag hele passet med (P1-40, målt). Skal det
-nævnes og springes over mens de øvrige sites fortsætter, eller skal passet
-fejle? Det afgør om et bureau mister alle 24 andre alarter, eller kun det ene
-site. Min anbefaling i P1-40: fortsæt med de øvrige, nævn nøglen hvert pass,
-og behold exit 2 kun når intet kunne tjekkes.
+13. ~~Hvad skal et site, vi ikke kan tjekke, gøre ved et pass?~~ **Besvaret i kode 2026-09-26 (P1-40, `ceo/skip-unusable-urls`):** (c) + (b), planens egen anbefaling. En nøgle i `state.json` uden scheme springes over, de øvrige sites fortsætter, nøglen nævnes på hvert pass og på `watch --status`, `status` og i rapporten, og exit 2 beholdes **kun** når intet kunne tjekkes. Målt først: ét `kunde.dk` blandt 25 nøgler dræbte passet med exit 1 og nul tjek. **Valget er ikke gratis, og en nøgle uden adresse er aldrig et nedet site** — den grænse til det andet svar ((a): passet fejler) er én linje i `runPass` plus exit-koden, hvis Mads vil have den. Målingen og koden ligger i afsnittet øverst.
 
 - **Release-note P1-39:** En fuld disk, en skrivebeskyttet mappe eller en kvote kunne **slå overvågningen ihjel og tage alarmerne med**. Målt med rigtig CLI, rigtig webhook-modtager og et `~/.deskuptime` der ikke kan skrives: overvågningen døde med en rå Node-stacktrace, exit 1, og modtageren fik **nul beskeder** selv om et overvåget site svarede 500 — og det skete *før* nogen site blev tjekket, fordi licensen skrives, når loopen starter. Samme måling efter rettelsen: loopt kører videre, du får `🚨 … is DOWN — HTTP 500` i terminalen og beskeden i din Slack/Discord/Teams-kanal, og du får én advarsel der navngiver filen og grunden: `Could not write the monitoring state — ENOSPC — ~/.deskuptime/state.json. Nothing is remembered while this lasts: check free disk space and that the file and its folder are writable.` **Overvågning og alarmer er altså ikke længere afhængige af, at vi kan gemme noget** — det er kun de tal, der går tabt: passets uptime-tællere og dets dag i rapporten, indtil filen igen kan skrives. Og `deskuptime watch --once`, kommandoen cron kører, siger nu det samme i stedet for en stacktrace der peger på en låsefil. **Mærk:** kan vi ikke gemme et gemt verdict, ved loopen ikke at et nedet site allerede er meldt, så efter en genstart kan det meldes én gang til. Vi vælger dobbelt melding over stilhed om et nedbrud. Exit-koder for en sund kørsel, matrix-rækker og al JSON er uændrede.
 
@@ -2306,12 +2403,16 @@ og behold exit 2 kun når intet kunne tjekkes.
 - **Release-note P1-2 del C:** `--days` er et nyt flag på `report`, og `Uptime (window)` er en ny kolonne. En ældre installeret CLI kender hverken det og skriver blot `Unknown option: --days` — ingen eksisterende kundeafhældenhed brydes ved merge. Historien begynder at blive skrevet med det samme merge, så en kunde der opgraderer til en build *uden* `--days` stadig har en voksende historiefil; kun den nye build læser den. ❓ 10 (ny `v0.2.9-cli`-tag) er stadig det, der gør curl-stien komplet.
 - **Release-note P1-2:** matrixen, README, `--help` og npm-beskrivelsen lover nu `deskuptime report`, men kun en build med kode. Gamle installerede CLI'er kender ikke kommandoen og skriver blot `Unknown command` — ingen eksisterende kundeafhængighed brydes ved merge. ❓ 10 (nyt `v0.2.9-cli`-tag) er stadig det, der gør curl-stien komplet.
 
+- **Release-note P1-40:** Ét navn i overvågningslisten, der ikke er en adresse, behøvede før **standse overvågningen af alle dine øvrige sites**. Før skrev `deskuptime watch --once` en rå Node-stacktrace, exit 1, og **intet** site blev tjekket — fordi værktøjet ville læse *alle* nøgler i `state.json` igennem som adresser inden den første request, så ét `kunde.dk` fra en håndredigering, en rodet restore eller et script endte overvågningen af de 24 andre. Det er den vej cron kører, så brugeren så kun en stacktrace i mailen og ingen alarmer. Nu springes nøglen over, de øvrige sites tjekkes som sædvanligt, og du får én advarsel der navnginer den og siger hvad du kan gøre: `Cannot be checked — not a site that is down: 1 saved URL is not a full address (kunde.dk). The other 2 monitored sites were checked as usual. Fix the key, or drop it: deskuptime unwatch 'kunde.dk'` — samme sætning i `watch --status`, i `status` og i kundenrapporten. **Exit 2 er kun tilbage, når intet overhovedet kunne tjekkes**, så et cron-job kan ikke overse det; en kørsel hvor alle nøgler er gyldige er uændret, tegn for tegn. **En nøgle uden adresse er aldrig et nedet site:** den tæller ikke som `up` i listerne og ikke som `UP` i rapporten, men som *status unknown* med grunden — før skrev en rapport `UP` for en `kunde.dk`, den intet pass nogensinde kan måle. Den tager heller ikke længere en af de tre gratis-pladser, og `deskuptime unwatch 'kunde.dk'` virker igen, så du slipper for at redigere `state.json` — filen der også rummer din licensnøgle.
+
 ## Deploy-/release-noter
 
 - Dette offentlige repo er en npm-/GitHub-CLI og har ingen live-deploytarget. `STATUS.md` noterer 24/9, at `deskuptime.com` ikke er købt; derfor oprettes ingen `VERIFICÉR DEPLOY`-note for CLI-merges.
 - **Release-note P0-9b:** curl-stien er rettet, men den nye verifikationsadfærd kræver en release med sidecar for at være fuldt på. Næste `v*-cli`-tag gør det automatisk (❓ 10). Ingen fungerende curl-installation går i stykker ved merge af dette commit: den gamle kode installerede 0.1.4, den nye installerer 0.2.5 og advarer om den manglende sidecar i stedet for at fejle.
 - De tidligere noter for researchplan `812f469` og desktop `f0d4fa7` var fejlagtige og er fjernet med denne planrevision.
 - Merge til `main` deployer ikke; npm, GitHub Releases og Homebrew må kun publiceres af Mads via de eksisterende tag-workflows.
+
+- **Iteration 56 (P1-40, målt + fix — besvarer ❓ 13):** ❓ 1–3 stadig ubesvarede, så iterationen besvarede ❓ 13 — det eneste målte fund i køen med et åbent valg — med planens egen anbefaling (c) + (b). Målt først med rigtig CLI, rigtig state-fil, to lokale fixtures (200/500) og temp-HOME, nul kode ændret: `TypeError: Invalid URL: kunde.dk` fra `assertValidHttpUrls` i `runPass` **før første request**, exit 1, nul sites tjekket, på cron-vejen. Efter: exit 2, 1 hændelse for det nedede site, 0 for nøglen, advarslen på stderr hvert pass, loopen starter. **Målingen fandt to fejl, den alene kunne finde:** `[].every()` er sand, så et pass over kun ubrugelige nøgler rapporterede sig grønt (exit 0 for en pass der målte ingenting); og en nøgle med `wasUp: true` stod som `✅ up` i begge lister og som `UP` i kundenrapporten — en påstand i et kundedokument bygget på et tal ingen kan måle. Rettet i `readEntry`, den ene ejer: ukendt med grunden, og rapporten tæller den uden for sites. `partitionUsableUrls()` i `src/status.js` er den ene ejer af "hvad kan tjekkes" (præcis `invalidHttpUrls()` i modsat retning, så intet kan være dødeligt her og gyldigt der); `unusableUrlNote()` ejer sætningen med kort og lang form; `assertValidHttpUrls()` står kun, hvor *calleren* har skylden og kan fortales det (`check`, argv på `watch`/`unwatch`). **To følger, også produktrettelser:** `monitoredCount()` — en ubrugelig nøgle tog en af de tre gratis-pladser, så vejen til den igen var at håndredigere `state.json` med licensnøglen i; og `unwatch` afviste sin egen henstilling (`Invalid URL` på `kunde.dk`), så kommandoen afviser nu kun en skrivefejl der ikke står i filen. **To låse udvidet, ikke slækket** (ottende gang): `report.test.js`'e "duplicated verdict owner" søgte på `verdict: verdictFor(value.wasUp)` → kræver nu værtern *og* delegeringen; `display.test.js`'e "cannot repaint the URL list" tællede linjer med en NEL-nøgle → det den egentlig vogtede (intet linjeskift fra filen) hævdes nu direkte. **Én fejl i min egen måling:** jeg målte `unwatch 'kunde.dk'` efter to state-skrivninger, der havde skrevet nøglen væk, så kommandoen svarede korrekt `Invalid URL` — målingen var forkert, ikke koden. 9 nye tests i `test/uncheckable.test.js` (lagt til i `npm test`) + 5 målte mutationer (4/1/1/1/2 fejl) → **374/374** (365 + 9); audit 0/0; `node --check`, `matrix --check`, `git diff --check` grønne på Node 26.7.0. Ingen exit-kode for gyldige nøgler ændret (målt med og uden), ingen matrix-række, ingen ny claim, ingen deploy-note nødvendig. **Næste:** ❓ 1–3 hvis besvaret, ellers en ny målt opgave.
 
 ## Iterationslog
 

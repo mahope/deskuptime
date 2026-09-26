@@ -1,3 +1,5 @@
+import { safeText } from './display.js';
+
 export const DEFAULT_TIMEOUT_MS = 15000;
 
 /**
@@ -1040,15 +1042,23 @@ export function readEntry(entry, { now = new Date(), url = '' } = {}) {
   const pass = passAge(value.lastChecked, now);
   const ageDays = pass.ageDays;
   const neverChecked = !value.lastChecked;
+  // A key that is not an address has no verdict to report. Its stored `wasUp`
+  // is whatever a hand-edited file, a botched restore or an old script left
+  // behind, and a monitoring pass skips the key entirely (P1-40) — so printing
+  // `✅ up` for one told a user their site was healthy on the strength of a
+  // value nothing can measure. Asked of the one owner, so the row says the same
+  // thing the named line below the list says.
+  const uncheckable = url !== '' && !isHttpUrl(url);
 
   return {
-    verdict: verdictFor(value.wasUp),
+    verdict: uncheckable ? 'unknown' : verdictFor(value.wasUp),
     // "No pass has ever run" and "the last pass ran but its verdict cannot be
     // read" are different facts that used to print identically, in both
     // terminal lists and in the report. The two surfaces now ask for the same
     // sentence, so neither can discover the difference on its own.
     neverChecked,
-    unknownNote: unknownNote({ lastChecked: value.lastChecked, ageDays, clockAhead: clockAheadNote(pass.aheadMs) }),
+    uncheckable,
+    unknownNote: uncheckable ? unusableUrlNote([url], { brief: true }) : unknownNote({ lastChecked: value.lastChecked, ageDays, clockAhead: clockAheadNote(pass.aheadMs) }),
     statusCode: readStatusCode(value.lastStatus),
     sslDays: ssl.days,
     sslExpired: ssl.expired,
@@ -1318,6 +1328,57 @@ export function assertValidHttpUrls(urls) {
   if (invalidUrls.length > 0) {
     throw new TypeError(`Invalid URL: ${invalidUrls.join(', ')}`);
   }
+}
+
+/**
+ * Split a list of addresses into the ones we can send a request to and the ones
+ * we cannot — one decision, asked everywhere it is needed.
+ *
+ * Measured 2026-09-26, real CLI and a real `state.json` with two working sites
+ * and one key `kunde.dk`: `runPass()` called `assertValidHttpUrls()` on *every*
+ * key before the first request, so `new URL('kunde.dk')` threw
+ * `TypeError: Invalid URL: kunde.dk` — exit 1, empty stdout, and **zero** of the
+ * other sites checked. One half-written key (a hand edit, a botched restore, a
+ * `urls` map that a script rewrote) therefore ended the monitoring of every
+ * other site, and it did so on `deskuptime watch --once` — the documented cron
+ * path — where the only trace is a stack trace in the cron mail. A site we
+ * cannot even address is not a site that is down: the customer paid for alerts
+ * about the other 24, and a løgn about their own site is worse than saying
+ * nothing.
+ *
+ * So the pass splits instead of throwing. `assertValidHttpUrls()` stays where
+ * the *caller* is at fault and can be told: the `check` command, and the
+ * arguments typed on a `watch`/`unwatch` line.
+ */
+export function partitionUsableUrls(urls) {
+  const usable = [];
+  const unusable = [];
+  for (const url of urls) {
+    (isHttpUrl(url) ? usable : unusable).push(url);
+  }
+  return { usable, unusable };
+}
+
+/**
+ * The one sentence for "this saved key is not an address we can check", so the
+ * pass, `watch --status`, `status` and the client report cannot each describe
+ * the same broken key differently — the rule the stale block and the window
+ * line already follow. It names the keys (flattened, because they come from a
+ * file we did not write), says what did *not* happen — nothing about the
+ * customer's own site is claimed — and gives the command that removes it.
+ */
+export function unusableUrlNote(unusable, { checked = null, brief = false } = {}) {
+  const keys = unusable.map(url => safeText(String(url), { max: 0 })).join(', ');
+  // The short form is the same fact as the long one, for a place that already
+  // names the key itself: a row in a status list, a cell in a client report.
+  if (brief) return 'not a full address, so no pass can check it';
+  const skipped = unusable.length === 1 ? '1 saved URL' : `${unusable.length} saved URLs`;
+  const others = checked === null
+    ? ''
+    : checked === 0
+      ? ' No monitored site could be checked on this pass.'
+      : ` The other ${checked} monitored site${checked === 1 ? '' : 's'} ${checked === 1 ? 'was' : 'were'} checked as usual.`;
+  return `Cannot be checked — not a site that is down: ${skipped} ${unusable.length === 1 ? 'is' : 'are'} not a full address (${keys}).${others} Fix the key, or drop it: deskuptime unwatch ${unusable.map(url => `'${safeText(String(url), { max: 0 })}'`).join(' ')}`;
 }
 
 export function isHealthyStatus(statusCode) {
