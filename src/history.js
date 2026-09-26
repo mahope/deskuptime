@@ -52,7 +52,7 @@ export function getHistoryFile({ env = process.env, platform = process.platform 
  * redirects the state to a temporary directory, which must not silently send
  * history to the real home directory.
  */
-function historyFileFrom(options = {}) {
+export function historyFileFrom(options = {}) {
   if (options.historyFile) return options.historyFile;
   if (options.stateFile) return join(dirname(options.stateFile), 'history.json');
   return getHistoryFile(options);
@@ -308,19 +308,101 @@ function earliestRecordedDay(history) {
   return earliest;
 }
 
-export function loadHistory(options = {}) {
+/**
+ * The history file, and whether it could be read at all.
+ *
+ * This used to be an empty history, and that is not a safe default for this
+ * file. Measured 2026-09-26 through the real CLI with a real local site, a real
+ * Pro state file and 30 days of history — a file truncated to half its bytes,
+ * which is what a full disk or a killed process leaves behind:
+ *
+ *   watch --once   →  ✓ all monitored sites OK          (exit 0, nothing on stderr)
+ *   history.json   →  2 383 bytes → 147 bytes          (29 recorded d, 41 760
+ *                      checks, 12 failures → one bucket, today)
+ *   report         →  | …/ | UP (200) | 100% (2 checks) | 100% (1 recorded d, 1 checks) |
+ *
+ * One pass destroyed a month of evidence and said nothing. The report then
+ * signed a client's document with a number read from a file it could not read —
+ * and P1-38's window-gap guard, which exists precisely to catch an unrecorded
+ * window, cannot see this at all: after the overwrite the file genuinely holds
+ * one recorded day, so the gap it looks for is not there.
+ *
+ * So the reason travels next to the history instead of being swallowed, and the
+ * callers that can act on it (the one that writes, and the one that reports) do.
+ */
+export function readHistoryFile(options = {}) {
   const file = historyFileFrom(options);
-  if (!existsSync(file)) return emptyHistory();
+  if (!existsSync(file)) return { history: emptyHistory(), unreadable: null };
   try {
-    return normalizeHistory(JSON.parse(readFileSync(file, 'utf-8')));
-  } catch {
-    return emptyHistory();
+    return { history: normalizeHistory(JSON.parse(readFileSync(file, 'utf-8'))), unreadable: null };
+  } catch (error) {
+    return { history: emptyHistory(), unreadable: { code: error?.code || 'invalid JSON', historyFile: file } };
+  }
+}
+
+export function loadHistory(options = {}) {
+  return readHistoryFile(options).history;
+}
+
+/**
+ * One sentence for "DeskUptime cannot read the uptime history", so a cron pass,
+ * a running loop and the client report cannot each describe the same file
+ * differently.
+ *
+ * The state file's own sentence says "nothing is written over it and nothing is
+ * reported from it", and both halves are true here for the same reason: this file
+ * is the evidence a bureau sends to a client. A truncated file is replaced by an
+ * empty one that looks exactly like a fresh install, and the one command that
+ * gets the real 30 days back is `mv` — never `rm`, which would throw away the
+ * only copy.
+ */
+export function historyReadErrorMessage(error, historyFile) {
+  const why = error?.code === 'ENOENT' ? 'file not found' : (error?.code || 'invalid JSON');
+  return `DeskUptime cannot read the uptime history — ${why} — ${historyFile}. It holds the recorded days the 30-day report column is counted from, so nothing is written over it and no report is built from it. Move it aside to start clean: mv "${historyFile}" "${historyFile}.broken"`;
+}
+
+export const EHISTORY_UNREADABLE = 'EHISTORYUNREADABLE';
+
+/**
+ * One sentence for "DeskUptime cannot write its own history", so a cron pass and
+ * a running loop cannot each describe the same failure differently — the same
+ * rule `stateWriteErrorMessage()` follows for the state file, and for the same
+ * reason: a full disk or a read-only home must cost the report one column, not
+ * take monitoring down. A file we cannot *read* is not a write problem, and
+ * telling the user to check free disk space about a truncated file sends them to
+ * the wrong place, so that code maps to the read sentence.
+ */
+export function historyWriteErrorMessage(error, historyFile) {
+  if (error?.code === EHISTORY_UNREADABLE) return historyReadErrorMessage(error.readError, historyFile);
+  return `Could not write the uptime history — ${error?.code || error?.message || 'unknown error'} — ${historyFile}. Monitoring and alerts keep working; the report's ${DEFAULT_WINDOW_DAYS}-day column is missing today until the file can be written again.`;
+}
+
+/** The same check `saveState()` makes on the state file, for the same reason. */
+function unreadableHistoryFile(historyFile) {
+  if (!existsSync(historyFile)) return null;
+  try {
+    JSON.parse(readFileSync(historyFile, 'utf-8'));
+    return null;
+  } catch (error) {
+    return { code: error?.code || 'invalid JSON' };
   }
 }
 
 /** Same discipline as the state file: 0600 in a 0700 dir, written atomically. */
 export function saveHistory(history, options = {}) {
   const file = historyFileFrom(options);
+  // Never write over a history file we could not read. See the measurement in
+  // `readHistoryFile`: the save above replaces a truncated month with an empty
+  // day, and the truncation is the only trace of what was there. The caller gets
+  // the read sentence (historyWriteErrorMessage maps this code) and the user
+  // keeps the file.
+  const unreadable = unreadableHistoryFile(file);
+  if (unreadable) {
+    const error = new Error(historyReadErrorMessage(unreadable, file));
+    error.code = EHISTORY_UNREADABLE;
+    error.readError = unreadable;
+    throw error;
+  }
   const dir = dirname(file);
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   if (process.platform !== 'win32') {

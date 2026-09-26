@@ -20,7 +20,7 @@ import { createHash, randomUUID } from 'crypto';
 import { assertValidHttpUrls, expiredNote, findUrlKey, isNewerPass, partitionUsableUrls, readContentChange, readContentChangeAlert, readEntry, readEvent, readRedirectTarget, queuedAgeMs, readSslState, STALE_AFTER_DAYS, unusableUrlNote, urlIdentity, withoutCredentials } from './status.js';
 import { recordPass } from './report.js';
 import { formatMs, safeText } from './display.js';
-import { loadHistory, pruneHistory, recordHistoryPass, saveHistory } from './history.js';
+import { historyFileFrom, pruneHistory, readHistoryFile, recordHistoryPass, saveHistory, historyWriteErrorMessage } from './history.js';
 import { FREE, PRO, PRODUCT } from './features.js';
 
 const LICENSE_RECHECK_MS = 24 * 60 * 60 * 1000;
@@ -334,7 +334,9 @@ export async function runPass(state, opts = {}) {
   // every tier: history is two integers per site per day, and a free user who
   // upgrades should not start a 30-day report with an empty month.
   const now = opts.now instanceof Date ? opts.now : new Date();
-  const history = loadHistory(opts);
+  // The reason comes with the history, because the save at the end of this pass
+  // is the one that would replace an unreadable file with a single day (P1-48).
+  const { history } = readHistoryFile(opts);
 
   const results = await Promise.all(usable.map((url) => {
     const entry = state.urls[url];
@@ -517,7 +519,7 @@ export async function runPass(state, opts = {}) {
     // column, while a throw here would stop every URL from being checked.
     saveHistory(pruneHistory(history, { now }), opts);
   } catch (error) {
-    console.error(`⚠️  Could not write the uptime history: ${error.message}`);
+    console.error(`⚠️  ${historyWriteErrorMessage(error, historyFileFrom(opts))}`);
   }
   const pass = {
     events,

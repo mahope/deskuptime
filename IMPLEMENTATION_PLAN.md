@@ -1,3 +1,76 @@
+## Status fra denne iteration (64, P1-48 — ét pass slettede 30 dages uptime og sagde intet)
+
+**Hvorfor denne flade:** ❓ 1–3 er stadig ubesvarede, så iterationen tog den
+eneste målte mangel, P1-44 lod ligge med vilje: `history.json` læses med samme
+mønster som `state.json` og faldt tilbage til tom **uden en sætning**. P1-44's
+egen note siger, at det var noteret, fordi filen ikke kan slette en licensnøgle.
+Det viste sig at være det forkerte skelnepunkt.
+
+**Målt først, nul kode ændret.** Rigtig CLI, temp-HOME, rigtig licens-stub
+(aldrig et kald til mahope.tools), rigtig lokal side der svarer 200, rigtig
+`state.json` med Pro, og 30 dages historik skrevet i den form `history.js` selv
+skriver — så `history.json` afkortet til halve bytene, som en fuld disk eller
+dræbt proces efterlader:
+
+```
+watch --once   →  ✓ all monitored sites OK      (exit 0, intet på stderr)
+history.json   →  2 383 bytes → 147 bytes      (29 recorded d, 41 760 checks,
+                   12 failures → én bucket, i dag)
+report         →  | …/ | UP (200) | 100% (2 checks) | 100% (1 recorded d, 1 checks) |
+```
+
+Fire skader, én årsag. **Permanent tab:** et bureau mister en måneds
+overvågningsbevis i ét pass, og det er det bureauet fakturerer på. **Et
+kundedokument underskriver en anden sandhed end den sande:** `100% (1 recorded d,
+1 checks)` i et dokument, kunden læser, underskrevet med et tal fra en fil, der
+ikke kunne læses. **P1-38's vindues-garanti kan ikke se det** — den leder efter
+et hul i en fil der ellers optager, og efter overskrivningen *har* filen ærligt
+én registreret dag, så hullet den skulle finde, er ikke der. **Og passet siger
+grønt**, exit 0, ingen advarsel.
+
+**Efter, samme måling:** filen er **urørt** (1 191 bytes = den afkortede fil, ikke
+147), passet kører videre og exiterer 0 — P1-39's regel urørt, overvågning dør
+aldrig af en fil, vi ikke kan skrive — og advarslen er **én ejet sætning** med
+fil, grund og den ene kommando: `⚠️ DeskUptime cannot read the uptime history —
+invalid JSON — …/history.json. It holds the recorded days the 30-day report
+column is counted from, so nothing is written over it and no report is built from
+it. Move it aside to start clean: mv "…" "….broken"`. Rapporten **nægter** at
+bygge et kundedokument på filen (exit 1, samme sætning, tom stdout) — samme port
+som P1-44 gav `state.json`, fordi dokumentet *er* produktet her. `mv`, aldrig
+`rm`: den afkortede fil er det eneste spor af den måned.
+
+**Én ejer pr. klasse, `readHistoryFile()` i `src/history.js` som P1-44's
+`readStateFile()`:** grunden rejser *ved siden af* historikken i stedet for at
+blive slugt, og kun de to kaldsteder der kan handle på den gør det —
+`saveHistory()` (skriver aldrig over en fil den ikke kan læse, `EHISTORY_UNREADABLE`)
+og `report` (bygger aldrig et tal fra den). `historyWriteErrorMessage()` er den
+ene sætning for en skrivefejl og bruger **ikke** "check free disk space" om en
+kodet fil, fordi det sender brugeren det forkerte sted — P1-44's regel, anvendt
+på den anden fil. `loadHistory()` beholder sin signatur, så ingen konsument mærker
+noget.
+
+**To modvægten målt, ikke antaget.** 1) En læsbar historik skrives og rapporteres
+**tegn for tegn som før**, og dagens pass lægges *til* de 30 dage (31 buckets,
+ikke 30 — målingen fandt min egen forkerte påstand, ikke koden). 2) P1-41s
+modvægt holder: en historik der *kan* læses men har intet i sig (bureauet der
+kopierede `state.json` og ikke `history.json`) giver stadig exit 0 og kolonnen
+`— (last check missing from the history file)`. Uden den måtte porten have gjort
+et arbejdende bureau tabe sin rapport.
+
+**Fem nye tests i `test/historyunreadable.test.js`** (registreret i `npm test` —
+samme fælde som P1-10) → **436/436** (431 + 5); audit 0/0, `node --check` alle
+JS-filer, `matrix --check` og `git diff --check` grønne på Node 26.7.0.
+**To mutationer målt, begge døde** (5/3 fejl) — `unreadableHistoryFile`-porten
+fjernet fra `saveHistory`, og rapportens port gjort død. **Ingen claim, ingen
+matrix-række, intet nyt JSON-felt, ingen exit-kode ændret for en kommando med en
+læsbar historik** (kun den nye ulæsbare tilstand giver exit 1), ingen payload-felt,
+ingen deploy-note nødvendig (dette repo har ingen live-deploytarget).
+`ceo/unreadable-history`.
+
+**Næste:** ❓ 1–3, ellers en målt opgave.
+
+- **Release-note P1-48:** Ét `watch`-pass kunne **slette 30 dages uptime-bevis og sige intet**. Før blev en `history.json`, der findes men ikke kan læses, læst som en *tom* historik — og passets afslutning skrev den nye dag lige oveni. Målt med rigtig CLI, rigtig licens-stub og 30 dages historik, afkortet til halve bytene: `2 383 bytes → 147 bytes`, exit 0, intet på stderr, og `deskuptime report` skrev `100% (1 recorded d, 1 checks)` i et dokument, du sender til en kunde. Det er her, det gør ondt: bureauet mister det, det fakturerer på, og det *ved det ikke* — den nye rapport ser bedre ud end den gamle. Nu skrives **aldrig over en historikfil, der ikke kan læses**, filen du har er den du beholder, og du får én advarsel med filen og grunden. `deskuptime report` **nægter** at bygge et kundedokument på filen, fordi et tal vi ikke kunne måle ikke hører hjemme i et dokument, kunden læser — samme regel som P1-44 gav din licensfil. **Overvågning og alarmer er urørte:** passet kører videre, exit 0, kun rapporten stiller spørgsmål. **En læsbar historik er tegn for tegn som før**, og en bureau- Historie *uden* dagens registrering giver stadig kolonnen `— (last check missing from the history file)`. **Den ene kommando, når du ser advarslen:** `mv ~/.deskuptime/history.json ~/.deskuptime/history.json.broken` — aldrig `rm`, fordi den afkortede fil er det eneste spor af den måned. **Exit-koder, matrix-rækker, JSON-felter og claims er uændrede** for alt, der ikke er en ulæsbar fil.
+
 ## Status fra denne iteration (63, P1-47 — en side med et CSRF-token alarmerede 2 880 gange om dagen)
 
 **Hvorfor denne flade:** ❓ 1–3 er stadig ubesvarede, så iterationen tog den

@@ -20,7 +20,7 @@ import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { invalidHttpUrls, invalidUrlMessage, partitionUsableUrls, readChain, readContentState, readDisclosure, readEntry, readRedirectTarget, readSecurityHeaders, readSslState, contentSkipNote, unusableUrlNote, withoutCredentials, SECURITY_HEADER, STALE_AFTER_DAYS } from './status.js';
 import { formatMs, machinesInUse, safeText } from './display.js';
-import { DEFAULT_WINDOW_DAYS, HISTORY_DAYS, loadHistory } from './history.js';
+import { DEFAULT_WINDOW_DAYS, HISTORY_DAYS, historyReadErrorMessage, readHistoryFile } from './history.js';
 import { FREE, PRODUCT, proExtras, renderHelpPro } from './features.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -771,7 +771,16 @@ if (command === 'report') {
 
   // Read-only: no request is made, so the report always describes the last
   // completed pass. Run `deskuptime watch <url> --once` first for a fresh one.
-  const report = buildReport(state, { title, history: loadHistory(), windowDays });
+  // Read the history the same way the state file is read, and gate on it the
+  // same way: an unreadable history would leave every window column saying
+  // "no pass in the last 30 d" — a claim about the client's site, in a document
+  // the client reads, about data that exists but could not be opened (P1-48).
+  const { history: uptimeHistory, unreadable: unreadableHistory } = readHistoryFile();
+  if (unreadableHistory) {
+    console.error(`❌ Error: ${historyReadErrorMessage(unreadableHistory, unreadableHistory.historyFile)}`);
+    process.exit(1);
+  }
+  const report = buildReport(state, { title, history: uptimeHistory, windowDays });
   console.log(args.includes('--json') ? renderReportJson(report) : renderReportMarkdown(report));
 }
 
