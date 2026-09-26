@@ -243,6 +243,71 @@ export function windowSummary(history, url, { days = DEFAULT_WINDOW_DAYS, now = 
   };
 }
 
+/**
+ * How much of the window a site actually covers — and whether that is less than
+ * the window the column claims.
+ *
+ * Measured through the real `report`, on a history file with one whole day
+ * missing in the middle of the window:
+ *
+ *   | https://gab.dk/ | UP (200) | 97.5% (40 checks, 1 failed) | 95.83% (28 recorded d, 1344 checks, 56 failed) | … |
+ *
+ * `95.83%` and `30` appear in one cell, and the footnote defines the column as
+ * "the passes recorded in the last 30 days". A customer reads that as 30 days.
+ * Two of them were never monitored — the agency's cron was dead — and the only
+ * warning was the word "recorded", in a table cell among other parentheses.
+ *
+ * A site that was *added* inside the window has the same shape and is not a gap:
+ * 3 recorded days out of 30 is the whole truth about a site watched since
+ * Tuesday. So the rule needs two more facts, and both are in the files the
+ * report already reads:
+ *
+ *   - the site was already monitored when the window opened (`monitoringSince`
+ *     falls on or before the window's first day), so the days inside the window
+ *     were days it should have had; and
+ *   - the history file was already recording when the window opened (its own
+ *     earliest day is on or before the window's first day), so the missing days
+ *     are not explained by the file being new.
+ *
+ * That second condition is the one that keeps this from crying wolf. Daily
+ * buckets only started being written when `report` shipped; an agency that has
+ * monitored the same five sites for a year and upgrades has 1 recorded day out
+ * of 30 for all five, and accusing them of 29 missing days would be a claim
+ * about their monitoring that the files cannot support.
+ *
+ * A window with no share at all is not a gap: `windowCell` already names that
+ * case ("no pass in the last N d", or the missing-pass disagreement), and a line
+ * that repeats the cell is noise.
+ */
+export function windowCoverage({ window, history, monitoringSince, days = DEFAULT_WINDOW_DAYS, now = new Date() } = {}) {
+  const recordedDays = Number.isInteger(window?.days) ? window.days : 0;
+  const base = { recordedDays, windowDays: days, missingDays: null, gap: false };
+  if (!window || window.passNotRecorded) return base;
+  if (recordedDays === 0 || recordedDays >= days) return base;
+  const from = cutoffKey(now, days);
+  // Asked of the one owner of a pass time, like `windowSummary` does; the day
+  // format below is this file's own.
+  const sinceMs = passAge(monitoringSince, now).passMs;
+  if (sinceMs === null) return base;
+  if (dayKey(new Date(sinceMs)) > from) return base;
+  const earliest = earliestRecordedDay(history);
+  if (earliest === null || earliest > from) return base;
+  return { ...base, missingDays: days - recordedDays, gap: true };
+}
+
+/** The oldest day key anywhere in the file — when this file started recording. */
+function earliestRecordedDay(history) {
+  let earliest = null;
+  for (const buckets of Object.values(history?.urls ?? {})) {
+    if (!buckets || typeof buckets !== 'object') continue;
+    for (const [day, bucket] of Object.entries(buckets)) {
+      if (!DAY_KEY.test(day) || counter(bucket?.checks) === 0) continue;
+      if (earliest === null || day < earliest) earliest = day;
+    }
+  }
+  return earliest;
+}
+
 export function loadHistory(options = {}) {
   const file = historyFileFrom(options);
   if (!existsSync(file)) return emptyHistory();

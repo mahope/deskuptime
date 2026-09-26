@@ -1,7 +1,95 @@
+## Status fra denne iteration (54, P1-38 — ❓ 12 lukket)
+
+**Hvorfor denne flade:** ❓ 12 lå som det *eneste* konkrete, målte fund i
+køen, og den forrige iteration lod det ligge fordi den sande rettelse krævede
+et valg. Valget er truffet i denne iteration, og det er (b): **en ny linje, ikke
+en kolonneændring.** (a) ville skrive `28 of 30 d recorded` i cellen — sandt for
+alle, men det ændrer en celle i et kundedokument, som bureauer har sat i
+systemer. (b) er ren tilføjelse, rører ingen eksisterende konsument, og giver
+bureauet præcis det de vil vide.
+
+**Målt først, nul kode ændret.** Rigtig `report` + `report --json` mod en
+temp-HOME med rigtig state-fil og rigtig `history.json` og `passthrough`-stub:
+
+```
+fuld.dk  alle 30 dage    →  95.83% (30 recorded d, 1440 checks, 60 failed)
+gab.dk   2 dage mangler  →  95.83% (28 recorded d, 1344 checks, 56 failed)   ← fundet
+ny.dk    tilført i dag   →  95.83% (3 recorded d, 144 checks, 6 failed)
+```
+
+To tal i den betalte vare, og de siger det samme om et site med fuld dækning og
+et site med to dages huller. Fodnoten siger `"Uptime (window)" counts the passes
+recorded in the last 30 days` — en kunde læser 30 dage, og to af dem blev
+aldrig overvåget, fordi bureauets cron lå ned.
+
+**Den vanskelige del var ikke at skrive linjen, men at skrive den uden at
+anklage.** `ny.dk` har samme form (3 af 30) og er *ikke* et hul. Og et bureau
+med fem sites overvåget i et år, der opgraderer til denne build, har **1
+registreret dag ud af 30 for alle fem**, fordi dags-buckets først begyndte at
+blive skrevet da `report` udkom. Uden modvæg ville linjen have sagt "29 dage
+mangler" om en overvågning, filerne intet kan sige om — præcis den slags falsk
+anklager `docs/agency-report.md` §4 er bygget op om at undgå. Derfor kræver
+`windowCoverage()` i `src/history.js` to kendsgerninger, og begge er i de filer
+rapporten allerede læser:
+
+1. **Sitet var allerede overvåget da vinduet åbnede** — `monitoringSince` (fra
+   `addedAt`) på eller før vinduets første dag.
+2. **Historikfilen var allerede i gang da vinduet åpnede** — dens egen tidligste
+   registrerede dag på eller før vinduets første dag.
+
+**Modvæggen er målt, ikke hævnet.** Den samme måling med et år gammelt
+overvågningshistorik og en historikfil der først startede i går (2 sites, 2
+registrerede dage hver) gav **ingen linje, ingen tæller, og en rapport der er
+tegn for tegn uændret** — dokumentet en kunde læser, er ikke rørt af en regel der
+skulle have advaret.
+
+**Ejerskab følger rækken.** `windowCoverage` er den ene ejer og spørgs om, som
+`readResponseMs` (P1-37) og `readSslState` (P1-36) blev spurgt om; rapporten
+genberegner intet, og `monitoringSince` læses **én** gang og bruges af både
+rækken og reglen, så de to ikke kan være uenige. Tiden spørger `passAge` (som
+P1-32's lås kræver) og parses ikke lokalt.
+
+**Tre mutationer målt, alle døde:** sited-vinduet-varet fjernet (1 fejl i 54),
+rapporten genberegner reglen i stedet for at spørge (4 fejl), og
+historik-filen-var-allerede-i-gang-varet fjernet (1 fejl). Den tredje døde
+først efter at **min egen testhjlæpper var rettet** — den loopede
+`for (d = oldest; d <= newest)` med `oldest > newest`, så den skrev ingen
+buckets overhovedet, og modvægstesten målte ingenting. Første mutation af de
+tre gav 0 fejl og var *vished, ikke dækning* — samme fælde P1-19 noterede.
+Noteret, fordi det er den anden gang i dette repo at en syntaktisk korrekt
+mutationstest ingenting testede.
+
+**Én eksisterende lås måtte udvides, ikke slækkes** — syvende gang en eksisterende
+lås følger en målt rettelse. `test/report.test.js`'e "every state timestamp
+through the one owner" søgte på literalet
+`monitoringSince: readPassTime(entry.addedAt)`, som refaktoreringen til én
+lokal afløser. Låsen er **udvidet** til at kræve den nye ene læsning *og* at
+rækken skrives fra den, så invarianten den beskyttede — ingen rå state-tid i
+`--json` — er den samme og nu strengere.
+
+**Ingen ny claim, ingen matrix-række, ingen exit-kode, cellen uændret.** Kun en
+ny linje under tabellen, `1 with an incomplete window` i resumelinjen og fire
+additive felter (`windowRecordedDays`, `windowGap`, `windowMissingDays`,
+`summary.windowGaps`). 359/359 tests (356 + 3), audit 0/0, `node --check` alle
+JS-filer, `matrix --check` og `git diff --check` grønne på Node 26.7.0.
+`docs/agency-report.md` §4 har målingen og de to betingelser. Commit på
+`ceo/incomplete-window`, fast-forward-merget til `main` og pushet 26/9. Ingen
+deploy-note nødvendig (CLI-repo uden live-deploytarget).
+
+Næste opgave: ❓ 1–3 (ubesvarede), ellers en ny målt opgave på en flad der
+endnu ikke er målt på de samme tal-spørgsmål.
+
 STATUS: I GANG
-Iteration: 53 — 2026-09-26
-Arbejdsgrene: `ceo/unmeasured-response-time` (P1-37, målt + fix)
-Næste handling: **P1-37 er færdig.** Response-kolonnen i den betalte kundenrapport var den sidste ubeskrevne kolonne: et pass, der aldrig fik et byte tilbage, skrev alligevel en svartid, fordi målelaget målte *sin egen ventetid* og skrev den som en latens. Rettelsen er to steder — `toNetworkResult` siger `null` (fejlvejen kan ikke længere finde på et tal), og `readResponseMs` i `src/status.js` ejer reglen om, hvornår et gemt tal må vises, fordi `recordPass` med vilje beholder den sidste måling. Næste opgave: ❓ 1–3, eller ❓ 12 hvis den er besvaret, ellers en ny målt opgave.
+Iteration: 54 — 2026-09-26
+Arbejdsgrene: `ceo/incomplete-window` (P1-38, målt + fix — lukker ❓ 12)
+Næste handling: **P1-38 er færdig.** ❓ 12 var målt og lagt tilbage i køen fordi
+den krævede et valg mellem en kolonneændring og en ny linje; valget er truffet
+som den nye linje, fordi den er additiv. Næste opgave: ❓ 1–3 hvis besvaret, ellers
+en ny målt opgave.
+
+## Status fra denne iteration (53, P1-37)
+
+**Hvorfor denne flade:** P1-37 er færdig.** Response-kolonnen i den betalte kundenrapport var den sidste ubeskrevne kolonne: et pass, der aldrig fik et byte tilbage, skrev alligevel en svartid, fordi målelaget målte *sin egen ventetid* og skrev den som en latens. Rettelsen er to steder — `toNetworkResult` siger `null` (fejlvejen kan ikke længere finde på et tal), og `readResponseMs` i `src/status.js` ejer reglen om, hvornår et gemt tal må vises, fordi `recordPass` med vilje beholder den sidste måling. Næste opgave: ❓ 1–3, eller ❓ 12 hvis den er besvaret, ellers en ny målt opgave.
 
 ## Måle-gate for denne iteration (53) — en note, fordi den koster 20 minutter
 
@@ -2003,9 +2091,49 @@ Rettelsen: `windowSummary()` (src/history.js) får `lastChecked` og skelner *ind
 
 - **Release-note P1-35:** Har du overvåget en side, der ændrer indhold uden at ændre størrelse — en pris, et navn, et billede der fylder det samme — fik du en alarm, der modsagde sig selv: **`content changed (124 → 124 bytes)`**. Det er ikke en fejl i målingen: DeskUptime så godt nok, at bytene var forskellige, og det var derfor alarmen gik. Men det ene tal den viste, var det tal du bruger til at dømme om noget er ændret, og det sagde "nej". Nu siger størrelsen kun noget, når den faktisk flytter sig. Ved uændret størrelse skriver alarmen **`content changed — same size (124 bytes): the page's bytes differ`**, og når sidens `<title>` flytter sig — hvilket er det, du ville genkende på et skærmbillede — navngiver den den: **`content changed — page title: "Forside A" → "Forside B" (same size, 124 bytes)`**. Titlen har DeskUptime læst på hvert pass hele tiden; den var bare aldrig brugt. **En side hvis størrelse rent faktisk ændrer sig er uændret**, byte for byte: `content changed (90 → 104 bytes)`, og en baseline uden længde siger stadig `? → … bytes`. Der kommer **intet nyt felt** i din webhook-payload — kun `message` har en ny sætning, så en eksisterende modtager skal ikke ændres. Det er heller ikke et diff af den ændrede tekst: den forrige side bliver ikke gemt, så `rm ~/.deskuptime/history.json` stadig er en komplet sletning af historikken.
 
+### P1-38 — FÆRDIG 2026-09-26 — Et tal må ikke dække færre dage end det, det påstår at dække (`ceo/incomplete-window`)
+
+**Hvad:** `report`'s `Uptime (window)`-kolonne skrev en andel for `30 dage` på
+en `history.json` med 28 registrerede dage. To dage var aldrig overvåget, fordi
+bureauets cron lå ned, og det eneste advarselsord var "recorded" i en
+tabelcelle. Lukker ❓ 12.
+
+**Målt:** rigtig `report` + `report --json`, nul kode ændret — `95.83% (28
+recorded d, 1344 checks, 56 failed)` på et site med to manglende dage mod
+`95.83% (30 recorded d, …)` på et uden. Modvæggen målt på den anden side: et
+bureau med et år gammel overvågning og en historikfil der startede i går får
+**ingen** linje og en rapport der er tegn for tegn uændret.
+
+**Rettelse:** `windowCoverage()` i `src/history.js` er den ene ejer og kræver
+to kendsgerninger, før den kalder noget et hul — sitet var allerede overvåget da
+vinduet åbnede, og historikfilen var allerede i gang da vinduet åbnede. Uden den
+anden linjes en anklage om 29 manglende dage om en overvågning intet kan sige
+om. Ét vindue uden andel er ikke et hul — cellen navngigner de to tilfælde
+allerede.
+
+**Acceptkriterier, alle målte:**
+1. Et site med manglende dage i vinduet skriver den navngiven linje med begge
+   tal (`28 of 30 d`) og tælles i `summary.windowGaps`. ✅ målt i CLI-kørsel
+2. Et site tilføjt *inden for* vinduet får ingen linje. ✅ målt
+3. En historikfil der startede inden for vinduet giver ingen linje, uanset hvor
+   længe sitet har være overvåget. ✅ målt
+4. `report --json` er enig med dokumentet. ✅ `windowRecordedDays`,
+   `windowGap`, `windowMissingDays`
+5. Resumelinjen, cellen og `exit`-koden er uændret for en rapport uden huller.
+   ✅ ingen eksisterende lås rettet undtagen den ene, der krævede udvidelse
+6. 3 nye tests + 3 målte mutationer (1 / 4 / 1 fejl) dør alle på den muterede
+   kode. ✅
+
+**Faldgruber, målt undervejs:** min egen testhjlæpper skrev ingen buckets
+(`for (d = oldest; d <= newest)` med `oldest > newest`), så modvægstesten målte
+intet og mutationen af netop det varet gav 0 fejl. Rettet og genmålt. Samme
+fælde som P1-19's mutation uden betydning — en grøn mutationstest kan være
+vished, ikke dækning.
+
+
 ## ❓ Til Mads
 
-12. **Vindueskolonnen dækker ikke hele vinduet, og det er målt — men ikke rettet i denne iteration.** En 30-dages rapport over 28 registrerede dage skrev `95.83% (28 recorded d, 672 checks)` og fodnoten siger `"Uptime (window)" counts the passes recorded in the last 30 days`. En kunde læser `95.83 % over de sidste 30 dage`; to dage blev aldrig overvåget, fordi bureauets cron døde. Ordet "recorded d" er eneste advarsel, og den står i en tabelcelle blandt andre parenteser. Samme måling som denne iterations fund, en anden kolonne: et tal der dækker mindre end det, det påstår at dække. **Ikke rettet, fordi den sande rettelse er en beslutning og ikke en sætning:** et site der først blev overvåaget i dag har legitimt 1 registreret dag, så "30 dage minus 29 dage uden data" må ikke skrives som en alvorlig advarsel. De to muligheder er (a) cellen skriver `28 of 30 d recorded`, hvilket er sandt for alle og rart at læse, eller (b) en navngiven linje under tabellen kun for sites der *burde* have dækning (monitoret længere end vinduet, alligevel færre registrerede dage), hvilket er det bureauet vil vide. (a) er en kolonneændring i et kundedokument, (b) er en ny linje. **Begge er additive og rører ingen exit-kode.** Målingen ligger klar i `windowSummary` (`src/history.js`): den kender både `from`/`to` og antallet af registrerede dage, og `windowCell` i `src/report.js` vælger i dag bare at skrive `recorded d`.
+12. ~~Vindueskolonnen dækker ikke hele vinduet.~~ **Besvaret i kode 2026-09-26 (P1-38, `ceo/incomplete-window`):** valget var (b), den navngiven linje. Målingen og de to betingelser står i afsnittet øverst og i `docs/agency-report.md` §4. Cellen er uændret; kun en ny linje, `1 with an incomplete window` i resumelinjen og fire additive felter. **Valget, og hvorfor:** (a) ville ændre en celle i et kundedokument bureauer har sat i systemer; (b) er additivt og rører ingen konsument. **(a) er stadig mulig** som en senere ændring, hvis Mads vil have antallet i cellen — målingen og koden til den ligger i `windowCoverage`.
 
 0. **Skal `src/features.js` også være source of truth for siten og det private desktoprepo?** Matrixen er nu én fil i dette repo, og den private desktop-app plus `deskuptime.com` har hver deres egen matrix. Hvis de skal følge med automatisk, er vejen et lille public npm-pakke (`@mahope/product-matrix`) som alle tre repoer importerer. Uden beslutning fortsætter de to andre overflader med at være håndskrevne — og det er præcis den drift, del A lukker her.
 
@@ -2021,6 +2149,7 @@ Rettelsen: `windowSummary()` (src/history.js) får `lastChecked` og skelner *ind
 10. **Skal der skæres en ny `v0.2.9-cli`-release?** P0-9b gør curl-stien væsentligt bedre, men *kun* en release med et publiceret `.sha256` gør checksum-verificeringen obligatorisk; lige nu advarer installeren om 0.2.5, fordi ingen af de 12 releases har en sidecar. Release-workflowen uploader automatisk sidecaren, så det eneste arbejde er `git tag v0.2.9-cli && git push --tags` (det gør Mads — agenten laver aldrig tags) og `npm publish` af 0.2.9. Samme release synkroniserer Homebrew-formlen, som stadig peger på en ældre version i det eksterne tap-repo.
 11. Er `v1`-tagget (2026-08-26) med gamle 0.1.3-tarballs og 0.1.4/0.2.6-desktopsassets stadig nødvendigt, eller er det et rodet relikvieskilt, der bør slettes eller omdøbes? Det er det eneste release uden versionssuffix, og det ligger lige i installérens kandidatliste (den springes over i dag, fordi der intet `deskuptime-<ver>.tar.gz`-asset passer til `v1`).
 
+- **Release-note P1-38:** `deskupreport` kan nu se forskel på et site der var overvåaget hele perioden, og et site hvor bureauets eget overvågningsloop lå ned i to dage. Før skrev `Uptime (window)`-kolonnen `95.83% (28 recorded d, 1344 checks, 56 failed)` i et dokument, hvis fodnot siger at kolonnen tæller "the passes recorded in the last 30 days" — to tal om de samme 30 dage, hvor det ene dækker 28 af dem. Nu skriver rapporten under tabellen **Fewer days recorded than the window for 1 site — the uptime above covers part of the period, not all of it:** `<url> (28 of 30 d)`, og resumelinjen tæller `1 with an incomplete window`. **Cellen er uændret**, så intet i jeres systemer brydes; kun en linje er tilføjet, og `report --json` får fire additive felter (`windowRecordedDays`, `windowGap`, `windowMissingDays`, `summary.windowGaps`). **Et site der først blev overvågt i denne uge får aldrig linjen** — 3 registrerede dage ud af 30 er hele sandheden om et site I netop har tilføjet — og det samme gælder en historikfil der kun startede at blive skrevet i går, uanset hvor længe I har overvåget sitet. Vi kan ikke bevise en mangel på dage, filerne ikke indeholder, og det gælder især lige nu: de daglige buckets startede først at blive skrevet da `report` udkom.
 - **Release-note P1-37:**
 - **Release-note P1-36:** `deskuptime report`, `deskuptime status` og `deskuptime watch --status` kan nu se forskel på et certifikat der er målt i dag, og et der blev målt for flere dage siden. Før skrev en kunderapport, hvis seneste pass var 36 timer gammelt og havde læst `1 d` tilbage, `⚠️ 1 d — renew soon`, talte det i resumelinjen som `1 SSL expiring soon` og skrev `SSL certificate expiring within 14 days — renewal needed: <url> (1 d)` — altså bad den kunde, rapporten er skrevet til, fornye et certifikat der næsten sikkert var udløbet. Dages-tallet er målt på **passets** tidspunkt (`validDays = Math.round((validTo - now) / døgn)`), så det er en nedtælling, ikke en påstand om nu, og rapporten læste det som det modsatte. Nu skriver SSL-kolonnen `🔴 may be expired — last reading: 1 d left, checked 1 d ago` for en læsning der er gammel nok til at certifikatet kan være væk, og det tælles som `1 SSL may be expired` i stedet for som en fornyelse der kan planlægges; linjen under tabellen beder kunden hente en frisk læsning med `deskuptime check <url>`. **Alt under ét dage er tegn for tegn uændret** — en frisk læsning af `3 d` skriver stadig `⚠️ 3 d — renew soon`, en læsning af `20 d` fra i går skriver stadig `20 d`, og et certifikat der *blev* målt som udløbet skriver stadig `🔴 expired 3d ago`, fordi et udløbet certifikat ikke bliver gyldigt af at rapporten er gammel. **Exit-kode, matrix-rækker og alle øvrige felter er uændrede**; `report --json` får to additive felter, `sslMayHaveExpired` og `sslReadingAgeDays`.
 - **Release-note P1-29:** Et site bag en WAF eller et bot-filter der svarer **403 på `HEAD`** blev rapporteret som **nede**. Før skrev `check` `❌ Status: 403 — DOWN` og exit 2, `watch --once` gemte en DOWN-baseline, og `watch --status` skrev `🚨 down` — altså fik en kunde besked om at sitet var offline, mens det serverede helt fint. Det skete fordi værktøjet genkendte "serveren svarer ikke på `HEAD`" som 404/405/501, og 403 ikke var med. Nu prøves der igen med `GET` på de koder, der betyder "`HEAD` er blokeret her", så et sundt site bag Cloudflare, CloudFront/WAF, Wordfence eller ModSecurity rapporteres som det er: **UP**. **Intet er kastet væk:** en server der svarer 403 på både `HEAD` og `GET` er stadig **DOWN med 403** — prøven afgøres af GET-svaret, ikke af `HEAD`. Og 401/429 er bevidst *ikke* taget med, fordi de ikke handler om metoden: en `GET` svarer dem også, så genprøven kunne ikke ændre noget, og en ekstra request til en rate limiter kan forlænge en blokering. **Exit-kode, statusnumre, JSON-felter og alle øvrige koder er uændrede** — de eneste koder der genprøves er dem, der falder igennem prøven, og de rapporteres uændret. `netflix.com` (405 på `HEAD`, 200 på `GET`) var allerede dækket; det er de 403-baserede filtre, der ikke var.

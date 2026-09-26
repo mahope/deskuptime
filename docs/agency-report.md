@@ -167,6 +167,38 @@ Det er her bureauet bliver solgt, og derfor er reglerne hårde:
   statuskode fra det seneste pass betyder intet svar, og intet svar har ingen
   svartid.** Et reelt svar beholder sin tid — en 500 er et svar, så den skriver
   stadig `143 ms`.
+- **Et tal må ikke dække mindre end det, det påstår at dække.** Målt
+  2026-09-26 med rigtig `report` på en `history.json` med to hele dage
+  manglende midt i vinduet, nul kode ændret:
+
+  ```
+  | https://gab.dk/ | UP (200) | 97.5% (40 checks, 1 failed) | 95.83% (28 recorded d, 1344 checks, 56 failed) | … |
+  ```
+
+  `95.83%` og `30` står i én celle, og fodnoten definerer kolonnen som "the
+  passes recorded in the last 30 days". En kunde læser det som 30 dage. To af
+  dem blev aldrig overvåget — bureauets cron lå ned — og det eneste advarsels-
+  ord var "recorded", i en tabelcelle blandt andre parenteser. Nu skriver
+  rapporten under tabellen
+  `**Fewer days recorded than the window for 1 site — the uptime above covers part of the period, not all of it:** https://gab.dk/ (28 of 30 d)`,
+  tæller `1 with an incomplete window` i resumelinjen, og `--json` får
+  `windowRecordedDays`, `windowGap`, `windowMissingDays` og
+  `summary.windowGaps`. **Cellen er uændret** — kun en ny linje og additive
+  felter, så ingen eksisterende konsument brydes.
+
+  Linjen kræver to fakta, ellers går den og anklager kunden for noget
+  filerne ikke kan bevise. `windowCoverage()` i `src/history.js` er den ene
+  ejer: (1) sitet var allerede overvåget da vinduet åbnede (`monitoringSince`
+  på eller før vinduets første dag) — ellers har et site tilført i denne uge
+  3 registrerede dage ud af 30, og det er hele sandheden om det; (2)
+  historikfilen var allerede i gang da vinduet åbnede (dens egen tidligste dag
+  er på eller før vinduets første dag) — dags-buckets begyndte først at blive
+  skrevet da `report` udkom, så et bureau der har overvåget fem sites i et år
+  og opgraderer har 1 registreret dag ud af 30 for alle fem, og en anklage om
+  29 manglende dage ville være en påstand om deres overvågning uden dækning.
+  Et vindue uden andel er ikke et gap: cellen navngiver allerede de to tilfælde
+  ("no pass in the last N d" og den to-filers-uoverensstemmelse), og en linje
+  der gentager cellen er støj.
 - **Ald data markeres som forældet.** Rapporten genkører intet, så "3 up ·
   0 down" handler om det *sidste* pass, ikke om nu. Et site uden pass inden for
   `STALE_AFTER_DAYS` (2 dage, ét sted i `src/status.js` sammen med

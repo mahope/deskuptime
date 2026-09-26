@@ -1058,7 +1058,12 @@ test('the report reads every state timestamp through the one owner', () => {
   // Both fields must be handed the owner's answer, not the entry's own value:
   // `readPassTime` is what turns an unreadable time into `null`.
   assert.match(source, /lastChecked: readPassTime\(entry\.lastChecked\)/, 'a raw state timestamp can reach --json again');
-  assert.match(source, /monitoringSince: readPassTime\(entry\.addedAt\)/, 'a raw state timestamp can reach --json again');
+  // `addedAt` is read once and handed to both users — the row's `monitoringSince`
+  // and the window-coverage rule — so the two cannot disagree about it. Widened
+  // from `monitoringSince: readPassTime(entry.addedAt)`, which the refactor into
+  // one local broke; the invariant it protected is the same and is now stronger.
+  assert.match(source, /const monitoringSince = readPassTime\(entry\.addedAt\)/, 'a raw state timestamp can reach --json again');
+  assert.match(source, /monitoringSince,/, 'and the row is written from the owner\'s answer');
   assert.equal((source.match(/readPassTime\(/g) ?? []).length, 2, 'both timestamps, and nothing else');
 });
 
@@ -1564,4 +1569,107 @@ test('the duration has one owner, and the failure path cannot invent one', () =>
   assert.doesNotMatch(pingSrc, /responseTimeMs: Date\.now\(\) - start,\s*\n\s*finalUrl: null/, 'the no-response path must not report a duration');
   assert.equal((pingSrc.match(/responseTimeMs: Date\.now\(\) - start/g) || []).length, 1, 'only a real response times itself');
   assert.match(pingSrc, /responseTimeMs: null,[\s\S]{0,80}finalUrl: null/, 'the no-response path says it measured nothing');
+});
+
+// ---------------------------------------------------------------------------
+// A window column that covers less than the window it names (measured, 2026-09-26)
+// ---------------------------------------------------------------------------
+//
+// `95.83%` and `30 d` appeared in one cell, and the footnote defines the column
+// as "the passes recorded in the last 30 days". A customer reads that as 30
+// days. Two of them were never monitored — the agency's cron was dead — and the
+// only warning was the word "recorded", in a cell among other parentheses.
+//
+// The named line needs two facts the report already has, or it cries wolf: a
+// site added *inside* the window has 3 recorded days out of 30 and is not a gap,
+// and a history file that only started recording yesterday says nothing about
+// the 28 days before it, however long the agency has monitored the site.
+
+const GAP_NOW = new Date('2026-09-25T09:30:00.000Z');
+
+function dayKeyAgo(daysAgo, now) {
+  return new Date(now.getTime() - daysAgo * 86_400_000).toISOString().slice(0, 10);
+}
+
+/**
+ * A history file for these URLs, holding every day from `from` days ago back to
+ * `to` days ago, minus the days `missing` names for that URL. The window is the
+ * 30 day keys from today backwards, so `to: 30` is the one bucket that falls
+ * outside it and `to: 6` is a file that started recording this week.
+ */
+function historyBetween(url, { from = 0, to = 30, missing = {} } = {}) {
+  const urls = {};
+  for (const u of url) {
+    const gaps = missing[u] ?? [];
+    urls[u] = {};
+    for (let d = from; d <= to; d++) {
+      if (gaps.includes(d)) continue;
+      urls[u][dayKeyAgo(d, GAP_NOW)] = { checks: 48, failures: 2 };
+    }
+  }
+  return { urls };
+}
+
+test('a site with missing days in the window is named, and one added inside it is not', () => {
+  const FULL = 'https://fuld.dk/';
+  const GAP = 'https://gab.dk/';
+  const NEW = 'https://ny.dk/';
+  const history = historyBetween([FULL, GAP, NEW], { missing: { [GAP]: [5, 6] } });
+  // The new site is only present for its own three days, in the same file.
+  for (const d of [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]) delete history.urls[NEW][dayKeyAgo(d, GAP_NOW)];
+  const report = buildReport(proState({
+    [FULL]: upEntry(),
+    [GAP]: upEntry(),
+    [NEW]: upEntry({ addedAt: dayKeyAgo(2, GAP_NOW) }),
+  }), { now: GAP_NOW, history });
+  const site = url => report.sites.find(s => s.url === url);
+
+  assert.equal(site(GAP).windowGap, true, 'two whole days missing inside the window');
+  assert.equal(site(GAP).windowMissingDays, 2);
+  assert.equal(site(GAP).windowRecordedDays, 28);
+  assert.equal(site(FULL).windowGap, false, 'a window with every day is not a gap');
+  assert.equal(site(FULL).windowMissingDays, null);
+  assert.equal(site(NEW).windowGap, false, 'a site added inside the window has no days to be missing');
+  assert.equal(site(NEW).windowMissingDays, null);
+  assert.equal(report.summary.windowGaps, 1, 'and the document counts it');
+
+  const markdown = renderReportMarkdown(report);
+  assert.match(markdown, /Fewer days recorded than the window for 1 site/);
+  assert.match(markdown, /https:\/\/gab\.dk\/ \(28 of 30 d\)/, 'both counts, so the reader can see the shortfall');
+  assert.match(markdown, /1 with an incomplete window/, 'and the summary line says so');
+  const json = JSON.parse(renderReportJson(report));
+  assert.equal(json.summary.windowGaps, 1, 'the machine surface agrees with the document');
+});
+
+test('a history file that only started recording inside the window is not a gap', () => {
+  // The upgrade case: monitored for a year, daily buckets since last week. The
+  // files cannot support a claim about the days before the file existed, and
+  // the report must not make one — a false accusation in a customer document is
+  // worse than a silent column.
+  const A = 'https://a.dk/';
+  const B = 'https://b.dk/';
+  const history = historyBetween([A, B], { to: 6 });
+  const report = buildReport(proState({
+    [A]: upEntry({ addedAt: '2025-11-01T00:00:00.000Z' }),
+    [B]: upEntry({ addedAt: '2025-11-01T00:00:00.000Z' }),
+  }), { now: GAP_NOW, history });
+  assert.deepEqual(report.sites.map(s => s.windowGap), [false, false]);
+  assert.equal(report.summary.windowGaps, 0);
+  const markdown = renderReportMarkdown(report);
+  assert.doesNotMatch(markdown, /Fewer days recorded than the window/);
+  assert.doesNotMatch(markdown, /incomplete window/, 'not even in the summary line');
+});
+
+test('the window shortfall is one owner, and the report asks it', () => {
+  const readSrc = name => readFileSync(join(ROOT, 'src', name), 'utf8');
+  const reportSrc = readSrc('report.js');
+  const historySrc = readSrc('history.js');
+  // A duplicated rule here is invisible to a behavioural test: the original
+  // code re-inserted as a second copy gives identical output on every fixture.
+  assert.equal((historySrc.match(/export function windowCoverage\(/g) || []).length, 1, 'one owner');
+  assert.equal((reportSrc.match(/windowCoverage\(\{/g) || []).length, 1, 'and it is asked once');
+  assert.doesNotMatch(reportSrc, /recordedDays < windowDays/, 'the report may not re-derive the rule');
+  assert.match(reportSrc, /windowGap: coverage\.gap/, 'the cell and the line come from the same answer');
+  assert.match(historySrc, /passAge\(monitoringSince, now\)\.passMs/, 'the time is asked of its owner, not parsed here');
+  assert.doesNotMatch(historySrc, /Date\.parse\(monitoringSince/, 'and never parsed locally');
 });

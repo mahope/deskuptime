@@ -25,7 +25,7 @@
  */
 
 import { PRODUCT } from './features.js';
-import { DEFAULT_WINDOW_DAYS, windowSummary } from './history.js';
+import { DEFAULT_WINDOW_DAYS, windowCoverage, windowSummary } from './history.js';
 import { markdownCell as cell } from './display.js';
 import { SSL_WARN_DAYS, STALE_AFTER_DAYS, clockAheadNote, expiredNote, isCheckStale, passAge, readPassTime, readRedirectTarget, readResponseMs, readSslState, readStatusCode, sslLapsedNote, staleAgeNote, unknownNote, verdictFor } from './status.js';
 
@@ -202,6 +202,9 @@ export function buildReport(state, { title, now = new Date(), history, windowDay
       // to someone outside the agency. The host is the actionable part — it says
       // whose server answered.
       const redirect = readRedirectTarget({ url, finalUrl: typeof entry.lastFinalUrl === 'string' ? entry.lastFinalUrl : null });
+      const window = windowSummary(history, url, { days: windowDays, now, uptimePercent, lastChecked: entry.lastChecked });
+      const monitoringSince = readPassTime(entry.addedAt);
+      const coverage = windowCoverage({ window, history, monitoringSince, days: windowDays, now });
       return {
         url,
         status: verdictFor(entry?.wasUp),
@@ -215,7 +218,15 @@ export function buildReport(state, { title, now = new Date(), history, windowDay
         offHostRedirect: redirect.offHost,
         offHostNote: redirect.label,
         uptimePercent: uptimePercent(entry),
-        window: windowSummary(history, url, { days: windowDays, now, uptimePercent, lastChecked: entry.lastChecked }),
+        window,
+        // The two additive fields for the same window: how many of its days the
+        // site actually has, and whether that is fewer than the column claims.
+        // Asked of the one owner (`windowCoverage`), so the named line below and
+        // `--json` cannot disagree about it. A site added inside the window is
+        // not a gap — the owner needs both facts, and it has them.
+        windowRecordedDays: coverage.recordedDays,
+        windowGap: coverage.gap,
+        windowMissingDays: coverage.missingDays,
         checks,
         failures,
         responseMs: readResponseMs(entry),
@@ -246,7 +257,7 @@ export function buildReport(state, { title, now = new Date(), history, windowDay
         // consumer can print it unconditionally.
         passState: pass.state,
         clockAhead,
-        monitoringSince: readPassTime(entry.addedAt),
+        monitoringSince,
         // …and "a pass was recorded at all" is a *different* fact, kept on its
         // own so a `null` time (unreadable) cannot be read as "no pass" by the
         // summary line or by `unknownNote`. Measured: canonicalising the time
@@ -286,6 +297,11 @@ export function buildReport(state, { title, now = new Date(), history, windowDay
     // passed since the pass that read it is neither expiring nor measured as
     // expired, and it is the one a client most needs to hear about.
     sslMayHaveExpired: sites.filter(site => site.sslMayHaveExpired).length,
+    // Additive, and disjoint from the two above: a window column that quotes a
+    // share for a period shorter than the one it names. Measured: 28 recorded
+    // days printed as `95.83%` next to "the last 30 days", with the shortfall
+    // visible only as the word "recorded" inside the cell.
+    windowGaps: sites.filter(site => site.windowGap).length,
   };
 
   return {
@@ -533,6 +549,19 @@ export function renderReportMarkdown(report) {
       `**${crossed.length === 1 ? 'One site is' : `${crossed.length} sites are`} answered by another host — the monitored URL no longer serves the site itself:** ${crossed.map(site => cell(site.offHostNote)).join(', ')}`,
     ];
 
+  // The window column quotes a share and a period together. When the site has
+  // fewer recorded days than the period, those two disagree and the reader is
+  // the customer — so it is named out loud, the way a stale pass is, with the
+  // count on both sides. Only sites that were already being monitored when the
+  // window opened, so a site added on Tuesday is never called a gap.
+  const gaps = report.sites.filter(site => site.windowGap);
+  const gapLines = gaps.length === 0
+    ? []
+    : [
+      '',
+      `**Fewer days recorded than the window for ${gaps.length} site${gaps.length === 1 ? '' : 's'} — the uptime above covers part of the period, not all of it:** ${gaps.map(site => cell(`${site.url} (${site.windowRecordedDays} of ${site.windowMissingDays + site.windowRecordedDays} d)`)).join(', ')}`,
+    ];
+
   return [
     `# ${cell(report.title)}`,
     '',
@@ -542,14 +571,15 @@ export function renderReportMarkdown(report) {
     `|${' --- |'.repeat(HEADERS.length)}`,
     ...(rows.length > 0 ? rows : [`| ${['_no monitored sites_', '—', '—', '—', '—', '—', '—'].join(' | ')} |`]),
     '',
-    `**${report.summary.sites} site(s) · ${buckets.up} up · ${buckets.down} down${unknownWords(buckets)} · ${report.summary.checks} checks · ${report.summary.failures} failed${expiring.length > 0 ? ` · ${expiring.length} SSL expiring soon` : ''}${expired.length > 0 ? ` · ${expired.length} SSL EXPIRED` : ''}${lapsed.length > 0 ? ` · ${lapsed.length} SSL may be expired` : ''}${stale.length > 0 ? ` · ${stale.length} stale (no check in the last ${STALE_AFTER_DAYS} d)` : ''}${crossed.length > 0 ? ` · ${crossed.length} answered by another host` : ''}**`,
+    `**${report.summary.sites} site(s) · ${buckets.up} up · ${buckets.down} down${unknownWords(buckets)} · ${report.summary.checks} checks · ${report.summary.failures} failed${expiring.length > 0 ? ` · ${expiring.length} SSL expiring soon` : ''}${expired.length > 0 ? ` · ${expired.length} SSL EXPIRED` : ''}${lapsed.length > 0 ? ` · ${lapsed.length} SSL may be expired` : ''}${stale.length > 0 ? ` · ${stale.length} stale (no check in the last ${STALE_AFTER_DAYS} d)` : ''}${crossed.length > 0 ? ` · ${crossed.length} answered by another host` : ''}${gaps.length > 0 ? ` · ${gaps.length} with an incomplete window` : ''}**`,
     ...expiredLines,
     ...lapsedLines,
     ...attention,
     ...staleLines,
     ...crossedLines,
+    ...gapLines,
     '',
-    `Uptime is the share of completed monitoring passes that answered HTTP 200–399. "Uptime (all)" counts every pass since the site was added${since ? ` (earliest ${shortTime(since)})` : ''}; "Uptime (window)" counts the passes recorded in the last ${windowDays} days. A site with no completed pass yet shows — rather than 100%. "Uptime (window)" is counted from a separate daily history file, so a row can show a recent check with an empty window column; that column then names the file that is missing the pass rather than claiming the site was not monitored. The counts in the summary line are a partition: every site is in exactly one of up, down, not checked, status unknown or stale. "Up" and "down" describe sites checked within the last ${STALE_AFTER_DAYS} days; a site whose monitoring stopped is counted as stale and keeps the status from its last pass in the table, named with the age of that pass. "Status unknown" means a pass ran but its result cannot be read from the state file. The SSL column is what the last pass read, so its day count is the deadline the certificate had at that moment. A reading less than a day old is shown as measured; one old enough that the certificate may have lapsed since is named as such and is not counted as a renewal to schedule — run \`deskuptime check <url>\` for a fresh reading.`,
+    `Uptime is the share of completed monitoring passes that answered HTTP 200–399. "Uptime (all)" counts every pass since the site was added${since ? ` (earliest ${shortTime(since)})` : ''}; "Uptime (window)" counts the passes recorded in the last ${windowDays} days. A site with no completed pass yet shows — rather than 100%. "Uptime (window)" is counted from a separate daily history file, so a row can show a recent check with an empty window column; that column then names the file that is missing the pass rather than claiming the site was not monitored. A site that was already being monitored when the window opened, but has fewer recorded days than the window, is named below the table with both counts, so the share and the period are not read as covering days nobody watched. The counts in the summary line are a partition: every site is in exactly one of up, down, not checked, status unknown or stale. "Up" and "down" describe sites checked within the last ${STALE_AFTER_DAYS} days; a site whose monitoring stopped is counted as stale and keeps the status from its last pass in the table, named with the age of that pass. "Status unknown" means a pass ran but its result cannot be read from the state file. The SSL column is what the last pass read, so its day count is the deadline the certificate had at that moment. A reading less than a day old is shown as measured; one old enough that the certificate may have lapsed since is named as such and is not counted as a renewal to schedule — run \`deskuptime check <url>\` for a fresh reading.`,
     '',
     `Generated on one machine, without an account: no page content, response headers or license data is included, and nothing was uploaded.`,
   ].join('\n');
