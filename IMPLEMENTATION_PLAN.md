@@ -1,7 +1,123 @@
 STATUS: I GANG
-Iteration: 52 — 2026-09-26
-Arbejdsgrene: `ceo/ssl-deadline-age` (P1-36, målt + fix)
-Næste handling: **P1-36 er færdig.** Et SSL-dages-tal er en **nedtælling**, og den blev læst som en **påstand om nu** i den betalte kundenrapport: et pass 36 timer gammelt der havde læst "1 d tilbage" skrev `⚠️ 1 d — renew soon`, blev talt i resumelinjen og bad kunden fornye et certifikat der næsten sikkert var udløbet — det ene output den betalte vare findes for. Rettelsen: `readSslState` spørger nu passets tidspunkt med `passAge` og sætter punktet på den **tidligste** udløbsinstans læsningens egen afrunding (`Math.round`) tillader; rapporten, begge statuslister og `--json` siger det samme, og et **målt** forfald aldres ikke. Næste opgave: ❓ 1–3, eller en ny målt opgave — og se `❓ 12` om den anden målte fejl i denne iteration.
+Iteration: 53 — 2026-09-26
+Arbejdsgrene: `ceo/unmeasured-response-time` (P1-37, målt + fix)
+Næste handling: **P1-37 er færdig.** Response-kolonnen i den betalte kundenrapport var den sidste ubeskrevne kolonne: et pass, der aldrig fik et byte tilbage, skrev alligevel en svartid, fordi målelaget målte *sin egen ventetid* og skrev den som en latens. Rettelsen er to steder — `toNetworkResult` siger `null` (fejlvejen kan ikke længere finde på et tal), og `readResponseMs` i `src/status.js` ejer reglen om, hvornår et gemt tal må vises, fordi `recordPass` med vilje beholder den sidste måling. Næste opgave: ❓ 1–3, eller ❓ 12 hvis den er besvaret, ellers en ny målt opgave.
+
+## Måle-gate for denne iteration (53) — en note, fordi den koster 20 minutter
+
+**De 20 røde tests på en ren udcheck var ikke en fejl i koden.** Denne maskines
+`node` er v22.23.2 (Homebrew-default), og repoet kræver `>=24` (`engines`,
+`.nvmrc` = 24), så `install.test.js` (8) og `action.yml`-testerne (12) døde på
+den fejl. Med `/opt/homebrew/opt/node@26/bin` først i `PATH` er de 20 grønne
+igen, 352/352. **Kør `export PATH="/opt/homebrew/opt/node@26/bin:$PATH"` før
+`npm test` her**, ellers ser det ud som om de 20 fejl er nye. Det er den
+første gang et rent udcheck gav rødt, så det er værd at stå i planen.
+
+**Og den anden måleforhindring er nu lukket i kode, ikke i en ny stub i /tmp.**
+P1-34 og P1-35 målte begge `watch`/`report` med `test/fixtures/license-stub.mjs`
+og fik `HTTP 500` overalt, fordi den erstattede `globalThis.fetch` **helt** og
+svarede 500 på alt uden for de tre licens-endpoints — to iterationer spolerede
+på den samme fælde, og P1-34 skrev udtrykkelig at næste iteration bør tilføje
+scenariet i stedet. Det er gjort: `DUB_STUB_SCENARIO=passthrough` stubber kun
+`/activate|/validate|/deactivate` og lader alt andet gå igennem den rigtige
+`fetch`. Denne iteration målte hele vejen med `passthrough` og slog nul
+uventede kald.
+
+## Status fra denne iteration (53, P1-37)
+
+**Hvorfor denne flade:** Rapportens tabel har syv kolonner, og P1-30 → P1-36 har
+taget dem én for alle undtagen Response. Den er den eneste kolonne uden **én**
+bullet i `docs/agency-report.md` §4, og den er den eneste der ikke var
+beskrevet. Det er samme slags dokument der lå foran webhook'en i P1-34.
+
+**Målt først, nul kode ændret.** Rigtig `check` + `check --json` + `watch --once` +
+`status` + `watch --status` + `report` + `report --json` mod tre lokale fixtures —
+én der svarer 200, **en lukket port** (findet ved at binde en port og lukke den
+igen, så `ECONNREFUSED` er ægte og ikke "bad port"), og **en der accepterer
+forbindelsen og aldrig svarer**. Temp-HOME, `passthrough`-stub, Pro-stub skrevet i
+state'en *efter* passene så intet gik til mahope.tools.
+
+```
+check, lukket port      →  Status:   N/A — DOWN
+                           Response: 15ms        ← intet svarede, på 15 ms
+check, timeout          →  Status:   N/A — DOWN
+                           Response: 2008ms      ← 15 000 ms budget + overhead
+report, lukket port     →  | http://kunde.dk/ | DOWN | 0% (2 checks, 2 failed) | … | 5 ms     | … |
+report, timeout         →  | http://kunde.dk/ | DOWN | 0% (1 checks, 1 failed) | … | 15002 ms | … |
+report --json           →  "responseMs": 5   og   "responseMs": 15002
+```
+
+To tal i den betalte vare, og de er begge **opdigtede**. `5 ms` er det hurtigste
+et site kan se ud, mens det er uopnåeligt — kunden læser en lynhurtig server.
+`15002 ms` er ikke en latens overhovedet, det er `DEFAULT_TIMEOUT_MS` plus
+rundturen, så tallet siger "langsom" der, hvor sandheden er "vi gav op". Begge er
+påstande om *kundens eget site*, i det dokument der videresendes til kunden.
+
+**Årsagen er en linje, og den er en brudt kontrakt.** `ping.js:62`
+(`toNetworkResult`) skrev `responseTimeMs: Date.now() - start` på **fejlvejen**,
+hvorimod `formatMs()` i `src/display.js` i forvejen dokumenterede at feltet
+"only fills it in on a real response" og skriver `—` for alt andet.
+Visningslaget var altså ærligt, og målelaget gav det aldrig lov til at vise sig —
+præcis P1-34's billede (specen forældet, koden ikke), bare omvendt: her var
+**kodekommentaren sand og koden falsk**. `toNetworkResult` siger nu `null`, og
+`start`-parameteren er væk, da den ikke læses mere. Årsagen overlever som en
+*årsag* (`error: 'Request timed out'`), ikke som en svartid.
+
+**Den anden halvdel af rettelsen er en beslutning, og den er målt.** At slå
+fejlvejen fra løser ikke alene: `recordPass` skriver kun et tal når der **er**
+et, så den sidste måling bliver liggende i state'en med vilje (et pass der ikke
+målte noget er ikke et pass der ophævede en måling). Et site der svarede i 22 ms
+og nu afviser forbindelsen har derfor stadig `lastResponseMs: 22`, og cellen ville
+citere et tidligere pass i en række, hvor hver eneste anden celle beskriver det
+**seneste** pass. Målt, før den beslutning blev taget:
+
+```
+A entry efter sit UP-pass:  {"lastStatus":200, …, "lastResponseMs":22}
+passet derefter mod lukket port →  🚨 is DOWN — Connection refused
+report →  | …/ | DOWN | 66.67% (3 checks, 1 failed) | … | 22 ms | … |     ← ville læst sig som "svarer i 22 ms"
+```
+
+`readResponseMs()` i `src/status.js` er den nye ejer, spørgsom `readStatusCode`
+og ikke ved siden af den: **ingen statuskode fra det seneste pass betyder intet
+svar, og intet svar har ingen svartid.** Det er den regel rækken allerede bruger
+om alt andet. `report.js` spørger ejeren, så afgørelsen bor ikke i rapporten.
+
+**To modvægge målt, fordi en rettelse der kun fjerner tal er lige så falsk som
+den fejl den retter.** (1) **En 500 *er* et svar**, så dens tid overlever:
+`Status: 500 — DOWN` + `Response: 23ms`, og `check --json` skriver
+`"statusCode": 500, "responseTimeMs": 22` — tegn for tegn som før. (2) **Det friske
+200-site skriver `23 ms`** i rapporten og `responseMs: 23` i JSON, uændret. Den
+målte 0-ms og det ulæselige (`-5`, `'42'`, `NaN`) er dækket af eksisterende låse.
+
+**Låsen er målt, ikke hævnet.** Fire nye tests i `test/report.test.js` (filen er
+allerede i `npm test`): en der spørger `checkReachability` direkte mod en **ægte
+lukket port** og kræver `responseTimeMs === null` mens `error` stadig er der; en
+adfærdstest med to sites i én rapport (refused med `lastResponseMs: 22` fra et
+tidligere pass, og en 500 med 143 ms) der kræver `—` og `143 ms` i cellerne *og*
+at `--json` er enig; en tabeltest på `readResponseMs` med elleve entries
+(inkl. `lastStatus: -1` og `9999`, der begge er "ikke et svar"); og en strukturel
+lås på at rapporten ikke læser `lastResponseMs` selv, at der er præcis ét
+`responseMs:` og én ejer, og at fejlvejen i `ping.js` ikke kan finde på et tal.
+**Fire mutationer målt, alle døde:** fejlvejen tæller sig selv igen (2 fejl),
+`readResponseMs` stoler på tallet alene (3), rapporten læser tallet selv (2), og
+fejlvejen hævder et fast budget på 15 000 (2).
+
+**Én eksisterende lås måtte udvides, ikke slækkes** — sjette gang en eksisterende
+lås følger en målt rettelse (P1-19, P1-20, P1-22, P1-23, P1-30 gjorde det
+samme). `status.js`'s `lastStatus`-tæller stod på 2, fordi rapporten læste
+`lastStatus` i to læsere; den nye ejer er den tredje, så tælleren er 3, og den
+kræver nu at den tredje læser spørger `readStatusCode` — så den svagere test ikke
+kan komme tilbage ved siden af den.
+
+**Ingen ny claim, ingen matrix-række, ingen exit-kode, ingen ny payload-nøgle,
+intet README/`--help`-rør.** `report --json`'s `responseMs` er uændret i navn og
+type (tallet bliver `null` i stedet for et opdigtet tal), `check --json`'s
+`responseTimeMs` gør det samme, og webhook-payloaden bærer ingen svartid.
+`docs/agency-report.md` §4 har målingen og reglen. 356/356 tests (352 + 4), audit
+0/0, `node --check` alle JS-filer, `matrix --check` og `git diff --check` grønne
+på Node 26.7.0. Commit `5a208d7` på `ceo/unmeasured-response-time`,
+fast-forward-merget til `main` og pushet 26/9. Ingen deploy-note nødvendig
+(CLI-repo uden live-deploytarget).
 
 ## Status fra denne iteration (52, P1-36)
 
@@ -1905,6 +2021,7 @@ Rettelsen: `windowSummary()` (src/history.js) får `lastChecked` og skelner *ind
 10. **Skal der skæres en ny `v0.2.9-cli`-release?** P0-9b gør curl-stien væsentligt bedre, men *kun* en release med et publiceret `.sha256` gør checksum-verificeringen obligatorisk; lige nu advarer installeren om 0.2.5, fordi ingen af de 12 releases har en sidecar. Release-workflowen uploader automatisk sidecaren, så det eneste arbejde er `git tag v0.2.9-cli && git push --tags` (det gør Mads — agenten laver aldrig tags) og `npm publish` af 0.2.9. Samme release synkroniserer Homebrew-formlen, som stadig peger på en ældre version i det eksterne tap-repo.
 11. Er `v1`-tagget (2026-08-26) med gamle 0.1.3-tarballs og 0.1.4/0.2.6-desktopsassets stadig nødvendigt, eller er det et rodet relikvieskilt, der bør slettes eller omdøbes? Det er det eneste release uden versionssuffix, og det ligger lige i installérens kandidatliste (den springes over i dag, fordi der intet `deskuptime-<ver>.tar.gz`-asset passer til `v1`).
 
+- **Release-note P1-37:**
 - **Release-note P1-36:** `deskuptime report`, `deskuptime status` og `deskuptime watch --status` kan nu se forskel på et certifikat der er målt i dag, og et der blev målt for flere dage siden. Før skrev en kunderapport, hvis seneste pass var 36 timer gammelt og havde læst `1 d` tilbage, `⚠️ 1 d — renew soon`, talte det i resumelinjen som `1 SSL expiring soon` og skrev `SSL certificate expiring within 14 days — renewal needed: <url> (1 d)` — altså bad den kunde, rapporten er skrevet til, fornye et certifikat der næsten sikkert var udløbet. Dages-tallet er målt på **passets** tidspunkt (`validDays = Math.round((validTo - now) / døgn)`), så det er en nedtælling, ikke en påstand om nu, og rapporten læste det som det modsatte. Nu skriver SSL-kolonnen `🔴 may be expired — last reading: 1 d left, checked 1 d ago` for en læsning der er gammel nok til at certifikatet kan være væk, og det tælles som `1 SSL may be expired` i stedet for som en fornyelse der kan planlægges; linjen under tabellen beder kunden hente en frisk læsning med `deskuptime check <url>`. **Alt under ét dage er tegn for tegn uændret** — en frisk læsning af `3 d` skriver stadig `⚠️ 3 d — renew soon`, en læsning af `20 d` fra i går skriver stadig `20 d`, og et certifikat der *blev* målt som udløbet skriver stadig `🔴 expired 3d ago`, fordi et udløbet certifikat ikke bliver gyldigt af at rapporten er gammel. **Exit-kode, matrix-rækker og alle øvrige felter er uændrede**; `report --json` får to additive felter, `sslMayHaveExpired` og `sslReadingAgeDays`.
 - **Release-note P1-29:** Et site bag en WAF eller et bot-filter der svarer **403 på `HEAD`** blev rapporteret som **nede**. Før skrev `check` `❌ Status: 403 — DOWN` og exit 2, `watch --once` gemte en DOWN-baseline, og `watch --status` skrev `🚨 down` — altså fik en kunde besked om at sitet var offline, mens det serverede helt fint. Det skete fordi værktøjet genkendte "serveren svarer ikke på `HEAD`" som 404/405/501, og 403 ikke var med. Nu prøves der igen med `GET` på de koder, der betyder "`HEAD` er blokeret her", så et sundt site bag Cloudflare, CloudFront/WAF, Wordfence eller ModSecurity rapporteres som det er: **UP**. **Intet er kastet væk:** en server der svarer 403 på både `HEAD` og `GET` er stadig **DOWN med 403** — prøven afgøres af GET-svaret, ikke af `HEAD`. Og 401/429 er bevidst *ikke* taget med, fordi de ikke handler om metoden: en `GET` svarer dem også, så genprøven kunne ikke ændre noget, og en ekstra request til en rate limiter kan forlænge en blokering. **Exit-kode, statusnumre, JSON-felter og alle øvrige koder er uændrede** — de eneste koder der genprøves er dem, der falder igennem prøven, og de rapporteres uændret. `netflix.com` (405 på `HEAD`, 200 på `GET`) var allerede dækket; det er de 403-baserede filtre, der ikke var.
 - **Release-note P1-27:** `watch`, begge statuslister, `deskuptime report` og webhook-payloaden kan nu se forskel på et site der svarer, og et site der **lader en anden vært svare**. Før skrev `watch --once` `baseline recorded: UP (200)`, begge lister `✅ up … (200)`, kundenrapporten `UP (200) | 100 %`, og din Slack-kanal fik et grønt `type: "up"` — altså sagde fire flader, at *kundens* site var op, når svaret kom fra registrarens parkeringsside eller en phishing-side. Nu gemmer hvert pass hvor svaret kom fra, og du ser det samme sted som i `check`: `🔀 … answered by another host — the response came from …, not …` i watch-outputtet, `⚠️ answered by … (asked …)` på rækkerne i `status` og `watch --status`, en ⚠️-note på rapport-rækken **plus en navngiven linje under tabellen** (og tællet i opsummeringen), og to additive felter i webhook-payloaden, `finalUrl` og `offHostRedirect`. **Verdikt, exit-kode og uptime-tal er uændrede:** en redirect er ikke en fejl — `www → apex` er den mest almindelige redirect på nettet — og du får **én** besked når det sker, ikke en hvert 60. sekund, fordi låsen følger den *svarende vært* i stedet for URL'en. Et skift til en anden fremmed vært er stadig en ny besked, fordi det er et hijack efter en parkeringsside. En redirect på egen vært siger stadig intet på nogen af fladerne. Rapporten får kun **værten**, aldrig hele `finalUrl`, fordi dokumentet sendes videre til en kunde og en redirect-sti kan indeholde et token.
@@ -1934,6 +2051,7 @@ Rettelsen: `windowSummary()` (src/history.js) får `lastChecked` og skelner *ind
 
 ## Iterationslog
 
+- **Iteration 53 (P1-37, målt + fix):**
 - **Iteration 52 (P1-36, målt + fix):** ❓ 1–3 ubesvarede, så målingen gik til den sidste ubeskrevne kolonne i den betalte kunderapport. Et SSL-dages-tal er en **nedtælling**, og rapporten læste det som en påstand om nu: målt med rigtig `report` + `report --json` + `status` mod en temp-HOME med rigtig state-fil, rigtig `history.json` og Pro-stub, skrev et pass 36 timer gammelt med `sslValidDays: 1` `⚠️ 1 d — renew soon`, `1 SSL expiring soon` og `**SSL certificate expiring within 14 days — renewal needed:** … (1 d)`, og talte sitet som **1 up** (stale er 2 dage). `validDays` er `Math.round((validTo - now) / døgn)` på passets tidspunkt (`ssl.js:63`), så "1 d tilbage" var højst et halvt dags løfte, fremsagt 36 timer tidligere. P1-8/P1-22 rettede den oprindelige fejl (et certifikat der *var* udløbet); dette er den samme fejl ét niveau højere op. Rettelse: `readSslState` tager `measuredAt` + `now` med ind, spørger `passAge` (ikke `checkAgeMs` — P1-31's lås på én læser af den negative alder holder), og sætter punktet på den **tidligste** udløbsinstans læsningens egen afrunding tillader, først når læsningen er ≥ 1 dag gammel; `sslLapsedNote()` ejer sætningen; `readEntry` og `buildReport` afleverer passets tidspunkt ved navn, så rapporten og begge statuslister siger det samme; `expiringSoon` bliver `false` for en læsning der måske er væk; `summary.sslMayHaveExpired` + `sslMayHaveExpired` + `sslReadingAgeDays` er additive. Et **målt** forfald aldres ikke (et udløbet certifikat bliver ikke gyldigt), og tilfælde D er uændret tegn for tegn — testet. 2 adfærdstester (tre sites i én rapport: lapset / frisk læsning med samme tal / gammel læsning med 20 d) + 1 strukturel lås → **352/352** (349 + 3); audit 0/0; `node --check`, `matrix --check`, `git diff --check` grønne på Node 26.7.0. **Fem mutationer målt, alle døde** (2/1/1/2/2 fejl). **To fejl i mine egne ting, rettet i den rigtige retning:** fodnoten citerede cellens ord "renew soon" og brød to eksisterende låse (tests havde ret, prosa skulle ændres), og min første version læste den negative alder selv (låsen havde ret, koden skal spørge `passAge`). Commit `bc6848c`, fast-forward til `main` og pushet 26/9. **Ingen ny claim, ingen matrix-række, ingen exit-kode, ingen ny payload-nøgle.** En **anden** målt fejl fra samme kørsel (vindueskolonnen dækker 28 af 30 dage uden at sige det) er lagt under **❓ 12** med de to mulige rettelser og begrundelsen for at vælge — ikke en sætning, men en beslutning. Næste: ❓ 1–3 eller ❓ 12 hvis besvaret, ellers en ny målt opgave.
 - **Iteration 51 (P1-35, målt + fix):** se afsnittet længere oppe.
 

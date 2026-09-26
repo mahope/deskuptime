@@ -132,6 +132,41 @@ Det er her bureauet bliver solgt, og derfor er reglerne hårde:
   aldres ikke: et certifikat der var udløbet på passets tidspunkt er ikke blevet
   gyldigt sidenhen, så den påstand fejler i den sikre retning. I `--json` hedder
   felterne `sslMayHaveExpired` og `sslReadingAgeDays`.
+- **En svartid er en måling, eller ingenting.** Målt 2026-09-26 med rigtig
+  `check` + `watch --once` + `report` mod to lokale fixtures (en lukket port og
+  en server der accepterer forbindelsen og aldrig svarer), nul kode ændret:
+
+  ```
+  Status:   N/A — DOWN
+  Response: 15ms          ← connection refused: intet svarede, på 15 ms
+  Response: 2008ms        ← timeout: DEFAULT_TIMEOUT_MS plus overhead
+  ```
+
+  og i de to rækker bureauet videresender:
+
+  ```
+  | http://kunde.dk/ | DOWN | 0% (2 checks, 2 failed) | … | 5 ms     | … |
+  | http://kunde.dk/ | DOWN | 0% (1 checks, 1 failed) | … | 15002 ms | … |
+  ```
+
+  `5 ms` er det hurtigste et site kan se ud, mens det er uopnåeligt, og
+  `15002 ms` er ikke en svartid overhovedet — det er timeout-budgettet, så tallet
+  siger "langsom" der, hvor sandheden er "vi gav op". `checkers/ping.js` fyldte
+  feltet på **fejlvejen** også; `formatMs()` i `src/display.js` dokumenterede
+  allerede kontrakten om det modsatte ("only fills it in on a real response"),
+  så visningslaget var ærligt og målelaget aldrig gav det lov til at vise sig.
+  Fejlvejen siger nu `null`, og årsagen kommer stadig som en *årsag*
+  (`error: 'Request timed out'`), ikke som en svartid.
+
+  Den anden halvdel er en beslutning, ikke en sætning: `recordPass` beholder den
+  sidste måling, fordi et pass der ikke målte noget ikke er et pass der
+  ophævede en måling. Et site der svarede i 22 ms og nu afviser forbindelsen har
+  stadig `lastResponseMs: 22` i state'en, og cellen skal ikke citere den — den
+  beskriver et tidligere pass i en række, hvor hver anden celle beskriver det
+  seneste. `readResponseMs()` i `src/status.js` ejer den regel: **ingen
+  statuskode fra det seneste pass betyder intet svar, og intet svar har ingen
+  svartid.** Et reelt svar beholder sin tid — en 500 er et svar, så den skriver
+  stadig `143 ms`.
 - **Ald data markeres som forældet.** Rapporten genkører intet, så "3 up ·
   0 down" handler om det *sidste* pass, ikke om nu. Et site uden pass inden for
   `STALE_AFTER_DAYS` (2 dage, ét sted i `src/status.js` sammen med

@@ -89,11 +89,11 @@ export function safeText(value, { max = DEFAULT_MAX_LENGTH, fallback = '' } = {}
 /**
  * Print a duration we may not have.
  *
- * A check that threw before it measured leaves `responseTimeMs` as `null`
- * (`checkUrl` initialises it to `null` and only fills it in on a real
- * response), and a hand-edited or restored state file can hold a negative one.
- * Interpolated straight into a line, both printed the value instead of the
- * absence of one:
+ * A check that got no response at all leaves `responseTimeMs` as `null` —
+ * `checkUrl` initialises it to `null` and `checkers/ping.js` only fills it in
+ * from a real response — and a hand-edited or restored state file can hold a
+ * negative one. Interpolated straight into a line, both printed the value
+ * instead of the absence of one:
  *
  *   Response: nullms            — `check`, for a site that could not be reached
  *   is UP (200) — nullms        — the `up` event, i.e. the desktop notification

@@ -13,12 +13,14 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import net from 'node:net';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildReport, counters, nonNegative, recordPass, renderReportJson, renderReportMarkdown, siteBuckets, uptimePercent } from '../src/report.js';
-import { readEntry, verdictFor } from '../src/status.js';
+import { readEntry, readResponseMs, verdictFor } from '../src/status.js';
+import { checkReachability } from '../src/checkers/ping.js';
 import { loadState, runPass } from '../src/watch.js';
 import { PRODUCT } from '../src/features.js';
 
@@ -829,7 +831,12 @@ test('a duplicated verdict owner is caught by reading the source, not the output
   assert.equal((statusSrc.match(/export function readStatusCode\(/g) || []).length, 1, 'one status-code rule');
   assert.match(statusSrc, /statusCode: readStatusCode\(value\.lastStatus\)/, 'readEntry asks the same owner');
   assert.doesNotMatch(statusSrc, /Number\.isInteger\(value\.lastStatus\)/, 'and not the weaker test beside it');
-  assert.equal((statusSrc.match(/lastStatus/g) || []).length, 2, 'readEntry reads lastStatus in one place only');
+  assert.equal((statusSrc.match(/lastStatus/g) || []).length, 3, 'readEntry reads lastStatus in one place only');
+  // …and the third is the owner of the response duration, which has to ask
+  // whether the last pass got a response at all: a `lastResponseMs` left over
+  // from an earlier pass is not this pass's measurement. It asks `readStatusCode`
+  // like its sibling does, so the weaker test cannot come back beside it.
+  assert.match(statusSrc, /readResponseMs\(entry\)[\s\S]{0,200}readStatusCode\(entry\?\.lastStatus\)/, 'the duration owner asks the status-code owner');
 });
 
 test('the report and the terminal lists say the same thing about a site they cannot vouch for', () => {
@@ -1436,4 +1443,125 @@ test('the certificate deadline is compared in one place, and only there', () => 
   assert.match(readSrc('report.js'), /measuredAt: entry\.lastChecked/, 'the report hands the pass time to the owner');
   assert.match(statusSrc, /measuredAt: value\.lastChecked/, 'and so does readEntry, for both terminal lists');
   assert.match(statusSrc, /passAge\(measuredAt, now\)/, 'the owner places the reading with passAge, not its own parsing');
+});
+
+// ---------------------------------------------------------------------------
+// The Response column: a duration, or nothing (measured, 2026-09-26)
+// ---------------------------------------------------------------------------
+//
+// `ping.js` filled `responseTimeMs` on the failure path too, so a pass that got
+// no bytes back carried a number: the elapsed time *we waited*, printed as a
+// latency. Measured with the real CLI against a closed port and a server that
+// accepts the connection and never answers, no code changed:
+//
+//   Status:   N/A — DOWN
+//   Response: 15ms          ← connection refused: nothing answered, in 15 ms
+//   Status:   N/A — DOWN
+//   Response: 2008ms        ← timed out: DEFAULT_TIMEOUT_MS plus overhead
+//
+//   | http://kunde.dk/ | DOWN | 0% (2 checks, 2 failed) | … | 5 ms     | … |
+//   | http://kunde.dk/ | DOWN | 0% (1 checks, 1 failed) | … | 15002 ms | … |
+//
+// `5 ms` is the fastest a site can look while being unreachable, and `15002 ms`
+// is not a latency at all — it is the timeout budget, so the number says "slow"
+// where the truth is "we gave up". Both in the document a bureau forwards.
+//
+// Two fixes, and the second is the one with a decision in it. The producer stops
+// inventing a number. But `recordPass` keeps the *previous* measurement, because
+// a pass that measured nothing is not a pass that unmeasured something — so a
+// site that answered in 22 ms and is now refused still has `lastResponseMs: 22`
+// in its state entry, and the cell would quote it. Left alone, the Response cell
+// would describe an earlier pass in a row whose every other cell describes the
+// latest one. `readResponseMs` is that decision, and it is the same rule the row
+// applies everywhere: no status code means no response, and no response has no
+// duration.
+
+test('a pass that got no response measures no response time', async () => {
+  // The root cause, at the level it happens, against a real closed port: the
+  // value is asked of `checkReachability` itself, so this is about what the
+  // producer produced — not about a surface downstream choosing to ignore it.
+  const port = await new Promise((resolve) => {
+    const probe = net.createServer();
+    probe.listen(0, '127.0.0.1', () => {
+      const p = probe.address().port;
+      probe.close(() => resolve(p));
+    });
+  });
+  const refused = await checkReachability(`http://127.0.0.1:${port}/`, { timeoutMs: 2000 });
+  assert.equal(refused.reachable, false);
+  assert.equal(refused.statusCode, null);
+  assert.equal(refused.responseTimeMs, null, 'nothing answered, so there is no response time to report');
+  assert.ok(refused.error, 'the reason is still reported — as a reason, not as a duration');
+});
+
+test('a duration the last pass never measured is not shown in the report', () => {
+  const state = proState({
+    // Refused: the previous pass answered in 22 ms, this one got nothing.
+    'https://kunde.dk/': { wasUp: false, lastStatus: null, checks: 9, checksUp: 8, lastChecked: NOW.toISOString(), lastResponseMs: 22 },
+    // A 500 *is* a response, so its duration must survive untouched.
+    'https://fejl.dk/': { wasUp: false, lastStatus: 500, checks: 4, checksUp: 0, lastChecked: NOW.toISOString(), lastResponseMs: 143 },
+  });
+  const report = buildReport(state, { now: NOW });
+  const refused = report.sites.find(s => s.url === 'https://kunde.dk/');
+  const errored = report.sites.find(s => s.url === 'https://fejl.dk/');
+
+  assert.equal(refused.responseMs, null, 'a number from an earlier pass is not this pass\'s measurement');
+  assert.equal(errored.responseMs, 143, 'a response that arrived keeps its duration');
+
+  const markdown = renderReportMarkdown(report);
+  const refusedRow = markdown.split('\n').find(l => l.startsWith('| https://kunde.dk/'));
+  const erroredRow = markdown.split('\n').find(l => l.startsWith('| https://fejl.dk/'));
+  assert.match(refusedRow, /\| — \|/, 'the cell falls back to the dash its sibling cells use');
+  assert.doesNotMatch(refusedRow, /22 ms/, 'and the row must not quote the earlier pass');
+  assert.match(erroredRow, /143 ms/, 'a measured duration is not the thing being fixed');
+
+  const json = JSON.parse(renderReportJson(report));
+  assert.equal(json.sites.find(s => s.url === 'https://kunde.dk/').responseMs, null, '--json agrees with the cell');
+});
+
+test('readResponseMs answers from the two facts, not from the number alone', () => {
+  for (const [entry, expected] of [
+    [{ lastStatus: 200, lastResponseMs: 187 }, 187],
+    [{ lastStatus: 500, lastResponseMs: 143 }, 143],
+    // No status code: no response, whatever the state file still remembers.
+    [{ lastStatus: null, lastResponseMs: 22 }, null],
+    [{ lastResponseMs: 22 }, null],
+    // A status code we cannot read is not a response either.
+    [{ lastStatus: -1, lastResponseMs: 22 }, null],
+    [{ lastStatus: 9999, lastResponseMs: 22 }, null],
+    // A measured zero is a measurement, and an unreadable duration is not.
+    [{ lastStatus: 200, lastResponseMs: 0 }, 0],
+    [{ lastStatus: 200, lastResponseMs: -5 }, null],
+    [{ lastStatus: 200, lastResponseMs: '42' }, null],
+    [{ lastStatus: 200 }, null],
+    [{}, null],
+    [undefined, null],
+  ]) {
+    assert.equal(readResponseMs(entry), expected, JSON.stringify(entry));
+  }
+});
+
+test('the duration has one owner, and the failure path cannot invent one', () => {
+  // Same trap as the verdict and the status code: a rule copied beside the owner
+  // is only visible in the source, and the measured failure is in the document
+  // a customer reads. The report may not read `lastResponseMs` itself.
+  const readSrc = name => readFileSync(join(ROOT, 'src', name), 'utf8');
+  const reportSrc = readSrc('report.js');
+  const statusSrc = readSrc('status.js');
+  const pingSrc = readSrc('checkers/ping.js');
+
+  // The reading, not the writing: `recordPass` is the one place that *stores*
+  // `lastResponseMs`, and it stays there. What the report may not do is read the
+  // stored number to decide what to print.
+  assert.doesNotMatch(reportSrc, /nonNegative\(entry\.lastResponseMs\)/, 'the report must ask readResponseMs(), not read the number');
+  assert.equal((reportSrc.match(/responseMs:/g) || []).length, 1, 'one place decides what the cell shows');
+  assert.match(reportSrc, /responseMs: readResponseMs\(entry\)/, 'and it asks the owner');
+  assert.equal((statusSrc.match(/export function readResponseMs\(/g) || []).length, 1, 'one owner');
+
+  // The producer. A duration on the no-response path is the bug itself, and it
+  // needs no report to be visible: `check` printed it, and so does every Action
+  // summary built from `check --json`.
+  assert.doesNotMatch(pingSrc, /responseTimeMs: Date\.now\(\) - start,\s*\n\s*finalUrl: null/, 'the no-response path must not report a duration');
+  assert.equal((pingSrc.match(/responseTimeMs: Date\.now\(\) - start/g) || []).length, 1, 'only a real response times itself');
+  assert.match(pingSrc, /responseTimeMs: null,[\s\S]{0,80}finalUrl: null/, 'the no-response path says it measured nothing');
 });

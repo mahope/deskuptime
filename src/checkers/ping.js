@@ -54,12 +54,43 @@ function toHttpResult(response, start) {
   return result;
 }
 
-function toNetworkResult(error, start) {
+/**
+ * No response arrived, so there is no response time to report.
+ *
+ * `Date.now() - start` was written here for years and it is the wrong number:
+ * it measures how long *we waited*, not how long the site took, and a pass that
+ * never got a byte back printed it as a duration anyway. Measured 2026-09-26
+ * with the real CLI against two local fixtures — a closed port and a server that
+ * accepts the connection and never answers — no code changed:
+ *
+ *   Status:   N/A — DOWN
+ *   Response: 15ms          ← connection refused: nothing answered, in 15 ms
+ *   Status:   N/A — DOWN
+ *   Response: 2008ms        ← timed out: 15 000 ms of budget plus overhead
+ *
+ * and in the client report, on the two rows a bureau forwards to a customer:
+ *
+ *   | http://kunde.dk/ | DOWN | 0% (2 checks, 2 failed) | … | 5 ms      | … |
+ *   | http://kunde.dk/ | DOWN | 0% (1 checks, 1 failed) | … | 15002 ms  | … |
+ *
+ * `5 ms` is the fastest a site can look while being unreachable — a customer
+ * reads it as a fast one — and `15002 ms` is not a latency at all, it is
+ * `DEFAULT_TIMEOUT_MS` plus the round trip, so the number says "slow" when the
+ * truth is "we gave up". Both were numbers we invented about someone else's
+ * site.
+ *
+ * `formatMs()` in `src/display.js` documents the contract this now keeps: a
+ * finite, non-negative number is a duration, anything else prints `—`. The
+ * display side was already honest; the measurement side never let it show. The
+ * timeout is still reported — as the *reason*, `error: 'Request timed out'`,
+ * and the caller's own budget — not as a response time.
+ */
+function toNetworkResult(error) {
   return {
     reachable: false,
     healthy: false,
     statusCode: null,
-    responseTimeMs: Date.now() - start,
+    responseTimeMs: null,
     finalUrl: null,
     errorType: null,
     error: null,
@@ -97,6 +128,6 @@ export async function checkReachability(url, options = {}) {
     const get = await request(url, 'GET', AbortSignal.timeout(remainingMs()));
     return toHttpResult(get, start);
   } catch (error) {
-    return toNetworkResult(error, start);
+    return toNetworkResult(error);
   }
 }

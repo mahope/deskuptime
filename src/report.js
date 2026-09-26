@@ -27,7 +27,7 @@
 import { PRODUCT } from './features.js';
 import { DEFAULT_WINDOW_DAYS, windowSummary } from './history.js';
 import { markdownCell as cell } from './display.js';
-import { SSL_WARN_DAYS, STALE_AFTER_DAYS, clockAheadNote, expiredNote, isCheckStale, passAge, readPassTime, readRedirectTarget, readSslState, readStatusCode, sslLapsedNote, staleAgeNote, unknownNote, verdictFor } from './status.js';
+import { SSL_WARN_DAYS, STALE_AFTER_DAYS, clockAheadNote, expiredNote, isCheckStale, passAge, readPassTime, readRedirectTarget, readResponseMs, readSslState, readStatusCode, sslLapsedNote, staleAgeNote, unknownNote, verdictFor } from './status.js';
 
 export const DEFAULT_REPORT_TITLE = 'Website uptime report';
 const MAX_TITLE_LENGTH = 120;
@@ -40,19 +40,18 @@ export function intOrZero(value) {
 /**
  * A measured quantity, when it is one — otherwise `null`, meaning unknown.
  *
- * The same rule as `intOrZero` and `readSslState`, for the two numbers that
- * describe a pass rather than count it. `Number.isFinite` alone let a negative
- * through, and a state file can hold one (hand-edited, restored, written by
- * another tool). Measured, in the report an agency forwards:
+ * The same rule as `intOrZero` and `readSslState`, for the numbers that describe
+ * a pass rather than count it. `Number.isFinite` alone let a negative through,
+ * and a state file can hold one (hand-edited, restored, written by another
+ * tool). Measured, in the report an agency forwards:
  *
- *   `| https://a.test | UP | 75% (4 checks) | -5 ms |`   ← Response column
  *   `"contentBytes": -999`                               ← --json
  *
  * `lastResponseMs: -5` is not a site that answered in five *negative*
- * milliseconds; it is a value we cannot read, and the report already had the
- * honest answer for that — `—`, which is what every sibling cell prints when
- * the number is missing. A negative byte count is the same lie about a
- * document size, and it is the number an agency would quote.
+ * milliseconds either, so the Response column reads its number through
+ * `readResponseMs` — which also refuses a positive value the last pass never
+ * measured. A negative byte count is the same lie about a document size, and it
+ * is the number an agency would quote.
  *
  * `null` is kept rather than coerced to `0`: the report distinguishes "no
  * measurement" from "measured zero", and a report that claims a 0-byte
@@ -219,7 +218,7 @@ export function buildReport(state, { title, now = new Date(), history, windowDay
         window: windowSummary(history, url, { days: windowDays, now, uptimePercent, lastChecked: entry.lastChecked }),
         checks,
         failures,
-        responseMs: nonNegative(entry.lastResponseMs),
+        responseMs: readResponseMs(entry),
         sslDaysRemaining,
         // The same window `check` and `watch` use, so a certificate that is
         // urgent in the terminal cannot read as routine in the report a client

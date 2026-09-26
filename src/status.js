@@ -534,6 +534,37 @@ export function readStatusCode(value) {
 }
 
 /**
+ * A response time, but only if a response is what produced it — else `null`.
+ *
+ * `readStatusCode`'s sibling, and the one owner of "did the last pass actually
+ * get an answer". The value alone cannot say: `lastResponseMs` is a plain
+ * non-negative number in the state file, and a pass that reached *nothing* used
+ * to write one anyway, so `5` was a legitimate reading of a site whose
+ * connection was refused and `15002` a legitimate reading of a site that timed
+ * out. `checkers/ping.js` no longer writes a number in that case (measured
+ * 2026-09-26 — `Response: 15ms` next to `Status: N/A — DOWN`, and `5 ms` /
+ * `15002 ms` in two rows of the client report), but the *older* number stays in
+ * the state file, because `recordPass` writes a measurement and there was no new
+ * measurement. Left alone, the report's Response cell would then quote a real
+ * duration from an earlier pass in a row whose every other cell describes the
+ * latest one — a customer reads the row, not the provenance.
+ *
+ * So the cell is empty unless the last pass got a status code. That is the same
+ * rule the row already applies everywhere else: no status code means no response,
+ * and a pass that got no response has no response time. `null` is what every
+ * sibling cell prints for a number we do not have (`— SSL:`, `— Response:`,
+ * `— (no completed pass)`), so the honest answer is already the house style.
+ *
+ * @param {object} entry — state.urls[url]
+ * @returns {number|null} the measured milliseconds, or `null` when unmeasured
+ */
+export function readResponseMs(entry) {
+  if (readStatusCode(entry?.lastStatus) === null) return null;
+  const ms = entry?.lastResponseMs;
+  return Number.isFinite(ms) && ms >= 0 ? ms : null;
+}
+
+/**
  * A recorded time, when it is one we can read — otherwise `null`.
  *
  * `readStatusCode`'s sibling, for the two timestamps the client report forwards.
