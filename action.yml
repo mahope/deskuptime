@@ -99,7 +99,10 @@ runs:
             // Present-but-not-a-boolean is the shape a different CLI version
             // sends. It was unchecked, so a payload the SSL counter below reads
             // passed validation and then counted on a value that was not a fact.
-            if (x.sslExpiringSoon !== undefined && typeof x.sslExpiringSoon !== "boolean") {
+            // `null` is allowed: it is what the CLI now sends for a URL whose
+            // certificate was never read (plain HTTP, unreachable, a scheme in
+            // capitals), instead of the `false` that claimed it was fine.
+            if (x.sslExpiringSoon !== undefined && x.sslExpiringSoon !== null && typeof x.sslExpiringSoon !== "boolean") {
               fail("result for " + x.url + " has a non-boolean sslExpiringSoon field");
             }
           }
@@ -111,7 +114,7 @@ runs:
           console.log(r.filter(x => !x.healthy).length);
         ')
         SSL_FAIL_COUNT=$(node -e '
-          const { readSslState } = require(process.env.DU_ACTION_PATH + "/src/status.js");
+            const { expectsCertificate, readSslState } = require(process.env.DU_ACTION_PATH + "/src/status.js");
           const days = parseInt(process.env.DU_SSL_DAYS || "0", 10);
           const r = JSON.parse(require("fs").readFileSync("deskuptime-results.json","utf8"));
           let n = 0;
@@ -127,7 +130,11 @@ runs:
             // is not: readSslState() is the one answer, so this counter and the
             // summary cell below cannot disagree about an unusable value.
             else if (days > 0 && readSslState({ days: x.sslDaysRemaining }).days !== null && x.sslDaysRemaining <= days) n++;
-            else if (days > 0 && x.healthy && x.url.startsWith("https") && x.sslError) n++;
+            // "Can this URL have a certificate?" belongs to the owner, not to
+            // this action: a case-sensitive `startsWith("https")` here missed
+            // `HTTPS://` — the one shape the CLI is now fixed for — so a site
+            // whose certificate errored could slip through the counter.
+            else if (days > 0 && x.healthy && expectsCertificate(x.url) && x.sslError) n++;
           }
           console.log(n);
         ')

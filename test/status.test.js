@@ -623,7 +623,12 @@ test('action: the step summary has no certificate or duration rule of its own', 
     .replace(/\/\*[\s\S]*?\*\//g, '')
     .replace(/^\s*\/\/.*$/gm, '');
   assert.doesNotMatch(cli, /isSslExpiringSoon\(r\.ssl/);
-  assert.match(cli, /sslExpiringSoon: readSslState\(\{/);
+  // The owner is read once per result and the field is its answer verbatim
+  // (P1-22 moved the call out of the field so `sslChecked` can use the same
+  // reading; the test follows the shape, not the old inline call).
+  assert.match(cli, /const ssl = readSslState\(\{/);
+  assert.match(cli, /sslExpiringSoon: ssl\.expiringSoon/);
+  assert.match(cli, /sslChecked: ssl\.measured/);
 });
 
 test('headers: connection refusal returns a structured error without crashing', async (t) => {

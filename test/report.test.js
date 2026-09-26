@@ -367,11 +367,15 @@ test('a certificate inside the warning window is marked, one day later is not', 
   assert.doesNotMatch(markdown, /SSL expiring soon/);
 
   // A site with no known expiry is not an urgent one, and a hostile number in
-  // a hand-edited state file cannot invent a warning either.
+  // a hand-edited state file cannot invent a warning either. `null` and not
+  // `false` (P1-22): the claim is "no certificate was read", which is what the
+  // dashboard forwards — `false` said "read, and it is not expiring". Both stay
+  // out of the renewal count, and `false` is not asserted anywhere here.
   for (const bogus of [null, undefined, -3, NaN, '9', Infinity]) {
     const site = buildReport(proState({ 'https://acme.dk/': upEntry({ sslValidDays: bogus }) }), { now: NOW }).sites[0];
-    assert.equal(site.sslExpiringSoon, false, `${bogus} was treated as expiring`);
+    assert.equal(site.sslExpiringSoon, null, `${bogus} must not claim a renewal window`);
     assert.equal(site.sslDaysRemaining, null);
+    assert.equal(buildReport(proState({ 'https://acme.dk/': upEntry({ sslValidDays: bogus }) }), { now: NOW }).summary.sslExpiringSoon, 0);
   }
   assert.match(renderReportMarkdown(buildReport(proState({ 'https://acme.dk/': upEntry({ sslValidDays: null }) }), { now: NOW })), /\| — \|/);
 });

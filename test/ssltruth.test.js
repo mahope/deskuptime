@@ -101,7 +101,12 @@ test('readSslState: the owner is the only place that decides the window', () => 
   for (const bad of [NaN, Infinity, -Infinity, -3, '9', true, null, undefined, {}]) {
     const ssl = readSslState({ days: bad });
     assert.equal(ssl.days, null, `${String(bad)} is not a day count`);
-    assert.equal(ssl.expiringSoon, false, `${String(bad)} must not invent a renewal`);
+    // `null` since P1-22, where this was `false`: an unreadable day count is no
+    // measurement, so the owner says nothing about the window. The intent of the
+    // line is unchanged — nothing invents a renewal — and `false` is the value
+    // that claimed a certificate had been measured.
+    assert.equal(ssl.expiringSoon, null, `${String(bad)} must not invent a renewal`);
+    assert.notEqual(ssl.expiringSoon, true);
     assert.equal(ssl.expired, false, 'a corrupt value is not an expired certificate');
   }
   // A negative day count with no expiry fact stays unknown — never expired.

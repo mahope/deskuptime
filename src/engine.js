@@ -8,7 +8,7 @@
 import { checkReachability } from './checkers/ping.js';
 import { checkSSL, SSL_TIMEOUT_MS } from './checkers/ssl.js';
 import { checkContentChange, CONTENT_TIMEOUT_MS } from './checkers/content.js';
-import { assertValidHttpUrls, isHealthyStatus, readSslState, expiredNote } from './status.js';
+import { assertValidHttpUrls, expectsCertificate, isHealthyStatus, readSslState, expiredNote } from './status.js';
 import { formatMs } from './display.js';
 
 /**
@@ -75,8 +75,11 @@ export async function checkUrl(url, opts = {}) {
     return result;
   }
 
-  // 2. SSL check (only if HTTPS and reachable)
-  if (result.reachable && url.startsWith('https://')) {
+  // 2. SSL check (only if a certificate can exist here, and we got a response)
+  // `expectsCertificate()` rather than `url.startsWith('https://')`: the URL
+  // parser lowercases a scheme, so `HTTPS://` was monitored over TLS and then
+  // never had its certificate read — the renewal warning silently off.
+  if (result.reachable && expectsCertificate(url)) {
     try {
       result.ssl = await checkSSL(url, { timeoutMs: legTimeoutMs(deadline, SSL_TIMEOUT_MS) });
     } catch (err) {

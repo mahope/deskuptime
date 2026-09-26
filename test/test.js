@@ -17,7 +17,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { checkSSL } from '../src/checkers/ssl.js';
 import { checkContentChange, MAX_CONTENT_BYTES } from '../src/checkers/content.js';
-import { readContentState, contentSkipNote } from '../src/status.js';
+import { contentSkipNote, expectsCertificate, readContentState, readSslState } from '../src/status.js';
 import { checkUrl } from '../src/engine.js';
 
 const run = promisify(execFile);
@@ -496,4 +496,86 @@ test('cli: an oversized page says it was not read, in text and in JSON', { timeo
   const text = await run(process.execPath, [CLI, 'check', `${base}/`, '--timeout', REQUEST_TIMEOUT]);
   assert.match(text.stdout, /Content: not read — page over the 2,097,152-byte content-check limit/);
   assert.doesNotMatch(text.stdout, /Content: (?!not read)/, 'a skipped check must not print a byte count');
+});
+
+// ── P1-22: a renewal window with no certificate behind it ──
+test('ssl: no certificate read is null, not a certificate that is fine', () => {
+  // Three different situations, one answer before the fix: `readSslState({})`
+  // returned `expiringSoon: false`, so every surface published a boolean about a
+  // measurement that had not happened.
+  assert.equal(readSslState({}).measured, false);
+  assert.equal(readSslState({}).expiringSoon, null, 'nothing was read, so nothing may be claimed');
+  assert.equal(readSslState({ days: null, expired: false }).expiringSoon, null);
+
+  // Read, and genuinely not expiring — a fact, and still a boolean.
+  const healthy = readSslState({ days: 300 });
+  assert.equal(healthy.measured, true);
+  assert.equal(healthy.expiringSoon, false);
+  assert.equal(readSslState({ days: 5 }).expiringSoon, true);
+
+  // A lapsed certificate is measured, and still not "renew soon".
+  const lapsed = readSslState({ days: 0, expired: true, expiredDays: 3 });
+  assert.equal(lapsed.measured, true);
+  assert.equal(lapsed.expiringSoon, false);
+
+  // A day count that cannot be read is no measurement either.
+  const corrupt = readSslState({ days: -2 });
+  assert.equal(corrupt.unreadable, true);
+  assert.equal(corrupt.expiringSoon, null);
+
+  // The scheme rule has one owner, and it is not a case-sensitive prefix.
+  assert.equal(expectsCertificate('https://acme.dk/'), true);
+  assert.equal(expectsCertificate('HTTPS://acme.dk/'), true, 'the URL parser lowercases a scheme');
+  assert.equal(expectsCertificate('http://acme.dk/'), false);
+  assert.equal(expectsCertificate('not a url'), false);
+  assert.equal(expectsCertificate(undefined), false);
+
+  // Ownership is pinned, because a behavioural test cannot see a duplicated
+  // rule — the same lesson as the P1-13/P1-14/P1-15 measurements.
+  const strip = (text) => text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+  const engine = strip(readFileSync(new URL('../src/engine.js', import.meta.url), 'utf8'));
+  const action = strip(readFileSync(new URL('../action.yml', import.meta.url), 'utf8'));
+  for (const [name, source] of [['engine.js', engine], ['action.yml', action]]) {
+    assert.doesNotMatch(source, /startsWith\(['"]https/, `${name} must ask expectsCertificate(), not recognise https itself`);
+  }
+  assert.match(engine, /expectsCertificate\(url\)/);
+  assert.match(action, /expectsCertificate\(x\.url\)/);
+});
+
+test('cli: a plain-HTTP result says no certificate was read', { timeout: 30000 }, async (t) => {
+  const base = await fixtureServer(t);
+  const { stdout } = await run(process.execPath, [CLI, 'check', `${base}/final`, '--json', '--timeout', REQUEST_TIMEOUT]);
+  const [result] = JSON.parse(stdout);
+  assert.equal(result.healthy, true);
+  assert.equal(result.sslDaysRemaining, null);
+  assert.equal(result.sslChecked, false, 'the JSON must be able to say no certificate was read');
+  assert.equal(result.sslExpiringSoon, null, 'null, not the false that claimed the certificate was fine');
+  assert.equal(result.sslExpired, false);
+});
+
+test('ssl: a scheme in capitals is still checked for its certificate', { timeout: 30000 }, async (t) => {
+  if (!opensslAvailable()) {
+    t.skip('openssl is unavailable, cannot create a TLS fixture');
+    return;
+  }
+  const dir = mkdtempSync(join(tmpdir(), 'du-cert-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const { key, cert, certPath } = selfSignedCert(dir);
+  const server = createTlsServer({ key, cert }, (_req, res) => {
+    res.writeHead(200, { 'content-type': 'text/html' });
+    res.end('<html><body>tls fixture</body></html>');
+  });
+  const port = await listen(server);
+  t.after(() => close(server));
+  const env = { ...process.env, NODE_EXTRA_CA_CERTS: certPath };
+
+  // Measured before the fix against this same fixture: `HTTPS://` was requested
+  // over TLS and then never had its certificate read, so a 2-day certificate
+  // reported `sslExpiringSoon: false` — the renewal warning silently off.
+  const { stdout } = await run(process.execPath, [CLI, 'check', `HTTPS://127.0.0.1:${port}/`, '--json', '--timeout', REQUEST_TIMEOUT], { env });
+  const [result] = JSON.parse(stdout);
+  assert.equal(result.healthy, true, `the site answered: ${JSON.stringify(result)}`);
+  assert.equal(result.sslChecked, true, 'a capitalised scheme must not skip the certificate');
+  assert.ok(result.sslDaysRemaining >= 1 && result.sslDaysRemaining <= 2, `got ${result.sslDaysRemaining}`);
+  assert.equal(result.sslExpiringSoon, true, 'a 2-day certificate is inside the renewal window');
 });

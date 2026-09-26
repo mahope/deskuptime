@@ -125,6 +125,11 @@ if (command === 'check') {
     // Machine-readable output: stdout is pure JSON for piping into jq/CI
     const out = results.map(r => {
       const content = readContentState(r.content);
+      const ssl = readSslState({
+        days: r.ssl?.validDays,
+        expired: r.ssl?.isExpired,
+        expiredDays: r.ssl?.expiredDays,
+      });
       return {
         url: r.url,
         reachable: r.reachable,
@@ -139,11 +144,12 @@ if (command === 'check') {
         // third copy of the renewal-window rule beside `summarize()`'s, and it
         // agreed only because the checker happens to round the day count. A
         // lapsed certificate must never read as "renew soon" in either shape.
-        sslExpiringSoon: readSslState({
-          days: r.ssl?.validDays,
-          expired: r.ssl?.isExpired,
-          expiredDays: r.ssl?.expiredDays,
-        }).expiringSoon,
+        //
+        // `null` where no certificate was read: `false` claimed the certificate
+        // had been measured and was fine, for a plain-HTTP site, an unreachable
+        // one, or a scheme written in capitals. `sslChecked` says it outright.
+        sslExpiringSoon: ssl.expiringSoon,
+        sslChecked: ssl.measured,
         sslError: r.ssl?.error ?? null,
         // The content facts, from the one owner. `contentLength` was the byte
         // count our own reader had reached when it gave up on an oversized page

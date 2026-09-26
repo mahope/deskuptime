@@ -30,6 +30,33 @@ function expiredDaysCount(value) {
 }
 
 /**
+ * Whether a URL can have a certificate at all — the one owner of that rule.
+ *
+ * Two surfaces need it and both used to spell it themselves as a case-sensitive
+ * `startsWith('https')`, while the validator that admits a URL (`isHttpUrl`) goes
+ * through `new URL()`, which lowercases the scheme. So `HTTPS://eksempel.dk` was
+ * accepted, requested over TLS — and then never had its certificate read.
+ * Measured against one local TLS server with a 5-day certificate:
+ *
+ *   https://localhost:PORT/  -> ssl: { validDays: 5, … }  "5d ⚠️"  expiringSoon: true
+ *   HTTPS://localhost:PORT/  -> ssl: null                  "N/A"     expiringSoon: false
+ *
+ * One capital letter, and the certificate check is silently off — so a Pro
+ * customer's expiry warning never fires, and the payload says the certificate is
+ * *not* expiring. A rule with two owners and no owner is a rule that disagrees.
+ *
+ * @param {string} url
+ * @returns {boolean} true only for a URL whose scheme is https
+ */
+export function expectsCertificate(url) {
+  try {
+    return new URL(url).protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
+/**
  * One reading of a certificate, shared by every surface that shows one.
  *
  * `check`, `watch --status`, `status`, the client report and the GitHub Action
@@ -56,6 +83,16 @@ function expiredDaysCount(value) {
  *     not expired, and conflating the two is the bug this replaces.
  *   - `expiringSoon` is false for an expired certificate: a lapsed certificate
  *     is not "renew soon", it is broken, and the two must not share a message.
+ *   - `expiringSoon` is **null** when no certificate was read at all, because
+ *     `false` there is a claim about a measurement that never happened. This
+ *     used to be decided in the other direction: `readSslState({})` answered
+ *     `false`, so `check --json` published `sslExpiringSoon: false` next to
+ *     `sslDaysRemaining: null` for every plain-HTTP site, every unreachable
+ *     HTTPS site and every URL whose scheme was written in capitals — three
+ *     different situations, one boolean reading "measured, and fine". `null` is
+ *     what every sibling field already prints for a fact nobody has, and it is
+ *     falsy, so a `jq` filter or an `if` cannot tell it from the old `false`
+ *     except by asking the question the field now answers.
  *
  * Callers pick their own icon and punctuation and cannot re-decide any of it.
  *
@@ -67,11 +104,16 @@ export function readSslState(ssl) {
   const days = Number.isFinite(value.days) && value.days >= 0 ? Math.floor(value.days) : null;
   const expiredDays = expiredDaysCount(value.expiredDays);
   const expired = value.expired === true || expiredDays !== null;
+  // A certificate was read when it left us one fact: a day count, or a lapse.
+  const measured = days !== null || expired;
   return {
     days,
     expired,
     expiredDays,
-    expiringSoon: !expired && isSslExpiringSoon(days),
+    measured,
+    // Not `false` for a URL with no certificate: see above. The `expired` case is
+    // measured, and stays false — a lapsed certificate is not "renew soon".
+    expiringSoon: !measured ? null : (!expired && isSslExpiringSoon(days)),
     // A field that was present but unreadable is reported as unknown; a field
     // that was never there says nothing at all, so plain-HTTP monitoring does
     // not grow a column of dashes.
