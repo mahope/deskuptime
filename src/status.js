@@ -80,6 +80,38 @@ export function readSslState(ssl) {
 }
 
 /**
+ * One HTTP status code, or `null` when the state file does not hold one.
+ *
+ * An HTTP status code is an integer from 100 to 599. `Number.isInteger` is not
+ * that check: a state file that was hand-edited, restored from a backup or
+ * written by another tool can hold anything, and every surface then printed it
+ * as if the server had said it. Measured on one state file, four surfaces, no
+ * code changed:
+ *
+ *   report        | https://kode-1.dk/ | UP (-1)    | 100% (2 checks) |
+ *   report --json | https://kode-2.dk/ | UP (9999)  | "statusCode": 9999
+ *   status        · ✅ https://kode-1.dk/ (-1)
+ *   watch --status ✅ up https://kode-2.dk/ (9999)
+ *
+ * `UP (-1)` is a claim about a server response in the one document a bureau
+ * forwards to a customer: a customer reading it cannot tell a mangled state file
+ * from a site that answered something impossible. `readEntry` already promises
+ * that every value it returns is "a fixed word or a checked number … so an
+ * unusable field can only become `null`, never a claim the caller did not
+ * check" — the status code was the one field that promise did not cover, because
+ * it was written twice and checked with the weaker of the two rules.
+ *
+ * Out of range becomes `null`, the same "unknown" every sibling cell prints for
+ * a missing number, rather than being clamped into a plausible code: inventing
+ * a 100 or a 599 would be a worse lie than the dash.
+ *
+ * @param {*} value — a raw `lastStatus` from a state file.
+ */
+export function readStatusCode(value) {
+  return Number.isInteger(value) && value >= 100 && value <= 599 ? value : null;
+}
+
+/**
  * The fixed wording for a lapsed certificate, in one place: `expired 12d ago`,
  * `expired today`, or an honest "unknown" when only the fact is known.
  */
@@ -295,7 +327,7 @@ export function readEntry(entry, { now = new Date() } = {}) {
     // sentence, so neither can discover the difference on its own.
     neverChecked,
     unknownNote: unknownNote({ lastChecked: value.lastChecked, ageDays }),
-    statusCode: Number.isInteger(value.lastStatus) ? value.lastStatus : null,
+    statusCode: readStatusCode(value.lastStatus),
     sslDays: ssl.days,
     sslExpired: ssl.expired,
     // Without a leading separator: the two surfaces punctuate differently, but

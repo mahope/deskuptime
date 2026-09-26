@@ -214,7 +214,11 @@ test('the license record can never reach the report', () => {
     assert.ok(!text.includes('device_id') && !text.includes('deskuptime-agency'), 'machine identity leaked');
     assert.ok(!text.includes('instance'));
   }
-  assert.deepEqual(Object.keys(built).sort(), ['generatedAt', 'sites', 'summary', 'title', 'tool', 'windowDays']);
+  // The field set is pinned, so a new one has to be a decision rather than a
+  // side effect. `partition` is the disjoint split `summary` overlaps with, so
+  // `--json` can say what the customer line says.
+  assert.deepEqual(Object.keys(built).sort(), ['generatedAt', 'partition', 'sites', 'summary', 'title', 'tool', 'windowDays']);
+  assert.deepEqual(Object.keys(built.partition).sort(), ['down', 'neverChecked', 'stale', 'unknown', 'up']);
   for (const site of built.sites) {
     for (const key of Object.keys(site)) {
       assert.ok(!/license|key|instance|hash/i.test(key), `unexpected report field: ${key}`);
@@ -799,6 +803,19 @@ test('a duplicated verdict owner is caught by reading the source, not the output
   assert.match(reportSrc, /staleAgeNote\(site\.ageDays\)/, 'and for the stale wording');
   assert.equal((statusSrc.match(/export function unknownNote\(/g) || []).length, 1, 'one unknown wording');
   assert.equal((statusSrc.match(/export function staleAgeNote\(/g) || []).length, 1, 'one stale wording');
+
+  // The same trap for the status code, which had two owners and the weaker of
+  // the two rules: `Number.isInteger` in readEntry and the same test in the
+  // report, neither asking whether the number is an HTTP status code at all.
+  // `UP (-1)` in the customer document is the measured failure, so the report
+  // may not read `lastStatus` itself any more — exactly once, through the owner.
+  assert.doesNotMatch(reportSrc, /Number\.isInteger\(entry\.lastStatus\)/, 'and not the weaker test beside it');
+  assert.match(reportSrc, /readStatusCode\(entry\.lastStatus\)/, 'and it must still ask for the status code');
+  assert.equal((reportSrc.match(/lastStatus/g) || []).length, 1, 'the report reads lastStatus in one place only');
+  assert.equal((statusSrc.match(/export function readStatusCode\(/g) || []).length, 1, 'one status-code rule');
+  assert.match(statusSrc, /statusCode: readStatusCode\(value\.lastStatus\)/, 'readEntry asks the same owner');
+  assert.doesNotMatch(statusSrc, /Number\.isInteger\(value\.lastStatus\)/, 'and not the weaker test beside it');
+  assert.equal((statusSrc.match(/lastStatus/g) || []).length, 2, 'readEntry reads lastStatus in one place only');
 });
 
 test('the report and the terminal lists say the same thing about a site they cannot vouch for', () => {
@@ -816,5 +833,91 @@ test('the report and the terminal lists say the same thing about a site they can
     const report = buildReport(proState({ 'https://x.dk/': { addedAt: '2026-08-01T08:00:00.000Z', ...entry } }), { now: NOW });
     assert.equal(report.sites[0].status, 'unknown', JSON.stringify(entry));
     assert.match(renderReportMarkdown(report), new RegExp(expected.replace(/[()]/g, String.raw`\$&`)));
+  }
+});
+
+// ── The machine surface has to be able to say what the customer line says ──
+
+test('report --json carries the same partition the customer line prints', () => {
+  // Measured before this existed, on one state file with seven sites — the same
+  // seven this test builds. The line a customer reads was a partition that
+  // added up, and the JSON next to it was not:
+  //
+  //   **7 site(s) · 3 up · 1 down · 1 not checked · 1 status unknown · … · 1 stale**
+  //   "sites": 7, "up": 3, "down": 1, "unknown": 2, "stale": 1   → 3+1+2 = 6
+  //
+  // `summary` still holds those four overlapping numbers on purpose (they are
+  // the contract an existing consumer reads), so the disjoint partition the
+  // report's own footnote defines is what the JSON has to carry separately.
+  const report = buildReport(proState({
+    'https://op.dk/': upEntry(),
+    'https://ned.dk/': upEntry({ wasUp: false, lastStatus: 503, checks: 4, checksUp: 1, sslValidDays: undefined }),
+    'https://gammel.dk/': upEntry({ lastChecked: STALE_DK, checks: 9, checksUp: 8 }),
+    'https://aldrig.dk/': { addedAt: '2026-08-01T00:00:00.000Z' },
+    'https://ulaes.dk/': upEntry({ wasUp: 'yes' }),
+  }), { now: NOW });
+
+  const partition = report.partition;
+  assert.ok(partition, 'the report exports the partition it resolved');
+  assert.equal(partition.up + partition.down + partition.unknown + partition.stale, report.summary.sites,
+    'every site is in exactly one bucket');
+  assert.equal(partition.neverChecked, 1);
+  assert.ok(partition.neverChecked <= partition.unknown, 'never checked is a subset of unknown');
+
+  // It is the one the line is written from, not a second opinion: every number
+  // on the line has to be the number in the partition.
+  const line = renderReportMarkdown(report).split('\n').find(l => l.startsWith('**') && l.includes('site(s)'));
+  assert.match(line, new RegExp(`\\*\\*${report.summary.sites} site\\(s\\) · ${partition.up} up · ${partition.down} down`));
+  assert.match(line, new RegExp(`· ${partition.neverChecked} not checked`));
+  assert.match(line, new RegExp(`· ${partition.unknown - partition.neverChecked} status unknown`));
+  assert.match(line, new RegExp(`· ${partition.stale} stale`));
+
+  // The line reads the partition the report carries, so the two cannot drift.
+  const tampered = { ...report, partition: { ...partition, up: partition.up + 1 } };
+  assert.match(renderReportMarkdown(tampered), new RegExp(`· ${partition.up + 1} up `), 'the line follows the report');
+
+  // And it survives the trip through the JSON, which is what CI and an agency's
+  // own system actually read.
+  const overTheWire = JSON.parse(renderReportJson(report));
+  assert.deepEqual(overTheWire.partition, partition, 'the partition is machine-readable');
+  assert.equal(overTheWire.partition.up + overTheWire.partition.down + overTheWire.partition.unknown + overTheWire.partition.stale,
+    overTheWire.summary.sites, 'the partition a consumer computes still covers every site');
+
+  // Additive: every key and value `summary` has always had is untouched, so an
+  // agency that reads `down` or `unknown` still gets what it got before.
+  for (const [key, value] of Object.entries({ sites: 5, up: 1, down: 1, unknown: 2, stale: 1, staleDown: 0, staleUnknown: 0, neverChecked: 1 })) {
+    assert.equal(report.summary[key], value, `summary.${key} must not change`);
+  }
+});
+
+test('a status code outside 100-599 is unknown, not a claim about a server', () => {
+  // Measured on the same seven-site state file, before this was fixed: four
+  // surfaces printed a number the state file held but no server could have sent.
+  //
+  //   report        | https://kode-1.dk/ | UP (-1)   | 100% (2 checks) |
+  //   report --json | https://kode-2.dk/ | UP (9999) | "statusCode": 9999
+  //   status        · ✅ https://kode-1.dk/ (-1)
+  //   watch --status ✅ up https://kode-2.dk/ (9999)
+  //
+  // `Number.isInteger` was the whole check, and a state file that was hand-edited
+  // or restored holds integers too. Out of range becomes `null` — the same "—"
+  // every sibling cell prints for a number nobody measured — rather than being
+  // clamped into a plausible code, which would be a different lie.
+  for (const bogus of [-1, 0, 99, 600, 9999, 1e9, Number.MAX_SAFE_INTEGER]) {
+    const report = buildReport(proState({ 'https://kode.dk/': upEntry({ lastStatus: bogus }) }), { now: NOW });
+    assert.equal(report.sites[0].statusCode, null, `lastStatus ${bogus}`);
+    assert.equal(readEntry({ wasUp: true, lastStatus: bogus }, { now: NOW }).statusCode, null,
+      `the terminal lists must not print ${bogus} either`);
+    const markdown = renderReportMarkdown(report);
+    assert.doesNotMatch(markdown, new RegExp(`\\(${bogus}\\)`), `the customer document must not claim ${bogus}`);
+    assert.match(markdown, /\| UP \|/, 'a site we cannot place keeps the verdict the pass gave');
+  }
+
+  // The ends of the real range are real codes, and so is everything between.
+  for (const code of [100, 200, 301, 404, 418, 503, 599]) {
+    const report = buildReport(proState({ 'https://acme.dk/': upEntry({ lastStatus: code }) }), { now: NOW });
+    assert.equal(report.sites[0].statusCode, code, `lastStatus ${code} is a status code`);
+    assert.equal(readEntry({ wasUp: false, lastStatus: code }, { now: NOW }).statusCode, code);
+    assert.match(renderReportMarkdown(report), new RegExp(`\\(${code}\\)`), `the code ${code} belongs in the report`);
   }
 });

@@ -27,7 +27,7 @@
 import { PRODUCT } from './features.js';
 import { DEFAULT_WINDOW_DAYS, windowSummary } from './history.js';
 import { markdownCell as cell } from './display.js';
-import { SSL_WARN_DAYS, STALE_AFTER_DAYS, checkAgeDays, expiredNote, isCheckStale, readSslState, staleAgeNote, unknownNote, verdictFor } from './status.js';
+import { SSL_WARN_DAYS, STALE_AFTER_DAYS, checkAgeDays, expiredNote, isCheckStale, readSslState, readStatusCode, staleAgeNote, unknownNote, verdictFor } from './status.js';
 
 export const DEFAULT_REPORT_TITLE = 'Website uptime report';
 const MAX_TITLE_LENGTH = 120;
@@ -181,7 +181,7 @@ export function buildReport(state, { title, now = new Date(), history, windowDay
         status: verdictFor(entry?.wasUp),
         stale,
         ageDays: checkAgeDays(entry.lastChecked, now),
-        statusCode: Number.isInteger(entry.lastStatus) ? entry.lastStatus : null,
+        statusCode: readStatusCode(entry.lastStatus),
         uptimePercent: uptimePercent(entry),
         window: windowSummary(history, url, { days: windowDays, now, uptimePercent }),
         checks,
@@ -234,6 +234,27 @@ export function buildReport(state, { title, now = new Date(), history, windowDay
     tool: `${PRODUCT.proName} (${PRODUCT.name} CLI)`,
     windowDays,
     summary,
+    // The disjoint partition, exported so the machine surface can say the same
+    // thing as the customer line. `buildReport` computed it, used one field of
+    // it, and dropped the rest; `summary.up`/`down`/`unknown` are the older,
+    // deliberately overlapping numbers, and `renderReportMarkdown` recomputed
+    // the partition from `sites` a second time. Measured on one state file with
+    // seven sites — one up, one down, one stale, one never checked, one with an
+    // unreadable verdict, two with a mangled status code — the line a customer
+    // reads was a partition that added up:
+    //
+    //   **7 site(s) · 3 up · 1 down · 1 not checked · 1 status unknown · … · 1 stale**
+    //
+    // and `--json`, from the same state file, was not:
+    //
+    //   "sites": 7, "up": 3, "down": 1, "unknown": 2, "stale": 1  →  3+1+2 = 6
+    //
+    // The four numbers a CI job or an agency's own system reads do not add up to
+    // the number of sites, and the partition that does — the one the report's
+    // own footnote defines — was nowhere in the JSON. A consumer could not
+    // reproduce the line the customer was sent. Additive: `summary` keeps every
+    // key and value it had, so nothing that reads the old numbers breaks.
+    partition: buckets,
     sites,
   };
 }
@@ -341,7 +362,11 @@ const HEADERS = ['Site', 'Status', 'Uptime (all)', 'Uptime (window)', 'Response'
 
 export function renderReportMarkdown(report) {
   const windowDays = report.windowDays || DEFAULT_WINDOW_DAYS;
-  const buckets = siteBuckets(report.sites);
+  // The partition `buildReport` already resolved, so the line and the JSON are
+  // two renderings of one answer. `siteBuckets` is still the owner — it is only
+  // asked again here for a report object built by hand rather than by
+  // `buildReport`, which is the one case where nothing resolved it yet.
+  const buckets = report.partition ?? siteBuckets(report.sites);
   const rows = report.sites.map(site => {
     const cells = [
       cell(site.url),

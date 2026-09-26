@@ -399,3 +399,46 @@ test('watch --status names the sites no pass has ever measured, once', { timeout
   assert.equal(blocks[0].includes('fine.dk'), false, 'a measured site was named as never checked');
   assert.equal(blocks[0].includes('stale.dk'), false, 'a stale site was named as never checked');
 });
+
+// ── The status code is a status code, or it is nothing ──
+
+test('a status code outside 100-599 is not printed as one, on either list', async (t) => {
+  // Measured on one state file, no code changed: `readEntry` and the report each
+  // tested `Number.isInteger` and nothing else, so a state file that was
+  // hand-edited or restored held a number no server could have sent — and all
+  // four surfaces printed it as if it had.
+  //
+  //   status         · ✅ https://kode-1.dk/ (-1)
+  //   watch --status  ✅ up https://kode-2.dk/ (9999)
+  const bogus = { 'https://minus.dk/': -1, 'https://nul.dk/': 0, 'https://lav.dk/': 99, 'https://hoj.dk/': 600, 'https://kode.dk/': 9999 };
+  const urls = {};
+  for (const [url, lastStatus] of Object.entries(bogus)) urls[url] = { wasUp: true, lastStatus, lastChecked: ago(0) };
+  urls['https://acme.dk/'] = { wasUp: true, lastStatus: 200, lastChecked: ago(0) };
+  const env = withState(t, urls);
+
+  for (const args of [['status'], ['watch', '--status']]) {
+    const { stdout } = await run(args, { env });
+    for (const [url, lastStatus] of Object.entries(bogus)) {
+      const row = line(stdout, url);
+      assert.doesNotMatch(row, new RegExp(`\\(${lastStatus}\\)`), `${args.join(' ')}: ${url} must not claim ${lastStatus}`);
+    }
+    // A real code is still a real code, on the same line of the same output.
+    assert.match(line(stdout, 'https://acme.dk/'), /\(200\)/, `${args.join(' ')}: 200 survives`);
+    assertInert(stdout, args.join(' '));
+  }
+});
+
+test('readEntry: an out-of-range integer is unknown, like every other unusable number', () => {
+  // The test above already covered "200", 20.5, null, an object, an array, a
+  // boolean and NaN — every way a value can be *not a number at all*. What it
+  // missed was the value that is a perfectly good number and still not a status
+  // code, which is the one a mangled state file actually holds.
+  for (const outOfRange of [-1, 0, 99, 600, 9999, 1e9, Number.MAX_SAFE_INTEGER, Number.MIN_SAFE_INTEGER]) {
+    assert.equal(readEntry({ lastStatus: outOfRange }, { now: NOW }).statusCode, null, `lastStatus ${outOfRange}`);
+  }
+  // The range is the real one: 100 and 599 are the ends, and the codes a
+  // monitoring tool actually sees sit inside it.
+  for (const code of [100, 199, 200, 301, 404, 410, 500, 503, 599]) {
+    assert.equal(readEntry({ lastStatus: code }, { now: NOW }).statusCode, code, `lastStatus ${code}`);
+  }
+});
