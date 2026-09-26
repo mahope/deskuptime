@@ -17,7 +17,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { buildReport, counters, recordPass, renderReportJson, renderReportMarkdown, uptimePercent } from '../src/report.js';
+import { buildReport, counters, nonNegative, recordPass, renderReportJson, renderReportMarkdown, uptimePercent } from '../src/report.js';
 import { loadState, runPass } from '../src/watch.js';
 import { PRODUCT } from '../src/features.js';
 
@@ -578,4 +578,83 @@ test('the CLI marks a stopped watch loop stale, from a real state file', async (
   assert.equal(json.summary.stale, 1);
   assert.equal(json.summary.up, 1);
   assert.equal(json.sites.find(site => site.url === 'https://acme.dk/').ageDays, 42);
+});
+
+/**
+ * A measured quantity, or `null`.
+ *
+ * The report is the one document an agency forwards to a customer, so a value
+ * we cannot read must leave as `—` and nothing else. `Number.isFinite` alone
+ * let a negative through, and a state file can hold one (hand-edited,
+ * restored, written by another tool). Measured on a real report:
+ *
+ *   `| https://a.test | UP | 75% (4 checks) | -5 ms | 30 d |`   ← Response column
+ *   `"contentBytes": -999`                                       ← --json
+ *
+ * `lastResponseMs: -5` is not a site that answered in five negative
+ * milliseconds. It is a value we cannot read, and the sibling cells already
+ * had the honest answer for that.
+ */
+const UNREADABLE_MEASUREMENTS = [-5, -999, NaN, null, undefined, '42', Infinity, -Infinity];
+
+test('nonNegative is a measurement or null, never a negative', () => {
+  assert.equal(nonNegative(0), 0, 'a measured zero is a measurement, not an absence');
+  assert.equal(nonNegative(1234), 1234);
+  for (const value of UNREADABLE_MEASUREMENTS) {
+    assert.equal(nonNegative(value), null, `${String(value)} must not be reported as a measurement`);
+  }
+});
+
+test('the client report never prints a negative response time or byte count', () => {
+  const state = proState({
+    'https://kunde.dk/': { wasUp: true, lastStatus: 200, checks: 4, checksUp: 3, lastChecked: NOW.toISOString(), lastResponseMs: -5, lastContentLength: -999 },
+  });
+  const report = buildReport(state, { now: NOW });
+  const site = report.sites.find(s => s.url === 'https://kunde.dk/');
+  assert.equal(site.responseMs, null);
+  assert.equal(site.contentBytes, null);
+
+  const markdown = renderReportMarkdown(report);
+  assert.doesNotMatch(markdown, /-5 ms/, 'the Response column must not carry a negative duration');
+  assert.doesNotMatch(markdown, /-999/, 'no negative byte count in a document a bureau forwards');
+  assert.match(markdown, /\| — \|/, 'the cell falls back to the same — the sibling cells use');
+
+  const json = JSON.parse(renderReportJson(report));
+  const jsonSite = json.sites.find(s => s.url === 'https://kunde.dk/');
+  assert.equal(jsonSite.responseMs, null);
+  assert.equal(jsonSite.contentBytes, null);
+});
+
+test('a real measurement still reaches the report unchanged', () => {
+  // The point of the fix is the negative value, not the whole column: a report
+  // that dropped every number would be as useless as one that invented them.
+  const state = proState({
+    'https://kunde.dk/': { wasUp: true, lastStatus: 200, checks: 4, checksUp: 3, lastChecked: NOW.toISOString(), lastResponseMs: 187, lastContentLength: 20480 },
+  });
+  const site = buildReport(state, { now: NOW }).sites[0];
+  assert.equal(site.responseMs, 187);
+  assert.equal(site.contentBytes, 20480);
+  assert.match(renderReportMarkdown(buildReport(state, { now: NOW })), /187 ms/);
+});
+
+test('a window with no computable share says so, like its two sibling cells', () => {
+  // windowSummary returns a null share when it is not given an uptimePercent
+  // function. Measured as unreachable through `report` — buildReport always
+  // passes one, and a window with recorded buckets always has a check to
+  // divide — so this states the rule rather than fixing an observed line. The
+  // two sibling cells (uptimeCell, sslCell) both have such a branch; this one
+  // did not, and would have printed `null% (1 recorded d, 10 checks)`.
+  const site = {
+    responseMs: null,
+    sslDaysRemaining: null,
+    sslExpired: false,
+    ageDays: null,
+    window: { days: 1, windowDays: 30, checks: 10, failures: 0, uptimePercent: null },
+  };
+  const markdown = renderReportMarkdown({
+    title: 't', generatedAt: NOW, windowDays: 30, summary: { total: 1, up: 1, down: 0, stale: 0 },
+    sites: [{ ...site, url: 'https://kunde.dk/', status: 'up', stale: false, uptimePercent: null, checks: 0, failures: 0 }],
+  });
+  assert.doesNotMatch(markdown, /null%/, 'a share we cannot compute must not print as "null%"');
+  assert.match(markdown, /— \(no share in the last 30 d\)/);
 });

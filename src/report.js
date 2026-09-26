@@ -37,6 +37,31 @@ export function intOrZero(value) {
 }
 
 /**
+ * A measured quantity, when it is one — otherwise `null`, meaning unknown.
+ *
+ * The same rule as `intOrZero` and `readSslState`, for the two numbers that
+ * describe a pass rather than count it. `Number.isFinite` alone let a negative
+ * through, and a state file can hold one (hand-edited, restored, written by
+ * another tool). Measured, in the report an agency forwards:
+ *
+ *   `| https://a.test | UP | 75% (4 checks) | -5 ms |`   ← Response column
+ *   `"contentBytes": -999`                               ← --json
+ *
+ * `lastResponseMs: -5` is not a site that answered in five *negative*
+ * milliseconds; it is a value we cannot read, and the report already had the
+ * honest answer for that — `—`, which is what every sibling cell prints when
+ * the number is missing. A negative byte count is the same lie about a
+ * document size, and it is the number an agency would quote.
+ *
+ * `null` is kept rather than coerced to `0`: the report distinguishes "no
+ * measurement" from "measured zero", and a report that claims a 0-byte
+ * document is as false as one that claims a negative one.
+ */
+export function nonNegative(value) {
+  return Number.isFinite(value) && value >= 0 ? value : null;
+}
+
+/**
  * The counter pair, read as one consistent set.
  *
  * `checksUp > checks` is not a site that is more than up — it is a state file
@@ -148,7 +173,7 @@ export function buildReport(state, { title, now = new Date(), history, windowDay
         window: windowSummary(history, url, { days: windowDays, now, uptimePercent }),
         checks,
         failures,
-        responseMs: Number.isFinite(entry.lastResponseMs) ? entry.lastResponseMs : null,
+        responseMs: nonNegative(entry.lastResponseMs),
         sslDaysRemaining,
         // The same window `check` and `watch` use, so a certificate that is
         // urgent in the terminal cannot read as routine in the report a client
@@ -157,7 +182,7 @@ export function buildReport(state, { title, now = new Date(), history, windowDay
         sslExpiringSoon: ssl.expiringSoon,
         sslExpired: ssl.expired,
         sslExpiredDays: ssl.expiredDays,
-        contentBytes: Number.isFinite(entry.lastContentLength) ? entry.lastContentLength : null,
+        contentBytes: nonNegative(entry.lastContentLength),
         lastChecked: typeof entry.lastChecked === 'string' ? entry.lastChecked : null,
         monitoringSince: typeof entry.addedAt === 'string' ? entry.addedAt : null,
       };
@@ -234,6 +259,13 @@ function staleNote(site) {
 function windowCell(site, windowDays) {
   const window = site.window;
   if (!window) return `— (no pass in the last ${windowDays} d)`;
+  // The two sibling cells have an unknown branch and this one did not, so a
+  // window without a computable share printed `null% (1 recorded d, 10 checks)`
+  // into the document an agency forwards. Measured as unreachable through
+  // `report` (buildReport always passes uptimePercent, and a window with
+  // buckets always has a check to divide), so this is the rule stated, not a
+  // fix for an observed line.
+  if (window.uptimePercent === null || window.uptimePercent === undefined) return `— (no share in the last ${windowDays} d)`;
   const failures = window.failures > 0 ? `, ${window.failures} failed` : '';
   return `${window.uptimePercent}% (${window.days} recorded d, ${window.checks} checks${failures})`;
 }

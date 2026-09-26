@@ -18,7 +18,7 @@ import { readFileSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { invalidHttpUrls, isSslExpiringSoon, readEntry, STALE_AFTER_DAYS } from './status.js';
-import { safeText } from './display.js';
+import { formatMs, safeText } from './display.js';
 import { DEFAULT_WINDOW_DAYS, HISTORY_DAYS, loadHistory } from './history.js';
 import { FREE, PRODUCT, renderHelpPro } from './features.js';
 
@@ -155,7 +155,7 @@ if (command === 'check') {
       // checked, so it goes through safeText() — see src/display.js.
       console.log(`${statusSymbol} ${safeText(result.url, { max: 0 })}`);
       console.log(`   Status:   ${httpStatus} — ${result.healthy ? 'UP' : 'DOWN'}`);
-      console.log(`   Response: ${result.responseTimeMs}ms`);
+      console.log(`   Response: ${formatMs(result.responseTimeMs)}`);
       console.log(`   ${sslEmoji} SSL:     ${safeText(summary.ssl, { max: 0 })}`);
       if (result.content?.fetched) {
         console.log(`   ${changedEmoji} Content: ${result.content.contentLength.toLocaleString()} bytes`);

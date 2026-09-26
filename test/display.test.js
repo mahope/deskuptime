@@ -24,12 +24,12 @@ import { after, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:net';
 import { execFile } from 'node:child_process';
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { safeText } from '../src/display.js';
+import { formatMs, safeText } from '../src/display.js';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const CLI = join(ROOT, 'src', 'cli.js');
@@ -268,4 +268,43 @@ test('status: a hand-edited state file cannot repaint the URL list', { timeout: 
   // The NEL did not become a line break, so the URL and its verdict stay together.
   assert.match(stdout, /sneaky\.example UP \(200\)/);
   assert.equal(stdout.split('\n').filter(line => line.includes('sneaky.example')).length, 1);
+});
+
+/**
+ * formatMs — a duration we may not have.
+ *
+ * `checkUrl` initialises `responseTimeMs` to `null` and only fills it in on a
+ * real response, so a check that threw before it measured has no duration.
+ * Interpolated straight into a line it printed the absence of one:
+ *
+ *   `Response: nullms`       `check`, for a site that could not be reached
+ *   `is UP (200) — nullms`   the `up` event: the desktop notification and the
+ *                            customer's Pro webhook
+ *   `responseTime: "nullms"` `summarize()`, the object every surface reads
+ *
+ * `—` is what every other unknown number in DeskUptime already prints.
+ */
+test('formatMs prints a measured duration and admits when there is none', () => {
+  assert.equal(formatMs(0), '0ms', 'a measured zero is a measurement');
+  assert.equal(formatMs(42), '42ms');
+  assert.equal(formatMs(1234), '1234ms');
+  // The four values a real check or a hand-edited state file can hold.
+  assert.equal(formatMs(null), '—', 'a check that never measured has no duration');
+  assert.equal(formatMs(undefined), '—');
+  assert.equal(formatMs(NaN), '—');
+  assert.equal(formatMs('42'), '—', 'a string is not a measurement, it is state-file text');
+  // A negative is a corrupt value, not a fast response — the same rule
+  // readSslState() applies to a negative certificate day count.
+  assert.equal(formatMs(-5), '—');
+  assert.equal(formatMs(-0), '0ms');
+});
+
+test('no DeskUptime surface can print a response time it does not have', () => {
+  // Source-level, because the four call sites are the risk: a new one added
+  // later must use formatMs rather than interpolate the raw value.
+  for (const file of ['src/cli.js', 'src/engine.js', 'src/watch.js']) {
+    const text = readFileSync(join(ROOT, file), 'utf-8');
+    const interpolations = text.match(/\$\{[^}]*responseTimeMs[^}]*\}ms/g) || [];
+    assert.deepEqual(interpolations, [], `${file} interpolates a raw responseTimeMs: ${interpolations.join(', ')}`);
+  }
 });

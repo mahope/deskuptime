@@ -17,9 +17,9 @@ import { readFileSync, writeFileSync, mkdirSync, existsSync, renameSync, unlinkS
 import { dirname, posix, win32 } from 'path';
 import { homedir } from 'os';
 import { createHash, randomUUID } from 'crypto';
-import { assertValidHttpUrls, expiredNote, readEntry, readSslState, STALE_AFTER_DAYS } from './status.js';
+import { assertValidHttpUrls, expiredNote, isNewerPass, readEntry, readSslState, STALE_AFTER_DAYS } from './status.js';
 import { recordPass } from './report.js';
-import { safeText } from './display.js';
+import { formatMs, safeText } from './display.js';
 import { loadHistory, pruneHistory, recordHistoryPass, saveHistory } from './history.js';
 import { FREE, PRO, PRODUCT } from './features.js';
 
@@ -175,11 +175,11 @@ export async function runPass(state, opts = {}) {
     if (firstPass) {
       const status = result.healthy ? 'UP' : 'DOWN';
       const detail = result.healthy
-        ? ` (${result.statusCode}) — ${result.responseTimeMs}ms`
+        ? ` (${result.statusCode}) — ${formatMs(result.responseTimeMs)}`
         : result.error ? ` — ${result.error}` : '';
       events.push({ url, type: 'baseline', message: `baseline recorded: ${status}${detail}` });
     } else if (result.healthy && previous === 'down') {
-      events.push({ url, type: 'up', message: `is UP (${result.statusCode}) — ${result.responseTimeMs}ms` });
+      events.push({ url, type: 'up', message: `is UP (${result.statusCode}) — ${formatMs(result.responseTimeMs)}` });
     } else if (!result.healthy && (previous === 'up' || previous === 'unknown')) {
       // An unreadable previous verdict cannot prove a transition, but the site
       // is down *now* and the customer is paying to hear about it. Silence here
@@ -352,7 +352,10 @@ function mergePersistedState(state, options) {
   const persisted = loadState(options);
   for (const [url, entry] of Object.entries(persisted.urls)) {
     const current = state.urls[url];
-    if (!current || (entry.lastChecked && (!current.lastChecked || entry.lastChecked > current.lastChecked))) {
+    // Which pass is newer is isNewerPass()'s decision, not a string compare —
+    // see its doc comment for the two timestamp pairs that sort the wrong way
+    // and the whole entry that rolled back because of it.
+    if (!current || isNewerPass(entry.lastChecked, current.lastChecked)) {
       state.urls[url] = entry;
     }
   }

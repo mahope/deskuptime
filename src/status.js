@@ -139,6 +139,53 @@ export function checkAgeDays(lastChecked, now = new Date()) {
   return Math.max(0, Math.floor(age / MS_PER_DAY));
 }
 
+/** A recorded pass time we can order, or null when it is absent or unreadable. */
+function passTime(value) {
+  if (typeof value !== 'string' || !value) return null;
+  const parsed = Date.parse(value);
+  return Number.isNaN(parsed) ? null : parsed;
+}
+
+/**
+ * Is `candidate` the newer of two recorded passes?
+ *
+ * `watch` merges the state file on disk into the pass it is about to run, so
+ * that two invocations — a manual `deskuptime watch <url>` and a cron `watch
+ * --once` — cannot lose each other's newest observation. That merge used to
+ * compare the two timestamps as *strings*, which is only accidentally right.
+ * Measured, with two timestamps a real state file can hold:
+ *
+ *   '2026-09-26T01:00:00+02:00' > '2026-09-25T23:30:00Z'   // string: true
+ *   Date.parse difference                                  // -30 min
+ *
+ * The second is 30 minutes *newer* and the string says it is older, because
+ * `T…Z` and `T…+02:00` only sort correctly when every timestamp is UTC with the
+ * same precision. The merge therefore kept the *older* entry, and it is a
+ * whole entry: `wasUp`, the status code, the certificate days, the uptime
+ * counters and the age all rolled back to the older pass and were written
+ * onward. A site that had recovered to UP read as DOWN again, and
+ * `watch --status` reported the older age.
+ *
+ * Timezones and precision are also what make it reachable rather than
+ * theoretical. `toISOString()` always writes `…THH:mm:ss.sssZ`, which is why
+ * DeskUptime's own writes happened to sort correctly — but a state file
+ * restored from a backup, hand-edited, or written by another tool carries
+ * offsets or second precision, and a second-precision stamp is a *second*
+ * wrong in the same way: `…:00Z` sorts after `…:00.500Z` while being older.
+ *
+ * An unreadable timestamp is not a time at all, so it can never displace a
+ * readable one. It used to: letters sort after digits, so a hand-edited
+ * `lastChecked: "yes"` won the merge over a real timestamp and hid a genuine
+ * pass.
+ */
+export function isNewerPass(candidate, reference) {
+  const candidateTime = passTime(candidate);
+  const referenceTime = passTime(reference);
+  if (candidateTime === null) return false;
+  if (referenceTime === null) return true;
+  return candidateTime > referenceTime;
+}
+
 /**
  * One reading of a state-file entry, shared by every surface that prints one.
  *

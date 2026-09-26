@@ -9,6 +9,7 @@ import { checkReachability } from './checkers/ping.js';
 import { checkSSL, SSL_TIMEOUT_MS } from './checkers/ssl.js';
 import { checkContentChange, CONTENT_TIMEOUT_MS } from './checkers/content.js';
 import { assertValidHttpUrls, isHealthyStatus, readSslState, expiredNote } from './status.js';
+import { formatMs } from './display.js';
 
 /**
  * `--timeout` is a budget for the *whole* check, not just the first request.
@@ -141,7 +142,7 @@ export function summarize(result) {
     url: result.url,
     status,
     statusCode: result.statusCode,
-    responseTime: `${result.responseTimeMs}ms`,
+    responseTime: formatMs(result.responseTimeMs),
     ssl: sslStatus,
     /** The icon `check` prints next to the same line, decided by the same call. */
     sslIcon: ssl.expired ? '🔴' : ssl.expiringSoon ? '⚠️' : ssl.days !== null ? '🔒' : result.ssl?.error ? '🔓' : '—',

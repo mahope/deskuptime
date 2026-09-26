@@ -28,12 +28,12 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { runPass, printPass } from '../src/watch.js';
-import { readEntry } from '../src/status.js';
+import { isNewerPass, readEntry } from '../src/status.js';
 
 const URL = 'https://kunde.dk/';
 const OTHER = 'https://acme.dk/';
@@ -236,4 +236,62 @@ test('a corrupt or empty state file still produces a baseline, not a crash', asy
   const { loadState } = await import('../src/watch.js');
   const loaded = loadState({ stateFile });
   assert.deepEqual(loaded, { urls: {} });
+});
+
+
+/**
+ * The merge that decides which pass is newest.
+ *
+ * `runPass` merges the state file on disk into the pass it is about to run, so
+ * a manual `watch <url>` and a cron `watch --once` cannot lose each other's
+ * newest observation. That merge compared the two `lastChecked` values as
+ * strings. Measured pairs where the string order is the wrong way round — in
+ * each case the on-disk entry is the *older* pass and still won:
+ *
+ *   '2026-09-26T02:00:00+02:00'  =  00:00Z   older
+ *   '2026-09-26T01:00:00Z'       =  01:00Z   newer   ('0' < '2' is never compared —
+ *   the hour digits differ, and 02 sorts after 01)
+ *   '2026-09-26T01:00:00Z'       =  01:00Z   newer   ('…00Z' sorts after '…00.500Z')
+ *   'yes'                        =  not a time          (letters sort after digits)
+ *
+ * It is a whole entry that is chosen, so a wrong comparison rolled back
+ * `wasUp`, the status code, the certificate days, the uptime counters and the
+ * age. The assertion below is the customer-visible half of that: with the
+ * older entry kept, the site reads as having been UP, the pass finds it UP,
+ * there is no transition — and a recovery the customer pays for is silent.
+ */
+test('isNewerPass is the single decision, and it is a time comparison', () => {
+  assert.equal(isNewerPass('2026-09-26T01:00:00.001Z', '2026-09-26T01:00:00.000Z'), true);
+  assert.equal(isNewerPass('2026-09-26T01:00:00.000Z', '2026-09-26T01:00:00.001Z'), false);
+  // The same instant written two ways is not "newer" in either direction.
+  assert.equal(isNewerPass('2026-09-26T01:00:00Z', '2026-09-26T03:00:00+02:00'), false);
+  assert.equal(isNewerPass('2026-09-26T03:00:00+02:00', '2026-09-26T01:00:00Z'), false);
+  // A recorded pass beats no pass at all; no pass never beats a recorded one.
+  assert.equal(isNewerPass('2026-09-26T01:00:00Z', undefined), true);
+  assert.equal(isNewerPass(undefined, '2026-09-26T01:00:00Z'), false);
+  assert.equal(isNewerPass(undefined, undefined), false);
+});
+
+test('an event never reports a response time that was not measured', async () => {
+  const measured = await passWith(false, { lastChecked: '2026-09-26T00:00:00.000Z', check: () => up() });
+  assert.match(measured.pass.events.find(e => e.type === 'up').message, /— 42ms$/);
+
+  const unmeasured = await passWith(false, {
+    lastChecked: '2026-09-26T00:00:00.000Z',
+    check: () => ({ url: URL, healthy: true, statusCode: 200, responseTimeMs: null, timestamp: PASSED }),
+  });
+  const message = unmeasured.pass.events.find(e => e.type === 'up').message;
+  assert.doesNotMatch(message, /nullms/, 'the Pro webhook and desktop notification must not say "nullms"');
+  assert.match(message, /— —$/);
+});
+
+test('a baseline event for an unmeasured site says no duration either', async () => {
+  const { pass } = await passWith('yes', {
+    lastChecked: null, // never checked, so the pass is a baseline
+    check: () => ({ url: URL, healthy: true, statusCode: 200, responseTimeMs: null, timestamp: PASSED }),
+  });
+  const baseline = pass.events.find(event => event.type === 'baseline');
+  assert.ok(baseline, 'the baseline event still exists');
+  assert.doesNotMatch(baseline.message, /nullms/);
+  assert.match(baseline.message, /— —$/);
 });

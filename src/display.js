@@ -18,6 +18,13 @@
  * Deliberately NOT applied to `--json` output: that is a machine format, where
  * dropping or rewriting bytes is a worse lie than a terminal that needs a reset.
  * A caller that renders the JSON is the one that has to escape it.
+ *
+ * The same rule — a terminal must never print a measurement we do not have —
+ * is why `formatMs` lives here too. It is the one answer to "we have no
+ * duration", so the four places that print a response time cannot each invent
+ * their own. `--json` keeps the raw `responseTimeMs`, deliberately, for the
+ * same reason as above: `null` is honest in a machine format, `nullms` is not
+ * in a human one.
  */
 
 /**
@@ -69,4 +76,34 @@ export function safeText(value, { max = DEFAULT_MAX_LENGTH, fallback = '' } = {}
     .trim();
   if (max > 0 && text.length > max) return `${text.slice(0, Math.max(0, max - 3))}...`;
   return text;
+}
+
+/**
+ * Print a duration we may not have.
+ *
+ * A check that threw before it measured leaves `responseTimeMs` as `null`
+ * (`checkUrl` initialises it to `null` and only fills it in on a real
+ * response), and a hand-edited or restored state file can hold a negative one.
+ * Interpolated straight into a line, both printed the value instead of the
+ * absence of one:
+ *
+ *   Response: nullms            — `check`, for a site that could not be reached
+ *   is UP (200) — nullms        — the `up` event, i.e. the desktop notification
+ *                                  and the customer's Pro webhook
+ *   responseTime: "nullms"      — `summarize()`, the object every surface reads
+ *
+ * So an unreachable site told the paying customer it answered in "null"
+ * milliseconds. `—` is what every other unknown number in DeskUptime prints
+ * (`— SSL:`, `— Response:`, `— (no completed pass)`), and it is what the report
+ * already used for a missing response time.
+ *
+ * Only a finite, non-negative number is a duration. A negative is a corrupt
+ * value, not a fast response — the same rule `readSslState()` applies to a
+ * negative certificate day count.
+ *
+ * @param {unknown} value — the measured milliseconds, possibly absent
+ * @returns {string} `'123ms'`, or `'—'` when there is no duration to report
+ */
+export function formatMs(value) {
+  return Number.isFinite(value) && value >= 0 ? `${value}ms` : '—';
 }
