@@ -1,9 +1,9 @@
 # IMPLEMENTATION_PLAN.md
 
 STATUS: I GANG
-Iteration: 19 — 2026-09-26
-Arbejdsgrene: `ceo/pro-gate-truth` (P1-3)
-Næste handling: **P1-3 er færdig** — en Pro-grænse må ikke sende en kunde, der allerede har betalt, i kassen. `deskuptime report` svarede før **altid** med købslinket, også når nøglen aldrig var afslået (`unverified`), altså lige når `deskuptime status` bevidst undgår kassen — to flader, der sagde modsatte ting om den samme nøgle. Ny `proGateMessage(license, feature)` i `src/license.js` er nu det *eneste* sted, der fortæller hvorfor en Pro-funktion er lukket, bygget på `describeLicense()`: `free` → kasse, `unverified` → "genverificér nøglen" uden købslink, `invalid` → købslink kun som "hvis du ikke har købt endnu", `active`/`cached` → ingen tekst. Bruges af `report` og af `--webhook`-grænsen i `startWatch`. 3 nye tests + 2 mutationstester → **182/182**. Næste iteration: ❓ 2/❓ 3 hvis de er besvaret (planlagte rapporter / flere lokationer), ellers ny research-iteration. P1-1 AC3 (sitekilder) er `BLOCKED` på ❓ 8.
+Iteration: 20 — 2026-09-26
+Arbejdsgrene: `ceo/timeout-budget` (P1-4)
+Næste handling: **P1-4 er færdig** — `--timeout` var en løfte, brugeren ikke kunne holde. Et check er tre ben (reachability, TLS-handshake, indholdslæsning), men kun det første læste flaget, så **`check --timeout 500` mod en server der sender headere og aldrig kroppen tog 20 094 ms** — målt, ikke antaget. Det er samme kode, der gør et CI-job langsom: `action.yml:67` sender `--timeout` med hvert kald. `checkUrl` sætter nu ét deadline, når der er givet et budget, og hvert ben arver resten; intet ben får mere end sin egen default, så et stort budget kan aldrig gøre et check langsommere end i dag, og uden `--timeout` er stien bit-for-bit uændret. Efter rettelsen: 506 ms. 6 nye tests → **188/188**. Næste iteration: ❓ 2/❓ 3 hvis de er besvaret (planlagte rapporter / flere lokationer), ellers ny research-iteration. P1-1 AC3 (sitekilder) er `BLOCKED` på ❓ 8.
 
 ## Mission
 
@@ -477,6 +477,29 @@ Den aktuelle gate-definition er registreret her:
 
 **Bevis:** Node 26.7.0 — `npm ci --ignore-scripts`, **`npm test` grøn med 182/182** (179 + 3), `npm run audit` 0/0, `node --check` alle JS-filer, `node tools/matrix.mjs --check` grøn, `git diff --check` grøn. Ingen afhængighed ændret, ingen ny claim, matrixen urørt.
 
+### P1-4 — FÆRDIG 2026-09-26 — `--timeout` skal gælde hele tjekket (`ceo/timeout-budget`)
+
+**Begrundelse (missionens prioritet 1):** `--timeout` er det flag, en CI-bruger bruger til at holde sit job kort, og det er det flag, `action.yml:67` sender med hvert kald. Før denne iteration læste kun det første af tre ben det, så flaget var en løfte, brugeren ikke kunne holde.
+
+**Målt fund 2026-09-26 (inden der blev skrevet en linje test):** et check er tre ben — reachability-requestet, TLS-handshaken og læsningen af siden. `engine.js` sendte `opts.timeoutMs` til `checkReachability()`, men kaldte `checkSSL(url)` og `checkContentChange(url, opts.contentHash)` uden det, og begge havde deres eget deadline hardkodet (10 s / 20 s). En probe mod en `node:net`-server der svarer `200` med headere og aldrig kroppen: **`checkUrl(url, { timeoutMs: 500 })` tog 20 094 ms** — 40× flagets værdi, og præcis den kode der gør et Action-job langsom. Efter rettelsen: **506 ms**. README's "Override the 15-second network timeout" gjorde kun det ufuldstændige forhold eksplicit.
+
+**Acceptkriterier:**
+
+1. `--timeout` er ét budget for alle tre ben, så flaget aldrig kan overskrides. — **Færdig** (`legTimeoutMs()` i `src/engine.js`)
+2. Et ben får aldrig mere end sit eget deadline, så et større budget aldrig gør et check langsommere end i dag. — **Færdig** (`Math.min(fallbackMs, remaining)`)
+3. Uden `--timeout` er stien uændret, så watch-loopen (der kalder `checkUrl` uden timeout) beholder hvert bens default. — **Færdig** (deadline sættes kun ved et positivt heltal)
+4. Et opbrugt budget giver en ærlig timeout frem for at køre uden ramme. — **Færdig** (gulv på 1 ms)
+5. `checkSSL` tager sit eget deadline i stedet for to hardkodede 10 s. — **Færdig** (`checkSSL(url, { timeoutMs })`)
+6. README, statuspolicy og `--help` siger at `--timeout` gælder hele tjekket. — **Færdig**
+
+**Resultat:** `legTimeoutMs(deadline, fallbackMs)` er den eneste sted, der fordeler budgeten, og den er ren — `null`/`0` betyder "ingen budget" (watch-loopens sti), et fremtidigt deadline giver `min(default, rest)`, et opbrugt giver 1 ms. `checkSSL` bruger sit `timeoutMs` både i `tls.connect({ timeout })` og i den manuelle timer, som begge stod hardkodet til 10 000.
+
+**Test (6 nye, `test/budget.test.js`, ingen netværk — en `net`-server der svarer på HTTP og en der tier på TLS):** `--timeout 500` på en krop der aldrig slutter er færdig under 5 s **og** giver `healthy: true` med `fetched: false` (et stort eller hængende svar må aldrig slå et sundt site ned); samme server uden budget læser et 700 ms svar færdigt, mens `--timeout 150` afbryder det — altså er det budgeten, der afkorter, ikke en ændret default; `checkSSL` med 300 ms mod en tierende server svarer under 2 s med en fejl; `checkSSL` uden deadline er **stadig i gang efter 1,5 s** mod en 10 s default, så standarden kan ikke stille blive ændret; og `legTimeoutMs`'s fem tilfælde låst. Sockets trackes og ødelægges ved teardown, fordi en rå `net`-server ellers kaster `ECONNRESET` efter at testen er slut (samme fælde som P2-1 del C).
+
+**Mutationstest:** at gendan benenes egne deadlines i `engine.js` giver **2 fejl** i 6 — den første efter **20 055 ms**, altså ikke en tilfældig timing-fejl men den målte fejl. Reindsat kode giver 6/6.
+
+**Bevis:** Node 26.7.0 — `npm ci --ignore-scripts`, **`npm test` grøn med 188/188** (182 + 6), `npm run audit` 0/0, `node --check` alle JS-filer, `node tools/matrix.mjs --check`, `sh -n`/`bash -n` og `git diff --check` grønne. Fast-forward-merge til `main` og push af begge grene 2026-09-26. Ingen afhængighed ændret, ingen ny claim, matrixen urørt.
+
 **Målt, ikke antaget:** før rettelsen skrev `report` bogstaveligt `the client report needs an active Pro license. Pro unlocks … <buyUrl>` uanset tilstand, og `--webhook` skrev `--webhook needs an active Pro license … <buyUrl>`. Det var ikke en hypotese om tekst — det var den eneste kodevej til kassen.
 
 ## Dependency- og opgraderingslog
@@ -554,6 +577,8 @@ Den aktuelle gate-definition er registreret her:
 - Merge til `main` deployer ikke; npm, GitHub Releases og Homebrew må kun publiceres af Mads via de eksisterende tag-workflows.
 
 ## Iterationslog
+
+- **Iteration 20 (P1-4):** `--timeout` var en løfte, brugeren ikke kunne holde. Et check er tre ben, men kun det første læste flaget: målt med en probe mod en server der sender headere og aldrig kroppen, tog `check --timeout 500` **20 094 ms** — 40× værdien. Det er samme kode, der gør et Action-job langsom, fordi `action.yml:67` sender `--timeout` med hvert kald. Ny `legTimeoutMs()` i `src/engine.js` fordeler ét deadline, når brugeren har givet et budget; hvert ben arver resten, men aldrig mere end sin egen default, så et stort budget aldrig kan gøre et check langsommere end i dag, og uden `--timeout` er stien uændret, så watch-loopen beholder hvert bens default. Et opbrugt budget giver 1 ms og en ærlig timeout frem for at køre uden ramme. `checkSSL` havde sit deadline hardkodet til 10 s i to steder og tager nu `timeoutMs`. Efter rettelsen: 506 ms. README's "15-second network timeout" gjorde kun det ufuldstændige forhold eksplicit; statuspolicy, README og `--help` siger nu at flaget gælder hele tjekket. 6 nye tests i `test/budget.test.js` mod to lokale `net`-servere, bl.a. at `checkSSL` uden deadline stadig er i gang efter 1,5 s, så 10 s-standarden ikke kan stille blive ændret. Mutationstest: at gendan benenes egne deadlines giver 2 fejl, den første efter 20 055 ms. Node 26.7.0: `npm ci --ignore-scripts`, **188/188** tests, `npm run audit` 0/0, `node --check`, `matrix --check`, `sh -n`/`bash -n` og `git diff --check` grønne. Commit `d678cdb` på `ceo/timeout-budget`, fast-forward-merget til `main` og pushet 2026-09-26. Næste iteration: ❓ 2/❓ 3 hvis besvaret, ellers ny research-iteration.
 
 - **Iteration 19 (P1-3):** Den betalte kunderapport havde en port, der svarede **altid** med købslinket — også når licensserveren aldrig havde dømt nøglen. Det er præcis den fejl, iteration 13 havde fjernet fra `deskuptime status` med det nye ord `unverified`, fordi en kunde der tror sin nøgle er død, køber en licens til. To flader sagde altså modsatte ting om den samme nøgle, og det var den nye Pro-feature, der var dårligst på det punkt. Ny `proGateMessage(license, feature)` i `src/license.js` er nu det eneste sted, der fortæller en kunde hvorfor en Pro-funktion er lukket; den genbruger `describeLicense()`'s egen tilstand og `detail`, så den *kan* ikke komme i strid med `status`. `report` og `--webhook`-grænsen i `startWatch` kalder den, og ingen af dem har længere en egen købslinje. `free` → kassen, `unverified` → "genverificér nøglen" (aldrig købslink), `invalid` → afslag + købslink kun som "hvis du ikke har købt endnu", `active`/`cached` → ingen tekst. Konverteringen er ikke gået tabt: `test/claims.test.js` låser nu, at både `freeLimitMessage` og `proGateMessage` peger på kontraktens link. `docs/license-lifecycle.md` §2 og `docs/agency-report.md` §4 beskriver reglen. 3 nye tests (2 unit i `test/license.test.js`, 2 end-to-end i `test/report.test.js`) plus mutationstest: at gendan den gamle altid-købslink-kode i `report` giver 2 fejl i 13, reindsat kode giver 13/13. Node 26.7.0: `npm ci --ignore-scripts`, **182/182** tests, `npm run audit` 0/0, `node --check`, `matrix --check` og `git diff --check` grønne. Ingen afhængighed ændret, ingen ny claim. Næste iteration: ❓ 2/❓ 3 hvis besvaret, ellers ny research-iteration.
 
