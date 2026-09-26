@@ -2725,6 +2725,106 @@ pass ville være at holde låsen for evigt. Skal det lukkes, er vejen et felt i
 state-filen med hvem der ejer skrivningen — større end en iteration, og den er
 noteret her, ikke gemt.
 
+## Status fra denne iteration (60, P1-44 — en betalt kunde fik tilbudt sin egen licens igen)
+
+**Hvorfor denne flade:** ❓ 1–3 er stadig ubesvarede, så iterationen tog den
+tredje valgfri kandidat fra P1-42/P1-43: **hvad der sker, når
+`~/.deskuptime/state.json` findes, men ikke kan læses.** Ingen måling havde rørt
+den: P1-39 målte en fil der *ikke kan skrives*, P1-40 en nøgle der ikke er en
+adresse — begge filer der ellers var gyldige.
+
+**Målt først, nul kode ændret.** Rigtig CLI, temp-HOME, `passthrough`-stub (aldrig
+et kald til mahope.tools) og en `state.json` kodet midt i en licensnøgle og en
+URL — altså den læsbare fordel, hvor betalte kunder har deres nøgle:
+
+```
+status         →  Free tier. DeskUptime Pro ($19 one-time, 3 machines) …
+                   Buy: https://buy.stripe.com/7sY9AS9eX3Iu418fJ5bMQ01
+                   Monitored URLs (0):
+watch --status →  No URLs monitored. Start with: deskuptime watch <url>
+watch <url>    →  … ny fil skrevet oveni — nøglen ER VAK fra disken
+```
+
+Fire skader, én årsag (`loadState()` slugte parsefejlen og returnerede `emptyState`):
+
+1. **Penge:** en kunde med en *aktiveret* nøgle i filen blev sagt at være på
+   gratisniveauet og fik kasse-linket. Det er P1-19's klasse (en maskine der ejer
+   licensen bliver solgt den igen) nået ad en helt anden vej, og nøglen stod
+   stadig læsbar i den fil værktøjet lige sagde var tom.
+2. **Stilhed:** `watch --status` — kommandoen man kører for at se om
+   overvågningen virker — skyldte brugerens konfiguration.
+3. **Cron:** `watch --once` (cron-vejen) døde med `at least one URL required`.
+4. **Datatab:** første kommando der gemte skrev en frisk fil oveni. Den læsbare
+   fordel med nøglen i blev erstattet af `{ "urls": … }`, så nøglen forsvandt fra
+   disken helt. Skrivningerne er ellers atomiske (temp + rename), så dette er
+   en håndredigering, en delvis restore eller et filsystem — ikke et krasch.
+
+**Efter, samme måling:** `stateReadErrorMessage()` i `src/watch.js` er den ene
+ejer af sætningen; `status`, `watch --status`, rapportens Pro-gate og
+`activate`/`deactivate` læser den. **Ingen kasse-link nogen af dem**, fordi
+`status` læser filen *før* licensblokken — samme regel som holder `released` og
+`unverified` væk fra kassen. `saveState()` nægter at skrive over en fil den ikke
+kunne læse (`ESTATEUNREADABLE`), så nøglen kan ikke forsvinde mere; loopens
+`saveStateOrWarn` oversætter koden til *læse*-sætningen, så "check free disk
+space" ikke længere bruges om en kodet fil. `activate` stopper **før**
+licensserveren kaldes — en plads, der tages og ikke kan gemmes, er en plads
+kunden har betalt for og mistet. **Modvægten er målt:** en læsbar fil skrives som
+før (test), og et pass på en ulæsbar fil kører videre og siger advarselsen —
+P1-39's løfte om at overvågning ikke afhænger af, at vi kan gemme noget.
+
+**7 nye tests i `test/stateunreadable.test.js`** (registreret i `npm test` — samme
+fælde som P1-10) → **403/403** (396 + 7); audit 0/0; `node --check`,
+`matrix --check` og `git diff --check` grønne på Node 26.7.0. Hver test måler den
+reelle overflade med rigtig CLI: ingen `Free tier`, intet kasse-link, intet
+`Monitored URLs` på en ulæsbar fil, og filens bytes uændret efter et
+`saveState`-forsøg. **Ingen claim, ingen matrix-række, ingen exit-kode ændret for
+en eksisterende kommando** (de tre nye exit 1 gælder kun den nye tilstand), ingen
+payload-felt, ingen deploy-note nødvendig. `ceo/unreadable-state`, `e7affbd`,
+fast-forward-merget til `main` og pushet 2026-09-26.
+
+**Åbent og bevidst:** `history.json` læses stadig med samme mønster
+(`normalizeHistory(JSON.parse(…))`), så en kodet historikfil falder tilbage til
+tom uden en sætning. Den kan ikke slette en licensnøgle, så den er målt som det
+mindre problem og noteret her i stedet for at blive blandet ind i denne rettelse.
+
+**Næste:** ❓ 1–3, ellers en målt opgave.
+
+### P1-44 — FÆRDIG 2026-09-26 (`ceo/unreadable-state`) — Skriv aldrig over en `state.json` der ikke kan læses
+
+**Begrundelse (målt, ikke formodet):** en kodet `state.json` med en aktiveret
+licensnøgle i den læsbare fordel. `status` svarede `Free tier … Buy: <link>` og
+`Monitored URLs (0)`, `watch --status` svarede `No URLs monitored`, og
+`watch <url>` skrev en frisk fil oveni, så nøglen forsvandt fra disken.
+
+**Root cause:** `loadState()` fangede parsefejlen og returnerede `emptyState()`,
+så en ulæsbar fil var en tom fil på tværs af alle flader — og den næste
+skrivning var en overskrivning.
+
+**Fix:** `stateReadErrorMessage()` er den ene ejer af sætningen;
+`readStateFile()` giver grunden ved siden af staten i stedet for at sluge den;
+`status` læser filen før licensblokken (ingen kasse-link til en kunde med en
+nøgle i filen), rapportens Pro-gate og `activate`/`deactivate` gør det samme, og
+`saveState()` nægter at skrive over en fil den ikke kunne læse
+(`ESTATE_UNREADABLE`), som `stateWriteErrorMessage()` oversætter til læse-
+sætningen.
+
+**Acceptkriterier:**
+
+1. En kodet `state.json` med en aktiveret nøgle giver hverken `Free tier` eller
+   kasse-linket på nogen flade. ✅ målt før og efter med rigtig CLI
+2. Ingen flade tæller eller rapporterer en fil, ingen læste. ✅ `status` skriver
+   hverken `Monitored URLs` eller en licensverdict
+3. `saveState()` efterlader filens bytes uændret, så nøglen kan læses igen. ✅
+   målt før (nøglen væk) og efter (uændret)
+4. `activate` tager ikke en plads på serveren, den ikke kan gemme. ✅ målt før
+   (kaldet gik igennem mod en kodet fil) og efter (exit 1 før netværket)
+5. En læsbar fil skrives uændret, og et pass på en ulæsbar fil kører videre med
+   advarselsen. ✅ målt
+
+**Målt:** 403/403 (396 + 7), audit 0/0, `node --check`, `matrix --check`,
+`git diff --check` grønne på Node 26.7.0. `e7affbd` på `ceo/unreadable-state`,
+fast-forward-merget til `main` og pushet 2026-09-26.
+
 ## ❓ Til Mads
 
 13. ~~Hvad skal et site, vi ikke kan tjekke, gøre ved et pass?~~ **Besvaret i kode 2026-09-26 (P1-40, `ceo/skip-unusable-urls`):** (c) + (b), planens egen anbefaling. En nøgle i `state.json` uden scheme springes over, de øvrige sites fortsætter, nøglen nævnes på hvert pass og på `watch --status`, `status` og i rapporten, og exit 2 beholdes **kun** når intet kunne tjekkes. Målt først: ét `kunde.dk` blandt 25 nøgler dræbte passet med exit 1 og nul tjek. **Valget er ikke gratis, og en nøgle uden adresse er aldrig et nedet site** — den grænse til det andet svar ((a): passet fejler) er én linje i `runPass` plus exit-koden, hvis Mads vil have den. Målingen og koden ligger i afsnittet øverst.
@@ -2789,6 +2889,8 @@ noteret her, ikke gemt.
 - **Iteration 57 (P1-41, målt + fix):** ❓ 1–3 ubesvarede, så målingen gik på den **betalte** kanals spørgsmål — hvad der sker, når *leveringen* ikke virker. P1-50 målte hvilken payload der kommer ud, P1-39 målte en disk der ikke kan skrives; ingen målte det imellem. Målt først med rigtig `watch`-loop, rigtig state-fil, et lokalt site der svarer 500, Pro fra `passthrough`-stubben (aldrig et kald til mahope.tools) og en rigtig modtager der svarer 500 på det første POST: `is DOWN — HTTP 500` i terminalen, `Webhook responded 500`, og **intet** i kanalen — heller ikke 30 s senere, fordi næste pass ikke rejser nogen begivenhed, når `entry.wasUp` er skrevet. En betalt kunde hørte altså intet om et nedbrud og fik så en `is UP` for en genopretning den aldrig blev fortalt om. **Fix:** samme regel som licensklienten (P2-1 del B) — `WEBHOOK_ATTEMPTS = 3`, 500 ms pause, `webhookRetryable()` som den ene ejer (kun `5xx`/`429`; et `4xx` er modtagerens *svar* og spørges aldrig igen), kroppen bygget én gang så en genprøvning sender samme alert, og **alle forsøg deler ét 10-s-budget** (tre 10-s-forsøg ville holde loopet længere end det korteste Pro-interval). Dobbeltleverings-prisen er dokumenteret i `docs/pro-alerts.md` §2. Målt efter: blip → `delivered type=down is DOWN — HTTP 500`, ingen advarsel. 8 nye tests (den målte kunderejse med to rigtige passer: én blip giver præcis én besked, og den anden pass rejser ingen begivenhed) → **382/382** (374 + 8); audit 0/0; `node --check`, `matrix --check`, `sh -n`/`bash -n`, `git diff --check` grønne på Node 26.7.0. **Seks mutationer målt, alle døde** (5/1/1/2/1/1 fejl) — men først efter at målingen blev rettet: min mutationskørsel brugte `git checkout` som gendannelse, fem mutationer ændrede slet ikke filen og kom ud som "0 fejl" (vished, ikke dækning — fjerde gang i mit arbejde), og samme kørsel ødelagde det ucommittede `src/watch.js`, som blev skrevet igen. Den sjette mutation overlevede det korrekt og afslørede en manglende test (hvert forsøg med sit eget budget), som blev skrevet. **Maskinfakt der gør gaten rød uden grund:** standard-`node` på denne maskine er v22.23.2, så 20 tests (install.sh ×7, Action ×13) fejler med `::error::Node.js 24+ is required` — også på ren `main`; rigtig kørsel er `PATH="/opt/homebrew/bin:$PATH" npm test` (v26.7.0). Ingen kode ændret for det. **Ikke bygget:** en outbox til næste pass — kræver spec først, noteret som næste målte opgave.
 
 ## Iterationslog
+
+- **Iteration 60 (P1-44, målt + fix):** ❓ 1–3 ubesvarede, så målingen gik på den sidste indgang til staten ingen måling havde rørt: **en `state.json` der findes, men ikke kan læses.** Rigtig CLI, temp-HOME, Pro-stub (aldrig et kald til mahope.tools), fil kodet midt i licensnøglen. Før: `status` → `Free tier … Buy: <kasse-link>` + `Monitored URLs (0)`, `watch --status` → `No URLs monitored`, og `watch <url>` skrev en ny fil oveni, så **nøglen forsvandt fra disken** (`rg` fandt den ikke mere). Fire skader, én årsag: `loadState()` slugte parsefejlen. Efter: `stateReadErrorMessage()` som den ene ejer, læst før licensblokken i `status` (aldrig kasse-link til en kunde med en nøgle i filen), samme gate i rapportens Pro-gate og i `activate`/`deactivate` (**før** licensserveren kaldes — ellers tages en plads, der ikke kan gemmes), og `saveState()` nægter at skrive over en ulæsbar fil, med `stateWriteErrorMessage()` oversættende koden, så "check free disk space" ikke bruges om en kodet fil. Modvægt målt: læsbar fil skrives uændret, og et pass på en ulæsbar fil kører videre med advarselsen (P1-39 urørt). 7 nye tests i ny fil `test/stateunreadable.test.js` (lagt til i `npm test` — samme fælde som P1-10) → **403/403** (396 + 7); audit 0/0; `node --check`, `matrix --check`, `git diff --check` grønne på Node 26.7.0. **Ingen claim, ingen matrix-række, ingen exit-kode ændret for en eksisterende kommando** (de tre nye exit 1 gælder kun den nye ulæsbare tilstand), intet payload-felt, ingen deploy-note nødvendig. `ceo/unreadable-state`, `e7affbd`, fast-forward-merget til `main` og pushet 2026-09-26. **Målt og bevidst ikke rettet:** `history.json` læses med samme mønster og falder tilbage til tom uden en sætning; den kan ikke slette en licensnøgle, så den er noteret i opgaven.
 
 - **Iteration 55 (P1-39, målt + fix):** ❓ 1–3 ubesvarede, så målingen gik på den del af produktet, der aldrig var målt på **passet selv** — hvad der sker, når en måling ikke kan gemmes. Rigtig CLI + rigtig webhook-modtager + to lokale fixtures + Pro fra `passthrough`-stubben (aldrig et kald til mahope.tools) + et `~/.deskuptime` der ikke kan skrives (immutabelt dirs = EPERM, read-only = EACCES, ingen rigtige diske rørt), nul kode ændret. **Fund:** en skrivefejl dræbte processen med exit 1 og **nul leveringer**, før nogen site blev tjekket — kastet fra `recheckLicense()`'s `saveState()` før loopen startede. Betalt kanal, betalt site, ingen besked. Anden indgang målt i samme kørsel: `watch --once` (cron-vejen) døde i `acquireStateLock()` med `EACCES … state.json.lock` — "anden pass kører" og "disken er fuld" gav samme rå kast. **Fix:** `saveStateOrWarn()` i `src/watch.js` lader passet leve (events + rapport + exit-kode uændrede), advarslen er én ejet sætning med fil og errno, og låsen svarer med en grund frem for at kaste. **Målt efter: 0 → 1 levering**, loopt kører videre, fuld payload (`transition: observed`). Beslutningen er ikke gratis og står i planen: tællere og rapportdag tabes, og efter en genstart kan et nedet site meldes igen — dobbelt melding valgt over stilhed. **Fejl i min egen måling (tredje gang):** `spawnSync` blokerede event loopet i forælderen, hvor serverne boede, så første genmåling viste `Request timed out` på begge sites og 0 leveringer så ud som at fixet ikke virkede; async `spawn` gav den rigtige måling. **Måleforhindring fra en gammel måling holdt:** read-only dir dræber `watch --once` men ikke loopen, fordi `saveState()` selv reparerer mapperettighederne og låsen ikke gør — derfor immutabelt dirs til loop-testen. 6 nye tests i ny fil `test/passstate.test.js` (lagt til i `npm test`, samme fælde som P1-10) + 4 målte mutationer (2/2/1/1 fejl) → **365/365** (359 + 6); audit 0/0; `node --check`, `matrix --check`, `git diff --check` grønne på Node 26.7.0. Ingen exit-kode for en sund kørsel ændret, ingen matrix-række, ingen ny claim, ingen deploy-note nødvendig. **Næste: P1-40 — målt i samme kørsel:** ét nøgle i `state.json` uden scheme (`kunde.dk`) gør `runPass`/`startWatch` kaste `TypeError: Invalid URL`, exit 1, **nul sites tjekket** — alle 24 andre sites mister overvågning og alarmer for én beskadiget nøgle. Kræver et valg (❓ 13), fordi det rører exit-koder.
 - **Iteration 54 (P1-38, målt + fix):** ❓ 1–3 stadig ubesvarede, så iterationen lukkede ❓ 12 — det eneste konkrete, målte fund i køen, som den forrige iteration lagde tilbage fordi den krævede et valg. Valget er (b), den navngiven linje, fordi (a) ville ændre en celle i et kundedokument bureauer har sat i systemer. Målt først med rigtig `report` + `report --json`, nul kode ændret: `95.83% (28 recorded d, 1344 checks, 56 failed)` mod `95.83% (30 recorded d, …)` — samme tal i samme dokument, og to dage der aldrig blev overvåget fordi cron lå ned. Den svære del var ikke linjen men **modvægten**: et site tilført i denne uge har samme form (3 af 30) og er ikke et hul, og et bureau med fem sites i et års overvågning har 1 registreret dag ud af 30 for alle fem, fordi dags-buckets først begyndte at blive skrevet da `report` udkom. Uden begge betingelser ville linjen have anklaget dem om 29 manglende dage. `windowCoverage()` i `src/history.js` er den ene ejer og spørger `passAge` om tiden (P1-32's lås urørt); rapporten genberegner intet, og `monitoringSince` læses én gang og bruges af både rækken og reglen. **Modvæggen målt:** et år gammel overvågning med en historikfil fra i går gav ingen linje og en rapport der er tegn for tegn uændret. 3 nye tests + 3 målte mutationer (1 / 4 / 1 fejl) → **359/359** (356 + 3); audit 0/0; `node --check`, `matrix --check`, `git diff --check` grønne på Node 26.7.0. **Én fejl i min egen måling, noteret:** testhjlæpperen skrev ingen buckets (`for (d = oldest; d <= newest)` med `oldest > newest`), så modvægstesten målte intet og mutationen af netop det varet gav 0 fejl — vished, ikke dækning, samme fælde som P1-19. Rettet og genmålt. **Én eksisterende lås måtte udvides, ikke slækkes** (syvende gang): låsen på "every state timestamp through the one owner" søgte på et literal, refaktoreringen afløser; den kræver nu den nye ene læsning *og* at rækken skrives fra den. **Ingen ny claim, ingen matrix-række, ingen exit-kode, cellen uændret, ingen deploy-note nødvendig.** Næste: ❓ 1–3 hvis besvaret, ellers en ny målt opgave.
