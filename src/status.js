@@ -716,6 +716,22 @@ export function checkAgeMs(lastChecked, now = new Date()) {
 }
 
 /**
+ * How long an undelivered alert has been waiting to be delivered.
+ *
+ * `checkAgeMs` above owns the arithmetic and this owns what it means here, and
+ * both live in this file on purpose: `watch.js` is not allowed to decide an age
+ * for itself (two locks, for the pass ages), and an alert's waiting time is an
+ * age like any other — a queue entry stamped 40 minutes into the future is a
+ * clock problem, not an alert that has waited a negative time, so it counts as
+ * just queued. An unreadable stamp is treated as "just queued" too, rather than
+ * as an alert that may be dropped: the queue only gives up on a *known* age.
+ */
+export function queuedAgeMs(queuedAt, now = new Date()) {
+  const age = checkAgeMs(queuedAt, now);
+  return age === null ? 0 : Math.max(0, age);
+}
+
+/**
  * The four things a recorded pass time can be, in one owner.
  *
  * Every surface that shows a pass asks this, because each of the four used to

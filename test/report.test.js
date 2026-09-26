@@ -1228,10 +1228,17 @@ test('the four pass states are decided in one place, and only there', () => {
   assert.match(statusSrc, /const pass = passAge\(value\.lastChecked, now\)/, 'readEntry asks the owner');
 
   // The one reader of the negative age is the owner, so `checkAgeMs` documents
-  // behaviour it actually has (AC 4).
+  // behaviour it actually has (AC 4). `queuedAgeMs` is the second reader, added
+  // 2026-09-26 for the undelivered-alert outbox: it is in this file for the same
+  // reason — the watch loop is not allowed to decide an age — and unlike
+  // `passAge` it is *not* about a pass, so it clamps the sign away and says so.
+  // The count is raised rather than the reader removed, and the clamp is locked
+  // below, so a third reader cannot slip in.
   const ageMs = statusSrc.match(/export function checkAgeMs\([\s\S]*?\n}/)?.[0] ?? '';
   assert.match(ageMs, /return now\.getTime\(\) - parsed/, 'the sign survives checkAgeMs');
-  assert.equal((statusSrc.match(/checkAgeMs\(/g) ?? []).length, 2, 'its definition and the one reader');
+  assert.equal((statusSrc.match(/checkAgeMs\(/g) ?? []).length, 3, 'its definition and two readers, both in the owner file');
+  const queuedAge = statusSrc.match(/export function queuedAgeMs\([\s\S]*?\n}/)?.[0] ?? '';
+  assert.match(queuedAge, /Math\.max\(0, age\)/, 'a queued alert can never have waited a negative time');
 });
 
 // P1-31's own measurement, through the real CLI, on a state file whose

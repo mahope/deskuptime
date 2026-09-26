@@ -145,6 +145,39 @@ garanti om `down` består derfor uændret.
 
 Ingen licensnøgle, device-id eller brugerdata sendes i payloaden. Se §5.
 
+### Udsendt-alarm der ikke kom af sted (outbox)
+
+Målt 26/9, før dette blev bygget: en modtager der svarer `503` hele budgettet igennem
+fik tre forsøg, og så var alarmen væk. Passet skriver `wasUp: false`, så næste pass
+rejser ingen begivenhed, intet i loopen sender igen, og `state.json` holdt ingen
+hukommelse om den. Den betalte kanal — den kanal, der er sat op *fordi* ingen sidder
+ved terminalen — hørte intet om nedbruddet og fik så en `is UP` om en genopretning
+den aldrig blev fortalt om.
+
+Derfor gemmes en alarm, der ikke kom af sted, i `state.json` under `outbox` og
+forsøges igen ved **starten af næste pass**, før de nye hændelser sendes, så
+rækkefølgen i kanalen er den rækkefølge, alarmene opstod i.
+
+| Spørgsmål | Svar |
+|---|---|
+| Hvad gemmes | Hændelsen som den blev rejst: `url`, `type`, `message`, `measuredAt`, `previousChecked`, `finalUrl` — plus `queuedAt` (første fejltidspunkt) og `attempts` |
+| Hvad gemmes **aldrig** | Webhook-URL'en (den er næsten altid et token), modtagerens svartekst, licensen, og `message` er afkortet til 500 tegn |
+| Kapacitet | 20 poster; den ældste gives op først, når listen er fuld |
+| Dedupe | Én post pr. `(url, type)`: en nyere alarm om det samme erstatter ikke den ældre, fordi den ældre er den der fortæller hvornår nedbruddet begyndte |
+| Alder | Alarmen opgives efter 30 minutter — en kanal der var nede i en halv time er ikke værd at få en gammel `is DOWN` fra en kunde, der for læng siden har fernet fejlen |
+| Hvad kunden ser mens den venter | Én linje pr. pass: `📬 1 alert is still waiting for your channel: <url> is DOWN — HTTP 500 (waiting 12 min, 2 tries)` |
+| Hvad kunden ser når den opgives | `⚠️  Giving up on an alert that was never delivered: <url> is DOWN — HTTP 500 (waited 30 min, 3 tries). The channel received nothing. Check the webhook URL and that the receiver is up.` |
+| Rækkefølge | Ældste først, og de ventende sendes før passets egne hændelser |
+| Prisen | En alarm kan komme **sent** (efter 30 s-intervallet, ikke i det pass den opstod i) og en kan komme **fordi et senere pass fejlede**; den kan aldrig komme, hvis loopet er stoppet |
+
+Udsendelses-fejlen siger stadig, at intet i *det* pass sender den igen — det er
+sandt, og outbox'en er det næste sted den bliver prøvet. Genprøvningen i §2 og
+outbox'en er to forskellige ting: genprøvningen er samme pass (én alarm, ét budget),
+outbox'en er de følgende pass.
+
+En `4xx` gemmes ikke. Det er modtagerens svar på *denne* alarm — en død token eller
+en forkert URL bliver ikke bedre af at vente, og en gemt post ville bare vokse.
+
 ## 3. Lokal notification (Pro)
 
 - macOS: `osascript display notification`. Fungerer i CLI-watch og i desktopappen.
