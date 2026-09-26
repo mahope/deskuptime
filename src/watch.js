@@ -157,7 +157,20 @@ export async function runPass(state, opts = {}) {
     const url = urls[index];
     const entry = state.urls[url];
     const result = results[index];
-    const firstPass = entry.wasUp === null || entry.wasUp === undefined;
+    // The previous verdict, read through readEntry() like every other surface.
+    // This used to compare the raw `entry.wasUp` to `true`/`false` itself, so a
+    // hand-edited, restored or half-written `wasUp: "yes"` (or `1`, or "false")
+    // matched none of the three branches below and the pass produced *no event
+    // at all* — and since notify() and sendWebhook() fire only from events, a
+    // paying customer got no desktop notification and no webhook about a site
+    // that was down, while the terminal said "remains DOWN" on the same pass.
+    const previous = readEntry(entry).verdict;
+    // A baseline is "this site has never been checked", not "the last verdict
+    // is unreadable" — an entry that already has a pass behind it must not be
+    // announced as a first observation, and its DOWN state must reach the
+    // customer. wasUp is rewritten from the fresh result at the end of the
+    // pass, so the entry repairs itself and the alert is not repeated.
+    const firstPass = previous === 'unknown' && !entry.lastChecked;
 
     if (firstPass) {
       const status = result.healthy ? 'UP' : 'DOWN';
@@ -165,9 +178,12 @@ export async function runPass(state, opts = {}) {
         ? ` (${result.statusCode}) — ${result.responseTimeMs}ms`
         : result.error ? ` — ${result.error}` : '';
       events.push({ url, type: 'baseline', message: `baseline recorded: ${status}${detail}` });
-    } else if (result.healthy && entry.wasUp === false) {
+    } else if (result.healthy && previous === 'down') {
       events.push({ url, type: 'up', message: `is UP (${result.statusCode}) — ${result.responseTimeMs}ms` });
-    } else if (!result.healthy && entry.wasUp === true) {
+    } else if (!result.healthy && (previous === 'up' || previous === 'unknown')) {
+      // An unreadable previous verdict cannot prove a transition, but the site
+      // is down *now* and the customer is paying to hear about it. Silence here
+      // is the bug; the wording claims nothing about when it broke.
       events.push({ url, type: 'down', message: `is DOWN${result.error ? ' — ' + result.error : ''}` });
     }
 

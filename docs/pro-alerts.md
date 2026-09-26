@@ -44,6 +44,14 @@ noget, der ikke findes.
 Kommando: `deskuptime watch <url> --webhook <url>`.
 
 - **Hvornår:** én POST pr. hændelse, dog aldrig for `baseline`-begivenheder.
+- **Hvornår kommer der et `down`:** når et site *nu* er nede, og forrige måling enten
+  var op eller ikke kunne læses. En `wasUp` i state-filen, der hverken er `true` eller
+  `false` (håndskrevet, genskabt fra backup, halvskrevet), er **ikke** et site der var
+  op: `runPass` læser den gennem `readEntry()` — samme ene ejerskab som `check`,
+  `watch --status`, `status` og kundenapporten — så et ulæseligt forrige svar aldrig
+  kan få en DOWN-begivenhed til at tie. Beskeden siger *er* nede, aldrig *hvornår* det
+  gik ned, for det kan den ikke vide. Passet skriver `wasUp` tilbage fra målingen, så
+  det er én alarm og ikke én pr. pass.
 - **Metode:** `POST`, `Content-Type: application/json`.
 - **Timeout:** 10 s. Et hangende endpoint kan ikke låse overvågningsloopet.
 - **Retry:** ingen. Levering er best-effort; næste hændelse sender igen. Ingen outbox,
@@ -58,7 +66,7 @@ Payload:
 ```json
 {
   "product": "deskuptime",
-  "type": "down | up | ssl_warning | content_changed",
+  "type": "down | up | ssl_warning | ssl_expired | content_changed",
   "url": "https://yoursite.com",
   "message": "is DOWN — HTTP 503",
   "timestamp": "2026-09-25T14:26:12.000Z"
