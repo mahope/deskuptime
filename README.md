@@ -40,13 +40,14 @@ npx @mahope/deskuptime watch https://yoursite.com --once
 
 # Show current status of monitored URLs without checking
 npx @mahope/deskuptime watch --status
+npx @mahope/deskuptime unwatch https://yoursite.com   # stop monitoring, free the slot
 
 # Show help
 npx @mahope/deskuptime --help
 ```
 
 Watch mode stores state in `~/.deskuptime/state.json` (or the native user profile on Windows) and resumes where it left off.
-The first pass records a baseline for every URL. `--once` runs exactly one pass, saves state, and exits with code `0` when all monitored URLs are healthy, `2` when any URL is DOWN, or `1` for invalid usage. `watch --status` only reads the saved state and never contacts monitored URLs.
+The first pass records a baseline for every URL. `--once` runs exactly one pass, saves state, and exits with code `0` when all monitored URLs are healthy, `2` when any URL is DOWN, or `1` for invalid usage. `watch --status` only reads the saved state and never contacts monitored URLs. `unwatch <url>` stops monitoring a URL and frees its slot — its 35-day uptime history is kept, and monitoring it again starts the counters from zero.
 It prints a line on every status change: site down 🚨, back up ✅, SSL expiring within 14 days ⚠️, or content changed 🔄. An SSL warning is emitted once per crossing of the 14-day threshold; recovery resets it.
 
 ## Status policy

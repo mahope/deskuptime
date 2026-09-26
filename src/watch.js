@@ -517,6 +517,51 @@ export async function runOnce(urls, opts = {}) {
 }
 
 /**
+ * Stop monitoring URLs, and free the slot they held.
+ *
+ * Monitoring used to be a one-way street: `watch <url>` added a URL to
+ * `state.json` and nothing ever took it out again. A site that was decommissioned,
+ * a project that ended or a typo that got added by mistake stayed in the watch
+ * list, in `watch --status`, in `deskuptime status` and in every client report —
+ * and on the free tier it permanently consumed one of the three slots, so the
+ * only way to monitor a fourth site was to hand-edit `state.json`, the file that
+ * also holds the license key. A stopped URL is a real thing a user needs to be
+ * able to do, so it gets a command.
+ *
+ * Only `state.urls` changes: the license record and every other URL are written
+ * back untouched, and the daily history in `history.json` is left alone, because
+ * it ages out on its own (HISTORY_DAYS) and it is what a report of the last 30
+ * days is built from. Re-adding the URL with `watch <url> --once` starts its
+ * counters again, which the caller says out loud rather than letting the user
+ * discover it as an unexplained uptime reset.
+ *
+ * The state lock is the same one `runOnce` takes, so unwatching during a cron
+ * pass cannot be overwritten by that pass's save.
+ */
+export function unwatchUrls(urls, opts = {}) {
+  const wanted = [...new Set(urls)];
+  const release = acquireStateLock(stateFileFrom(opts));
+  if (!release) return { removed: [], missing: wanted, busy: true, remaining: null };
+  try {
+    const state = loadState(opts);
+    const removed = [];
+    const missing = [];
+    for (const url of wanted) {
+      if (state.urls[url]) {
+        delete state.urls[url];
+        removed.push(url);
+      } else {
+        missing.push(url);
+      }
+    }
+    if (removed.length > 0) saveState(state, opts);
+    return { removed, missing, busy: false, remaining: Object.keys(state.urls).length };
+  } finally {
+    release();
+  }
+}
+
+/**
  * Send a desktop notification when possible (Pro only).
  * macOS: osascript. Other platforms: silently skipped for now.
  */

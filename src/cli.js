@@ -7,12 +7,13 @@
  *   deskuptime check <url> [url2 url3 ...]
  *   deskuptime headers <url>          Redirect chain + security headers
  *   deskuptime watch <url> [--interval 300] [--webhook URL]  Monitor URLs
+ *   deskuptime unwatch <url> [url2 ...]  Stop monitoring URLs
  *   deskuptime --version
  *   deskuptime --help
  */
 
 import { checkUrls, summarize } from './engine.js';
-import { startWatch, runOnce, printStatus, printPass, loadState, saveState, freeLimitMessage, isPro } from './watch.js';
+import { startWatch, runOnce, printStatus, printPass, loadState, saveState, freeLimitMessage, isPro, unwatchUrls } from './watch.js';
 import { buildReport, renderReportJson, renderReportMarkdown } from './report.js';
 import { readFileSync } from 'fs';
 import { join, dirname } from 'path';
@@ -43,6 +44,7 @@ USAGE:
   deskuptime headers <url>      Redirect chain, HTTPS enforcement + security headers
   deskuptime watch <url> [--interval 300] [--webhook URL]  Monitor in background (free: up to ${FREE.urlLimit} URLs)
   deskuptime watch <url> --once                      Run one monitoring pass and exit
+  deskuptime unwatch <url> [url2 ...]  Stop monitoring URLs and free the slot
   deskuptime watch --status                         Saved status, no network calls (marks a pass older than ${STALE_AFTER_DAYS} d as stale)
   deskuptime report [--title "Client"] [--days 30] [--json]  Client-ready uptime report (Pro)
   deskuptime activate <key>     Unlock Pro with your license key
@@ -546,6 +548,40 @@ if (command === 'watch') {
   }
 }
 
+// ── Unwatch (stop monitoring) ──
+if (command === 'unwatch') {
+  const rawArgs = args.slice(1);
+  const unknownFlag = rawArgs.find(value => value.startsWith('--'));
+  if (unknownFlag) {
+    console.error(`❌ Error: Unknown option: ${unknownFlag}`);
+    process.exit(1);
+  }
+  if (rawArgs.length === 0) {
+    console.error('❌ Error: at least one URL required');
+    console.error('Usage: deskuptime unwatch <url> [url2 ...]');
+    process.exit(1);
+  }
+  const invalidUrls = invalidHttpUrls(rawArgs);
+  if (invalidUrls.length > 0) {
+    for (const url of invalidUrls) console.error(`❌ Error: Invalid URL: ${url}`);
+    process.exit(1);
+  }
+  const result = await unwatchUrls(rawArgs);
+  if (result.busy) {
+    console.error('❌ Error: another watch pass is already running. Try again after it finishes.');
+    process.exitCode = 1;
+  } else {
+    for (const url of result.removed) console.log(`✅ No longer monitoring: ${safeText(url, { max: 0 })}`);
+    for (const url of result.missing) console.error(`❌ Error: not monitored: ${safeText(url, { max: 0 })}`);
+    if (result.removed.length > 0) {
+      console.log(`   ${result.remaining} URL(s) still monitored. Its uptime history is kept (${HISTORY_DAYS} days) — monitoring it again starts the counters from zero.`);
+    }
+    // Nothing removed means nothing changed, so the caller gets a failure code
+    // instead of a green run that removed nothing.
+    process.exitCode = result.removed.length > 0 ? 0 : 1;
+  }
+}
+
 // ── Status ──
 if (command === 'status') {
   const { describeLicense, LICENSE_STATUS, BUY_URL } = await import('./license.js');
@@ -683,7 +719,7 @@ if (command === 'report') {
 // check/headers/activate/deactivate fall through here after setting process.exitCode instead of calling
 // process.exit(): exiting while an undici fetch handle is still closing trips a libuv
 // assertion on Windows (src/win/async.c), so the event loop must drain naturally.
-if (!['check', 'headers', 'activate', 'deactivate', 'watch', 'report'].includes(command)) {
+if (!['check', 'headers', 'activate', 'deactivate', 'watch', 'unwatch', 'report'].includes(command)) {
   console.error(`Unknown command: "${command}"`);
   console.error('Run "deskuptime --help" for usage.');
   process.exit(1);
