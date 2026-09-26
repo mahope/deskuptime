@@ -2825,6 +2825,127 @@ sætningen.
 `git diff --check` grønne på Node 26.7.0. `e7affbd` på `ceo/unreadable-state`,
 fast-forward-merget til `main` og pushet 2026-09-26.
 
+## Status fra denne iteration (61, P1-45 — en adgangskode i en URL blev gemt, printet og sendt til kunden)
+
+**Hvorfor denne flade:** ❓ 1–3 er stadig ubesvarede, så iterationen tog den
+fjerde valgfri kandidat fra rækken: **hvad der sker, når den URL en bruger
+overvåger ikke kan sendes en request til.** P1-40 målte nøgler uden adresse,
+P1-44 en fil der ikke kan læses; ingen målte en URL, der er gyldig og umulig.
+
+**Målt først, nul kode ændret.** Rigtig CLI, temp-HOME, lokalt site der svarer
+200, Pro fra `passthrough`-stubben (aldrig et kald til mahope.tools):
+
+```
+watch http://demo:sup3rsecret@127.0.0.1:PORT/ --webhook … --interval 30
+  →  👀 Monitoring 1 URL(s) …            ← loopen startede
+  →  • …/staging baseline recorded: DOWN — Request cannot be constructed
+       from a URL that includes credentials
+report
+  →  | http://demo:sup3rsecret@127.0.0.1:PORT/staging | DOWN | 0 % … |
+  →  "no page content, response headers or license data is included"
+state.json →  nøglen med adgangskoden i, klar til læsning
+```
+
+Fire skader, én årsag: `http://demo:pass@…` **er** en gyldig adresse, så den
+passede `isHttpUrl()` overalt — og Node's `fetch` bygger ikke en request til
+den. 1. **Løgn om sitet:** et site der svarede 200 hele tiden blev meldt DOWN
+på hvert pass, for altid. 2. **Penge i et kundedokument:** rapporten bureauet
+sender til sin kunde indeholdt adgangskoden i klar tekst, under en linje der
+lover at intet hemmeligt står i. 3. **På disk:** nøglen med koden blev skrevet
+til `state.json` — filen med licensnøglen i. 4. **Terminal og JSON:**
+`check` skrev den samme linje på stdout og i `--json` (exit 2, `DOWN`).
+
+**Efter, samme måling:** kommandolinjen afviser den med en sætning der nævner
+grunden og aldrig koden, og **intet skrives** — `watch` efterlod slet ingen
+state-fil. Et nøgle med kode i der *allerede* ligger i filen (håndredigering,
+restore) er P1-40s egen klasse: passet springer det over, de øvrige sites
+kører, rapporten tæller det uden for sites, og rapporten + begge lister viser
+nøglen **uden** kode.
+
+**Én ny ejer, ikke fire patches.** `isCheckableUrl()` i `src/status.js` er den
+ene beslutning — P1-40's lås holder derfor *også* for denne klasse:
+`partitionUsableUrls().unusable` er stadig præcis `invalidHttpUrls()` i modsat
+retning, så en nøgle kan ikke springes over i et pass og være dødelig på en
+kommandolinje. `urlCredentials()`/`hasUrlCredentials()` ejer grunden,
+`withoutCredentials()` ejer den rensede streng, `invalidUrlMessage()` og
+`unusableUrlNote()` er de to sætninger, og ingen af dem kan skrive en kode.
+Rapportens række og begge terminal-lister læser den rensede streng fra
+`buildReport()`/række-ejeren; historikken læses stadig med den rigtige nøgle,
+fordi den rensede form er noget en læser ser, ikke noget vi slår op.
+
+**To fund undervejs, begge rettet i koden, ikke i testen.** 1) Min egen måling
+havde kun set `status` og `report`; den viste `❌ http://demo:…` i
+`Monitored URLs` — den liste indeni listerne havde hver sin tegnplads, så
+redigeringen blev gjort ved række-ejeren, der alle lister læser. 2) Den korte
+sætning (`brief`) låste P1-40-testene på `"not a full address"` — men
+`http://demo:pass@…` *er* en fuld adresse, så den korte form siger nu den
+rigtige grund for hver af de to klasser, og alle otte gamle P1-40-tests er
+stadig grønne uændrede.
+
+**8 nye tests i `test/credentials.test.js`** (registreret i `npm test` — samme
+fælde som P1-10) → **411/411** (403 + 8); audit 0/0; `node --check` alle
+JS-filer, `matrix --check` og `git diff --check` grønne på Node 26.7.0. Hver
+test måler den rigtige overflade med rigtig CLI mod et rigtig lokalt site: ingen
+kommando accepterer nøglen, ingen af dem skriver koden (verificeret på stdout,
+stderr, JSON, state.json og rapporten), et site der svarer 200 er stadig UP
+bagefter, og et håndredigeret nøgle med kode i tager ikke de øvrige sites med
+sig. **Ingen exit-kode ændret for en eksisterende kommando** (en URL med kode
+var aldrig gyldig indgang — den døde som DOWN), intet JSON-felt tilføjet, ingen
+matrix-række, ingen claim, ingen deploy-note nødvendig. `ceo/credential-url`,
+`00a00d1`, fast-forward-merget til `main` og pushet 2026-09-26.
+
+**Åbent og bevidst:** en nøgle med kode i, der ligger i `state.json` fra en
+håndredigering eller en restore, er *redigeret i visningen* på alle flader,
+men filens bytes er vi ikke i stand til at rense — den er brugerens egen, og
+en stille omskrivning ville være en værre løgn end at lade den ligge. Kun
+`deskuptime unwatch 'http://demo:…@…'` fjerner den, og det virker.
+
+**Måle-noter:** ét `npm test`-kørsel gav en enkelt fejl (`2 !== 3`) som ikke
+kunne genskabes i to efterfølgende kørsler (411/411 begge gange); den er
+noteret her i stedet for forskjulet, fordi jeg ikke fandt den. Ingen
+review-agent — over 30-minutters grænse.
+
+**Næste:** ❓ 1–3, ellers en målt opgave.
+
+### P1-45 — FÆRDIG 2026-09-26 (`ceo/credential-url`) — En URL med adgangskode må ikke hverken gemmes eller rapporteres
+
+**Begrundelse (målt, ikke formodet):** `deskuptime watch http://demo:pass@…`
+startede en loop, der svarede `DOWN` på hvert pass for et site der svarede
+200, skrev nøglen med adgangskoden i `state.json` og printede den i
+kundenapporten under en linje der lover, at intet hemmeligt står i
+dokumentet. `check` skrev den samme nøgle på stdout og i `--json`.
+
+**Root cause:** `http://demo:pass@…` er en gyldig adresse, så den passerede
+`isHttpUrl()` overalt — og Node's `fetch` bygger ikke en request til den. Der
+var ingen beslutning om, hvilke adresser et pass faktisk kan sende til.
+
+**Fix:** `isCheckableUrl()` i `src/status.js` er den ene beslutning (P1-40's
+lås holder dermed også for denne klasse); `urlCredentials()` /
+`hasUrlCredentials()` ejer grunden, `withoutCredentials()` den rensede streng,
+`invalidUrlMessage()` og `unusableUrlNote()` er de to sætninger, og ingen af
+dem kan skrive en kode. Kommandolinjen afviser, et gemt nøgle med kode i
+springes over af passet og tælles uden for sites i rapporten, og rapporten +
+begge lister viser nøglen renset.
+
+**Acceptkriterier:**
+
+1. Ingen kommando accepterer en URL med brugernavn eller adgangskode. ✅ målt
+   før (alle fem startede eller svarede DOWN) og efter (exit 1 med grunden)
+2. Ingen overflade skriver koden: stdout, stderr, `--json`, `state.json`,
+   rapporten. ✅ målt med rigtig CLI mod rigtig lokal fixture
+3. `watch` med en sådan URL skriver ingen state-fil overhovedet. ✅ målt før
+   (nøglen på disk) og efter (ENOENT)
+4. Et site der svarer 200 er stadig UP bagefter, altså intet reelt site er
+   berørt. ✅ målt i samme kørsel
+5. Et håndredigeret nøgle med kode i springes over som P1-40s klasse, de øvrige
+   sites fortsætter, og rapporten tæller det uden for `summary.sites`. ✅ målt
+6. P1-40's invariant holder for den nye klasse: `partitionUsableUrls().unusable`
+   == `invalidHttpUrls()` i modsat retning. ✅ låst i test
+
+**Målt:** 411/411 (403 + 8), audit 0/0, `node --check`, `matrix --check`,
+`git diff --check` grønne på Node 26.7.0. `00a00d1` på `ceo/credential-url`,
+fast-forward-merget til `main` og pushet 2026-09-26.
+
 ## ❓ Til Mads
 
 13. ~~Hvad skal et site, vi ikke kan tjekke, gøre ved et pass?~~ **Besvaret i kode 2026-09-26 (P1-40, `ceo/skip-unusable-urls`):** (c) + (b), planens egen anbefaling. En nøgle i `state.json` uden scheme springes over, de øvrige sites fortsætter, nøglen nævnes på hvert pass og på `watch --status`, `status` og i rapporten, og exit 2 beholdes **kun** når intet kunne tjekkes. Målt først: ét `kunde.dk` blandt 25 nøgler dræbte passet med exit 1 og nul tjek. **Valget er ikke gratis, og en nøgle uden adresse er aldrig et nedet site** — den grænse til det andet svar ((a): passet fejler) er én linje i `runPass` plus exit-koden, hvis Mads vil have den. Målingen og koden ligger i afsnittet øverst.
@@ -2889,6 +3010,8 @@ fast-forward-merget til `main` og pushet 2026-09-26.
 - **Iteration 57 (P1-41, målt + fix):** ❓ 1–3 ubesvarede, så målingen gik på den **betalte** kanals spørgsmål — hvad der sker, når *leveringen* ikke virker. P1-50 målte hvilken payload der kommer ud, P1-39 målte en disk der ikke kan skrives; ingen målte det imellem. Målt først med rigtig `watch`-loop, rigtig state-fil, et lokalt site der svarer 500, Pro fra `passthrough`-stubben (aldrig et kald til mahope.tools) og en rigtig modtager der svarer 500 på det første POST: `is DOWN — HTTP 500` i terminalen, `Webhook responded 500`, og **intet** i kanalen — heller ikke 30 s senere, fordi næste pass ikke rejser nogen begivenhed, når `entry.wasUp` er skrevet. En betalt kunde hørte altså intet om et nedbrud og fik så en `is UP` for en genopretning den aldrig blev fortalt om. **Fix:** samme regel som licensklienten (P2-1 del B) — `WEBHOOK_ATTEMPTS = 3`, 500 ms pause, `webhookRetryable()` som den ene ejer (kun `5xx`/`429`; et `4xx` er modtagerens *svar* og spørges aldrig igen), kroppen bygget én gang så en genprøvning sender samme alert, og **alle forsøg deler ét 10-s-budget** (tre 10-s-forsøg ville holde loopet længere end det korteste Pro-interval). Dobbeltleverings-prisen er dokumenteret i `docs/pro-alerts.md` §2. Målt efter: blip → `delivered type=down is DOWN — HTTP 500`, ingen advarsel. 8 nye tests (den målte kunderejse med to rigtige passer: én blip giver præcis én besked, og den anden pass rejser ingen begivenhed) → **382/382** (374 + 8); audit 0/0; `node --check`, `matrix --check`, `sh -n`/`bash -n`, `git diff --check` grønne på Node 26.7.0. **Seks mutationer målt, alle døde** (5/1/1/2/1/1 fejl) — men først efter at målingen blev rettet: min mutationskørsel brugte `git checkout` som gendannelse, fem mutationer ændrede slet ikke filen og kom ud som "0 fejl" (vished, ikke dækning — fjerde gang i mit arbejde), og samme kørsel ødelagde det ucommittede `src/watch.js`, som blev skrevet igen. Den sjette mutation overlevede det korrekt og afslørede en manglende test (hvert forsøg med sit eget budget), som blev skrevet. **Maskinfakt der gør gaten rød uden grund:** standard-`node` på denne maskine er v22.23.2, så 20 tests (install.sh ×7, Action ×13) fejler med `::error::Node.js 24+ is required` — også på ren `main`; rigtig kørsel er `PATH="/opt/homebrew/bin:$PATH" npm test` (v26.7.0). Ingen kode ændret for det. **Ikke bygget:** en outbox til næste pass — kræver spec først, noteret som næste målte opgave.
 
 ## Iterationslog
+
+- **Iteration 61 (P1-45, målt + fix):** ❓ 1–3 ubesvarede, så målingen gik på den adresse-klasse ingen måling havde rørt: **en URL der er gyldig, men umulig at sende en request til** — `http://demo:pass@…`. Rigtig CLI, temp-HOME, lokalt site der svarer 200, Pro fra `passthrough`-stubben (aldrig et kald til mahope.tools). Før: loopen startede og svarede `DOWN` på hvert pass for et site der svarede 200, fordi Node's `fetch` ikke bygger en request til sådan en URL; nøglen blev skrevet til `state.json`; `report` skrev den i kundenrapportens Site-kolonne under en linje der lover intet hemmeligt i dokumentet; `check` skrev den på stdout og i `--json` med exit 2 og `DOWN`. **Fix:** `isCheckableUrl()` som den ene beslutning i `src/status.js`, så P1-40's lås (passets `unusable` == `invalidHttpUrls()` modsat) også gælder denne klasse; `urlCredentials()`/`hasUrlCredentials()` ejer grunden, `withoutCredentials()` den rensede streng, `invalidUrlMessage()` + `unusableUrlNote()` er de to sætninger og ingen af dem kan skrive en kode; kommandolinjen afviser før skrivning, et håndredigeret nøgle med kode i springes over af passet og tælles uden for sites, rapporten og begge lister viser nøglen renset mens historikken læses med den rigtige. **To fund undervejs rettet i koden:** `Monitored URLs` i `status` havde hver sin tegnplads (fandet af min egen måling, rettet ved række-ejeren), og den korte sætning låste P1-40 på `"not a full address"`, som er en løgn for `http://demo:pass@…` — nu siger den den rigtige grund for hver klasse, og alle otte gamle P1-40-tests er uændrede grønne. 8 nye tests i ny fil `test/credentials.test.js` (lagt til i `npm test` — samme fælde som P1-10) → **411/411** (403 + 8); audit 0/0; `node --check` alle JS-filer, `matrix --check`, `git diff --check` grønne på Node 26.7.0. **Ingen exit-kode ændret for en eksisterende kommando** (sådan en URL døde som DOWN før), intet nyt JSON-felt, ingen matrix-række, ingen claim, ingen deploy-note nødvendig. `ceo/credential-url`, `00a00d1`, fast-forward-merget til `main` og pushet 2026-09-26. **Noteret, ikke forskjult:** ét `npm test`-kørsel viste én fejl (`2 !== 3`) der ikke genskabtes i to efterfølgende kørsler (411/411 i to efterfølgende kørsler); ingen review-agent, over 30-minutters grænse. **Åbent:** en nøgle med kode i der kommer fra en håndredigering eller restore er renset i visningen, men filens bytes renses ikke — kun `unwatch` fjerner den.
 
 - **Iteration 60 (P1-44, målt + fix):** ❓ 1–3 ubesvarede, så målingen gik på den sidste indgang til staten ingen måling havde rørt: **en `state.json` der findes, men ikke kan læses.** Rigtig CLI, temp-HOME, Pro-stub (aldrig et kald til mahope.tools), fil kodet midt i licensnøglen. Før: `status` → `Free tier … Buy: <kasse-link>` + `Monitored URLs (0)`, `watch --status` → `No URLs monitored`, og `watch <url>` skrev en ny fil oveni, så **nøglen forsvandt fra disken** (`rg` fandt den ikke mere). Fire skader, én årsag: `loadState()` slugte parsefejlen. Efter: `stateReadErrorMessage()` som den ene ejer, læst før licensblokken i `status` (aldrig kasse-link til en kunde med en nøgle i filen), samme gate i rapportens Pro-gate og i `activate`/`deactivate` (**før** licensserveren kaldes — ellers tages en plads, der ikke kan gemmes), og `saveState()` nægter at skrive over en ulæsbar fil, med `stateWriteErrorMessage()` oversættende koden, så "check free disk space" ikke bruges om en kodet fil. Modvægt målt: læsbar fil skrives uændret, og et pass på en ulæsbar fil kører videre med advarselsen (P1-39 urørt). 7 nye tests i ny fil `test/stateunreadable.test.js` (lagt til i `npm test` — samme fælde som P1-10) → **403/403** (396 + 7); audit 0/0; `node --check`, `matrix --check`, `git diff --check` grønne på Node 26.7.0. **Ingen claim, ingen matrix-række, ingen exit-kode ændret for en eksisterende kommando** (de tre nye exit 1 gælder kun den nye ulæsbare tilstand), intet payload-felt, ingen deploy-note nødvendig. `ceo/unreadable-state`, `e7affbd`, fast-forward-merget til `main` og pushet 2026-09-26. **Målt og bevidst ikke rettet:** `history.json` læses med samme mønster og falder tilbage til tom uden en sætning; den kan ikke slette en licensnøgle, så den er noteret i opgaven.
 
