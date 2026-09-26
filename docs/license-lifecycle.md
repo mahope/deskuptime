@@ -35,7 +35,7 @@ der gør en kort blivende fejl til en reel fejl. Et `Retry-After` på mere end 2
 gør, at vi **ikke** genprøver: ratelimiteren beder os komme tilbage senere, og
 det er cached-grace-vinduet, der dækker det.
 
-## 2. De fem tilstande
+## 2. De seks tilstande
 
 `deskuptime status` viser præcis én af dem — aldrig bare "nøgle fundet".
 
@@ -45,6 +45,7 @@ det er cached-grace-vinduet, der dækker det.
 | `cached` | Ingen oplysning, men seneste bekræftelse er under 7 dage gammel | Ja |
 | `unverified` | Ingen oplysning i over 7 dage — nøglen er **aldrig afslået** | Nej |
 | `invalid` | Serveren har afslået nøglen | Nej |
+| `released` | Pladsen er **frivilligt** afgiven på denne maskine (`deskuptime deactivate`) | Nej |
 | `free` | Ingen gyldig licens gemt | Nej |
 
 **Et gemt Pro-ord er en påstand om et check.** `status` er read-only, så et ord
@@ -80,13 +81,28 @@ og `unverified` **viser aldrig et købslink** — kunden har allerede betalt. Ve
 tilbage er `deskuptime activate <license-key>`, som genverificerer nøglen og
 genskaber Pro, hvis serveren svarer igen.
 
+**`released` er ikke en fejl, men en vilje.** En kunde med en licens til 3 maskiner
+flytter den med `deskuptime deactivate` på den gamle maskine og `activate` på den
+nye. Før dette slettede `deactivate` nøglen helt, så maskinen faldt tilbage i
+`free` og svarede med **kassen på to overflader** (`status` og `report`-gaten) —
+præcis den dobbeltkøbs-fælde, `unverified` og `invalid` blev lukket for. Derfor
+efterlader en bekræftet deaktivering en **kvittering uden nøgle**: datoen, plus
+hvor mange af licensens maskiner der var i brug bagefter (serverens egen
+`devices_in_use`). Den er ikke Pro, den holder ingen nøgle, og ingen flade må
+svare med et købslink på den — vejen tilbage er `deskuptime activate
+<license-key>`. Ved aktivering gemmes `devices_in_use` og `expires_at` også, så
+`status` kan vise pladserne og udløbsdatoen bagefter i stedet for kun i den linje,
+de stod i da de kom. En record med både nøgle og `released: true` læses som
+licensen, fordi deaktivering fjerner nøglen; flaget er da en rest.
+
 Nøglen slettes **aldrig** automatisk. Den bliver liggende, så en senere vellykket
 check gendanner Pro, og så support kan se hvilken nøgle kunden har.
 
 **Én gate-t tekst til alle Pro-overflader.** `proGateMessage(license, feature)`
 i `src/license.js` er det eneste sted, der fortæller en kunde hvorfor en
 Pro-funktion er lukket, og det bruger `describeLicense()`'s egen tilstand. Derfor
-kan `report` og `--webhook` ikke modsige `deskuptime status`: en `unverified`
+kan `report` og `--webhook` ikke modsige `deskuptime status`: en `released`
+maskine får "activate den samme nøgle igen" og aldrig kassen, en `unverified`
 nøgle får overalt beskedet "genverificér nøglen" og **aldrig** et købslink, en
 `invalid` nøgle får købslinket kun som "hvis du ikke har købt endnu", og en helt
 manglende licens (`free`) er det eneste tilfælde, hvor kassen er svaret.
@@ -101,7 +117,7 @@ efter alder præcis som `refreshLicense` ville: inden for 7 dage `active`, deref
   i en `0700`-mappe på POSIX. En eksisterende fil med for vide rettigheder
   strammes ved næste skrivning.
 - En licensrecord valideres ved indlæsning: nøglen skal være 32 hex-tegn,
-  `device_id` skal være 1–128 tegn, `status` skal være en af de fem. Alt andet
+  `device_id` skal være 1–128 tegn, `status` skal være en af de seks. Alt andet
   læses som "ingen licens" — en beskadiget state-fil giver hverken Pro eller et
   crash.
 - `deactivate` sletter først lokal state, når serveren svarer
@@ -120,11 +136,12 @@ Ingen licensnøgle, device-id eller webhook-hemmelighed skrives i logfiler.
 1. Samme klassificering af 200/400/403/404/408/409/425/429/5xx og malformed 200.
 2. Samme 10 s timeout pr. forsøg, samme én genprøvning med 400 ms pause, samme
    to-forsøgs-loft og samme regel om at et langt `Retry-After` ikke genprøves.
-3. Samme fem tilstande i UI'en — især at `invalid` og `unverified` slår Pro fra med
+3. Samme seks tilstande i UI'en — især at `invalid` og `unverified` slår Pro fra med
    det samme, og at `unverified` ikke må få kunden til at tro nøglen er død.
    Samme regel for **`active` og `cached`**: et gemt Pro-ord må kun vises som Pro,
    mens sidste bekræftelse er under 7 dage gammel (reglen ovenfor), ellers viser
-   UI'en en bekræftelse der aldrig kom.
+   UI'en en bekræftelse der aldrig kom. Samme regel for **`released`**: en
+   kvittering uden nøgle, ingen Pro, intet købslink — kun "activate igen".
 4. Samme 7-dages grace uden at skrive gamle `license.instance`-id'er om
    (se P0-6: CLI'en bruger stadig det gemte id, indtil migreringen er dokumenteret).
 5. `0600` state-fil i `0700`-mappe, atomisk skrivning, validering ved indlæsning.

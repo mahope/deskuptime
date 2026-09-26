@@ -1,9 +1,7 @@
-# IMPLEMENTATION_PLAN.md
-
 STATUS: I GANG
-Iteration: 34 — 2026-09-26
-Arbejdsgrene: `ceo/status-license-truth` (P1-18, målt + fix)
-Næste handling: **P1-18 er færdig.** ❓ 2 og ❓ 3 var stadig ubesvarede, så målingen gik videre på den sidste overflad, P1-13 → P1-17 ikke havde rørt: **license-fladen** i `deskuptime status`. Den er det eneste sted i repoet, hvor et antal og en dato kommer uden om `readSslState`/`formatMs`/`checkAgeDays`, og målingen fandt præcis P1-17s fejl igen, i en anden overflad: **verdret `active` var en måling DeskUptime ikke havde lavet.** `describeLicense` anvendte 7-dages grace-vinduet på `cached` — med en begrundelse i koden — men ikke på `active`, som er det *stærkere* ord. Målt med den rigtige CLI og 12 rigtige state-filer: `{status: active, validatedAt: 41 d siden}` skrev `Pro license: active, last verified 2026-08-16`, mens den samme fil med ordet `cached` skrev `Pro license: unverified — not verified for 41 days`. To filer der adskiller sig ved ét gemt ord, modsatte domme om identisk evidens. Værre: `active` **uden** `validatedAt` skrev `Pro license: active, not verified yet` — ét ord der siger bekræftet og en halvsætning der siger aldrig verificeret. Og målingen fandt den anden fejl, som P1-13/P1-14 altid gjorde: beslutningen havde **to ejere**. `isPro()` i `src/watch.js` læste `license.status` direkte, så den 41 dage gamle `active` gav Pro i gaten (`report`, `--webhook`, ubegrænsede URLer)mens `status` sagde `unverified` om den samme nøgle — og en retning alene ville have skabt et nyt modsigende par. Rettelsen: `describeLicense()` er den ene læsning af hvilket ord en gemt licens må bære (et Pro-ord kun mens dets seneste bekræftelse er i vinduet, en record uden bekræftelsestid er ikke `active`), `isPro()` spørger i stedet for at eje, og nøglen slettes aldrig — næste check gendanner `active`. Fund 3 fra målingen: `free` var den eneste Pro-relevante tilstand uden købsvej, og sluttede ved `activate <license-key>`, en nøgle en gratisbruger ikke kan have uden at købe først. Den peger nu på kontraktens købslink med navn, pris og de byggede Pro-værdier, hentet fra `proExtras()` i `src/features.js` — samme matrix-ejer som npm-beskrivelsen, så den ikke kan love en ubygget kanal. Svar 4 bekræfter den hærdede egenskab: `deskuptime status` er stadig read-only og netværksfri, målt med en `fetch`-fælde (exit 9) og et `mtime`-tjek på state-filen — ingen kald, ingen skrivning. 6 eksisterende tests viste sig at hvile på fixtures uden `validatedAt` (et `active` ord med intet bagved); de er rettet til det `refreshLicense` faktisk skriver, og de nye tests låser den nye regel adfærdsmæssigt. 3 målte mutationer døde alle: `active` fjernet fra reglen → 2 fejl, `isPro` ejer sit ord igen → 1 fejl, købslinket fjernet fra `free`-linjen → 2 fejl. Node 26.7.0: `npm ci --ignore-scripts`, **279/279** tests (274 + 5), `npm run audit` 0/0, `node --check` alle JS-filer, `matrix --check`, `sh -n`/`bash -n` og `git diff --check` grønne. Næste iteration: ❓ 2/❓ 3 hvis besvaret, ellers en ny research-iteration — de målings-flader er nu alle igennem, så kandidater er `activate`/`deactivate`-fladen (sædetallende `devices_in_use` skrives aldrig til state, så `status` kan ikke vise hvor mange af de 3 pladser der er i brug) og de to claims ❓ 1 og ❓ 4.
+Iteration: 35 — 2026-09-26
+Arbejdsgrene: `ceo/release-receipt` (P1-19, målt + fix)
+Næste handling: **P1-19 er færdig.** Efter P1-18 var `activate`/`deactivate`-fladen den sidste målte overflad, og målingen fandt den dødsworste fejl i licenslifecycle: `deskuptime deactivate` slettede nøglen helt, så den maskine der **frivilligt afgiver** sin Pro-plads for at flytte licensen til en anden maskine faldt tilbage i `free` og blev **solgt licensen igen på to overflader** — `status` skrev `Free tier … Buy: <link>`, og `report` svarede `Pro unlocks it here: <link>`. Det er præcis den dobbeltkøbs-fælde, P1-13 lukkede for `invalid` og P1-18 for `unverified`, nået ad den vej man frivilligt går ind ad. Fund 2 fra målingen: serverens `devices_in_use` og `expires_at` blev kasseret ved både aktivering og deaktivering, så **pladstallet levede i én linje, én gang i licensens liv** — en kunde der købte 3 pladser kunne ingen senere se hvor mange der var i brug. Fund 3: 409-svaret (`Device limit reached — deactivate another machine first`) nævner hverken kommandoen eller antallet af pladser, så den fjerde maskine fik `sit i hakke` på en netop betalt licens. Rettelsen: en bekræftet deaktivering efterlader en **kvittering uden nøgle** (`released: true`, dato, pladser i brug) i stedet for at slette licensen, `released` er den **sjette tilstand** og `describeLicense()` læser den før `free`, `proGateMessage()` har egen gren der aldrig svarer med kassen, og aktiveringssvaret gemmes så `status` kan vise pladser og udløb bagefter som `3 of 3 machines in use when activated` — mærket som en kendsgerning om aktiveringsøjeblikket, fordi `validate` ikke rapporterer pladser. Målt end-to-end med rigtig CLI, rigtig state-fil og en stub-licensserver preloadet ind i CLI'en (aldrig et skriv mod mahope.tools): frigiven maskin siger nu `Pro license: seat released on this machine on 2026-09-26, 2 of 3 machines in use.` + `Nothing to buy — the license is yours`, gaten giver `activate igen`, reaktivering gendanner `active`, og `status` er målt read-only under en `fetch`-fælde (exit 9, ingen kald). 11 nye tests i `test/seat.test.js` + 5 målte mutationer (4 / 3 / 2 / 1 / 1 fejl) → **290/290**; `npm run audit` 0/0, `node --check`, `matrix --check`, `sh -n`/`bash -n`, diff-check grønne. `docs/license-lifecycle.md` §2/§5 er skrevet om til seks tilstande, og §5 beder det private desktoprepo spejle kvitteringen. Næste iteration: ❓ 2/❓ 3 hvis besvaret, ellers en ny research-iteration — `report --json` og `watch --status` har endnu ikke været målt på de samme tal-spørgsmål, og `action.yml` har kun været sweepet for fjendtlig tekst.
 
 ## Mission
 
@@ -1110,6 +1108,103 @@ kun som Pro, mens dets seneste bekræftelse er i grace-vinduet, og en record ude
 
 **Filer:** `src/license.js`, `src/watch.js` (`isPro`), `src/cli.js` (`status`-grenen), `test/license.test.js`, `test/matrix.test.js`, `docs/license-lifecycle.md`.
 
+### P1-19 — FÆRDIG 2026-09-26 — En afgiven Pro-plads må ikke sælge licensen igen (`ceo/release-receipt`)
+
+**Begrundelse (missionens prioritet 1: "et køb, der ikke leverer"):** ❓ 2 og ❓ 3 er
+stadig ubesvarede, så målingen gik videre på den sidste overflad, P1-18 pegede på:
+`activate`/`deactivate`-fladen — den vej, en kunde går ad for at **flytte** en
+3-maskines-licens til en ny maskine. Den er den eneste sti i produktet, hvor en
+betalende kunde med vilje ender i `free`.
+
+#### Målingen (rigtig CLI + rigtig state-fil + stub-licensserver, nul kode ændret)
+
+**Fund 1 — den alvorlige.** `deskuptime deactivate` slettede `state.license` helt, så
+maskinen faldt tilbage i `free`, og **kassen kom på to overflader**:
+
+```
+$ deskuptime deactivate
+✅ License deactivated on this machine. The seat can now be used elsewhere.
+$ cat state.json          →  { "urls": {} }              ← nøglen væk
+$ deskuptime status
+Free tier. DeskUptime Pro ($19 one-time, 3 machines) adds unlimited URLs, …
+  Buy: https://buy.stripe.com/7sY9AS9eX3Iu418fJ5bMQ01
+$ deskuptime report
+❌ the client report needs an active Pro license. Pro unlocks it here: https://buy.stripe.com/…
+```
+
+Det er præcis den dobbeltkøbs-fælde, P1-13 lukkede for `invalid` og P1-18 for
+`unverified` — nået ad den vej man **frivilligt** går ind ad. Ikke en fejltilstand,
+men den dokumenterede, tilsigtede succes: enhver kunde der flytter sin licens lander
+i den tilstand, to iterationer har brugt på at gøre uskadelig.
+
+**Fund 2.** Serverens `devices_in_use: 2` i deaktiveringssvaret blev kasseret, så
+kunden fik ingen bekræftelse på at flytningen virkede — og `plan`/`expiresAt` fra
+aktiveringssvaret blev heller ikke gemt: `status` skrev `Pro license: active, last
+verified 2026-09-26` på en licens, hvis pladser og udløbsdato den lige havde
+modtaget. **Sædetallet levede i praksis kun i én linje, én gang i licensens liv.**
+
+**Fund 3.** 409-svaret (`Device limit reached — deactivate another machine first`)
+nævner hverken kommandoen eller antallet af pladser, så den fjerde maskine fik
+`sit i hakke` besked på en licens kunden netop har betalt for tre pladser.
+
+#### Rettelsen
+
+- **Kvittering i stedet for sletning.** En bekræftet deaktivering skriver
+  `{released: true, releasedAt, plan?, machinesInUse?}` — **uden nøgle**, fordi
+  kunden bad om at give den fra sig. `releaseReceipt()` i `src/license.js` bygger
+  den; `cli.js` spørger den.
+- **`released` er den sjette tilstand**, og `describeLicense()` læser den *før*
+  `free`, fordi maskinen ikke er en gratisbruger: `Pro license: seat released on this
+  machine on 2026-09-26, 2 of 3 machines in use.` + `Nothing to buy — the license
+  is yours. To use Pro on this machine again: deskuptime activate <license-key>`.
+- **`proGateMessage()`** får egen gren: samme sætning som `status`, aldrig kassen.
+  `report` og `--webhook` kan derfor ikke modsige `status`, som de ikke måtte før.
+- **Aktiveringssvaret gemmes:** `machinesInUse` og `expiresAt` skrives til state
+  (kun checked værdier — samme `Number.isSafeInteger`-regel som `machinesInUse()` i
+  `src/display.js`), og `status` skriver dem som `3 of 3 machines in use when
+  activated` — **mærket som en kendsgerning om aktiveringsøjeblikket**, fordi
+  `validate` ikke rapporterer pladser, så et udateret tal ville være en gæt.
+- **409** fortæller nu hvilken kommando der frigiver en plads, hvor mange licensen
+  har, og at nøglen er den samme bagefter.
+- `normalizeLicense()` læser nøglen først: en record med både nøgle og
+  `released: true` er en licens med et restende flag, ikke en kvittering.
+- `docs/license-lifecycle.md` §2 er skrevet om til seks tilstande + kvitteringen, og
+  §5 (Rust-kravene) beder det private desktoprepo spejle den.
+
+**Ingen kunde låses ude:** nøglen slettes som før (den var frigivet), `released`
+giver ikke Pro (pladsen er væk), og `deskuptime activate <key>` gendanner præcis
+den tilstand kunden havde — nu med kvitteringen som bevis på, at de ikke skal
+købe noget. Reaktivering er målt end-to-end: `active` igen, exit 0.
+
+**Test (11 nye, `test/seat.test.js` + `test/fixtures/license-stub.mjs`):** en stub
+-licensserver preloadet ind i den **rigtige** CLI (`node --import`) med temp-HOME,
+så skaden måles i de ord kunden læser, og licensserveren aldrig skrives til.
+1 end-to-end: `status`/`report`/`deactivate` på en frigiven maskin må hverken
+nævne `buy.stripe.com` eller kalde maskinen "Free tier"; 1 serverens
+`devices_in_use`-svar bruges i deaktiveringslinjen + flyttekommandoen; 1 kvittering
+uden nøgle og `isPro === false`; 1 pladser/udløb gemt og mærket "when activated";
+1 409 nævner kommandoen og `PRODUCT.machines` og gemmer intet; 1 reaktivering
+gendanner Pro; 1 `status` på frigiven maskin under en `fetch`-fælde (exit 9) er
+stadig exit 0 → read-only og netværksfri; 2 enhedstests på ejerskabet
+(`describeLicense` med/uden valgfrie fakta, gaten mod `describeLicense`'s egen
+sætning); 1 på at kun checked tal overlever (`-1`, `"3"`, `2.5`, `whenever`); 1 på
+at nøglen ikke kan nå en rapport.
+
+**5 målte mutationer, alle døde:** kvitteringen tilbage til `delete state.license`
+→ 4 fejl; `released` læst efter `free` → 3; købslink tilbage i gaten → 2;
+`machinesInUse` ikke gemt ved aktivering → 1; 409-linjen væk → 1.
+
+**Bevis:** Node 26.7.0 — `npm ci --ignore-scripts`, **290/290** (279 + 11),
+`npm run audit` 0/0, `node --check` alle JS-filer, `node tools/matrix.mjs --check`,
+`sh -n`/`bash -n` og `git diff --check` grønne. Ingen afhængighed ændret, ingen ny
+claim i matrixen, ingen exit-kode ændret, ingen deploy-note nødvendig (CLI-repo).
+Commit `3dacc89` på `ceo/release-receipt`, fast-forward-merget til `main` og pushet
+2026-09-26.
+
+**Bemærk til P2:** den nye testfil var ikke i `npm test` før den blev tilføjet — samme
+fælde som P1-10 fandt (testen kan være grøn fordi den aldrig kørte). De 290 er
+reelle.
+
 
 ## ❓ Til Mads
 
@@ -1127,6 +1222,8 @@ kun som Pro, mens dets seneste bekræftelse er i grace-vinduet, og en record ude
 10. **Skal der skæres en ny `v0.2.9-cli`-release?** P0-9b gør curl-stien væsentligt bedre, men *kun* en release med et publiceret `.sha256` gør checksum-verificeringen obligatorisk; lige nu advarer installeren om 0.2.5, fordi ingen af de 12 releases har en sidecar. Release-workflowen uploader automatisk sidecaren, så det eneste arbejde er `git tag v0.2.9-cli && git push --tags` (det gør Mads — agenten laver aldrig tags) og `npm publish` af 0.2.9. Samme release synkroniserer Homebrew-formlen, som stadig peger på en ældre version i det eksterne tap-repo.
 11. Er `v1`-tagget (2026-08-26) med gamle 0.1.3-tarballs og 0.1.4/0.2.6-desktopsassets stadig nødvendigt, eller er det et rodet relikvieskilt, der bør slettes eller omdøbes? Det er det eneste release uden versionssuffix, og det ligger lige i installérens kandidatliste (den springes over i dag, fordi der intet `deskuptime-<ver>.tar.gz`-asset passer til `v1`).
 
+- **Release-note P1-19:** `deskuptime deactivate` efterlader nu en kvittering i stedet for at slette licensen, så en maskine der har afgivet sin plads **aldrig** viser købslinket igen — hverken i `status` eller i en Pro-gate (`report`, `--webhook`). Ny tilstand `released`: `Pro license: seat released on this machine on 2026-09-26, 2 of 3 machines in use.` + `Nothing to buy — the license is yours. To use Pro on this machine again: deskuptime activate <license-key>`. Nøglen er stadig ikke gemt på den afgivne maskine, og Pro er slået fra præcis som før; det eneste nye er at maskinen husker, at den er en betalt maskine. Ved `activate` viser `status` nu desuden `N of 3 machines in use when activated` og udløbsdatoen, når licensserveren svarede dem — begge mærkede som oplyst på aktiveringsøjeblikket, da `validate` ikke rapporterer pladser. En 409 (pladsen er optaget) fortæller nu hvilken kommando der frigør en plads. **Ingen JSON-kontrakt, exit-kode eller matrix-række er ændret**, så ingen script-konsument mærker noget, og en reaktivering med samme nøgle gendanner `active` med det samme.
+
 - **Release-note P1-18:** Et gemt `active`/`cached` i `state.json` vises kun som Pro, mens sidste bekræftelse er under 7 dage gammel — ellers `unverified` med alderen, helt som en gammel `cached` altid gjorde. En nøgle der aldrig er verificeret (intet `validatedAt`) er heller ikke `active`. **Ingen kunde låses ude:** nøglen slettes ikke, `unverified` har aldrig haft købslink, og det næste `watch`-pass eller `deskuptime activate` gendanner `active` med det samme. Det eneste, der ændrer sig for en kunde, er at et hængt eller dødt overvågningsloop efter 7 dage siger `unverified` i stedet for `active` — altså at ordet fortjener. `deskuptime status` på en gratis maskine har nu **én** købsvej (kontraktens Payment Link) med navn, pris og de *byggede* Pro-værdier fra matrixen.
 - **Release-note P1-17:** `sendWebhook`s payload får tre additive felter — `measuredAt` (passens egen tid, samme værdi som state-filen og `deskuptime status`), `previousChecked` og `transition` (`observed` | `unobserved` | `none`). `timestamp` betyder uændret hvornår POST-kroppen blev bygget, så ingen eksisterende modtager brydes. En `up`/`down`-besked kan nu have en note, når det forudgående pass mangler, er ulæseligt eller er ældre end 2 dage; i det normale tilfælde er den **tegn for tegn uændret**. `docs/pro-alerts.md` §2 er opdateret.
 - **Release-note P1-14:** `deskuptime status` og `deskuptime watch --status` skriver nu to nye ting til `unknown`-rækker: `— not checked yet` eller `— status unknown (last check N d ago)`, og `watch --status` kan desuden skrive en `Never checked`-blok. Det er **menneskeudskrift** — intet JSON-felt, ingen exit-kode og ingen matrix-række er ændret, så ingen script-konsument af `report --json` eller `check --json` mærker noget. En bruger der greb `·` som "ukendt" uden videre får nu den rigtige forklaring i stedet for ingen.
@@ -1141,6 +1238,8 @@ kun som Pro, mens dets seneste bekræftelse er i grace-vinduet, og en record ude
 - Merge til `main` deployer ikke; npm, GitHub Releases og Homebrew må kun publiceres af Mads via de eksisterende tag-workflows.
 
 ## Iterationslog
+
+- **Iteration 35 (P1-19, målt + fix):** ❓ 2 og ❓ 3 ubesvarede, så målingen gik videre på den sidste flad fra P1-18: `activate`/`deactivate`. Den er den eneste sti, hvor en betalende kunde **med vilje** ender i `free`, og den fund den dødsworste fejl i licenslifecycle: `deactivate` slettede `state.license` helt, så maskinen der frivilligt afgiver sin plads for at flytte licensen til en anden maskine faldt tilbage i `free` og blev **solgt licensen igen på to overflader** — målt med rigtig CLI og rigtig state-fil: `status` → `Free tier … Buy: <link>`, `report` → `Pro unlocks it here: <link>`. Præcis den dobbeltkøbs-fælde, P1-13 lukkede for `invalid` og P1-18 for `unverified`, nået ad den vej man frivilligt går ind ad. Fund 2: serverens `devices_in_use: 2` og `expires_at` blev kasseret ved både aktivering og deaktivering — pladstallet levede i én linje, én gang i licensens liv. Fund 3: 409-svaret nævner hverken kommandoen eller antallet af pladser. Rettelsen: en bekræftet deaktivering skriver en **kvittering uden nøgle** (`released: true`, dato, pladser i brug), `released` er den sjette tilstand, `describeLicense()` læser den før `free`, `proGateMessage()` har egen gren uden kassen, og `activate` gemmer `machinesInUse`/`expiresAt` med ordene `when activated`, fordi `validate` ikke rapporterer pladser og et udateret tal ville være en gæt. Målt end-to-end med en stub-licensserver preloadet ind i den rigtige CLI (aldrig et skriv mod mahope.tools): frigiven maskin giver `seat released on this machine on 2026-09-26, 2 of 3 machines in use` + `Nothing to buy`, gaten giver `activate igen`, reaktivering gendanner `active`, og `status` på en frigiven maskin er målt read-only under en `fetch`-fælde (exit 9, ingen kald). 11 nye tests i `test/seat.test.js` (den nye fil blev tilføjet `npm test` — samme fælde som P1-10 fandt, ellers ville de aldrig have kørt) + 5 målte mutationer (4 / 3 / 2 / 1 / 1 fejl) → **290/290**; audit 0/0; `node --check`, `matrix --check`, `sh -n`/`bash -n`, diff-check grønne på Node 26.7.0. `docs/license-lifecycle.md` §2/§5 skrevet om til seks tilstande, og §5 beder det private desktoprepo spejle kvitteringen. Commit `3dacc89` på `ceo/release-receipt`, fast-forward-merget til `main` og pushet 2026-09-26. **Ingen afhængighed ændret, ingen ny claim, matrixen urørt, ingen exit-kode ændret, ingen deploy-note nødvendig.** Næste: ❓ 2/❓ 3 hvis besvaret, ellers research på `report --json` og `watch --status`, som endnu ikke er målt på de samme tal-spørgsmål.
 
 - **Iteration 34 (P1-18, målt + fix):** ❓ 2 og ❓ 3 ubesvarede, så målingen gik videre på den sidste flad, der ikke var målt på de samme tal-spørgsmål: **licensen**. Målt med den rigtige `deskuptime status`, 12 rigtige `state.json` i temp-HOME og den rigtige systemclock, nul kode ændret. **Fund 1:** `describeLicense` anvendte 7-dages grace-vinduet på `cached` (med en begrundelse i koden: *"status er read-only, så det må ikke love Pro som det næste check taber"*) men **ikke** på `active`, der er det stærkere ord. `{status:'active', validatedAt: 41 d}` → `Pro license: active, last verified 2026-08-16`; den samme fil med `cached` → `unverified — not verified for 41 days`. To filer der adskiller sig ved ét gemt ord, modsatte domme om identisk evidens. Værste variant: `active` uden `validatedAt` → `Pro license: active, not verified yet` — ét ord der siger bekræftet og en halvsætning der siger aldrig verificeret. Det er P1-17s `transition: observed`-påstand i en anden overflad. **Fund 2:** beslutningen havde to ejere — `isPro()` læste `license.status` direkte, så den 41 dage gamle `active` gav Pro i gaten (`report`, `--webhook`, ubegrænsede URL'er)mens `status` sagde `unverified` om samme nøgle. **Fund 3:** `free` var den eneste Pro-relevante tilstand uden købsvej og sluttede ved `activate <license-key>`, en nøgle en gratisbruger ikke kan have uden at købe først. **Svar 4:** `status` er stadig read-only og netværksfri — målt med en preloadet `fetch`-fælde (exit 9) og `mtime` på state-filen: ingen kald, ingen skrivning. Rettelsen: `describeLicense()` er den ene læsning af hvilket ord en gemt licens må bære; `isPro()` spørger i stedet for at eje; `proExtras()` er løftet ud af `renderNpmDescription()` i `src/features.js`, så `free`-linjens Pro-claims kommer fra matrixen og ikke kan love en ubygget kanal. **Undervejs fundet i min egen kode:** 6 tests hvilede på fixtures med `active` og **intet** `validatedAt` — altså præcis den record, fund 1 fordømmer. De er rettet til det `refreshLicense` faktisk skriver, hvilket også gjorde `test/report.test.js`' gate-tests dækkelige igen. 3 målte mutationer døde alle: `active` fjernet fra reglen → 2 fejl i 124, `isPro` ejer sit ord igen → 1 fejl i 43, købslinket fjernet fra `free`-linjen → 2 fejl i 52. Node 26.7.0: `npm ci --ignore-scripts`, **279/279** (274 + 5), `npm run audit` 0/0, `node --check` alle JS-filer, `matrix --check`, `sh -n`/`bash -n` og `git diff --check` grønne. Næste: ❓ 2/❓ 3 hvis besvaret, ellers research på `activate`/`deactivate`-fladen — `devices_in_use` skrives aldrig til state, så ingen flade kan vise hvor mange af de 3 pladser der er i brug.
 
