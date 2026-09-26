@@ -153,10 +153,22 @@ runs:
             echo "|-----|--------|------|----------|----------|"
             node -e '
               const { formatMs, markdownCell } = require(process.env.DU_ACTION_PATH + "/src/display.js");
-              const { expiredNote, readSslState } = require(process.env.DU_ACTION_PATH + "/src/status.js");
+              const { expiredNote, readRedirectTarget, readSslState } = require(process.env.DU_ACTION_PATH + "/src/status.js");
               const r = JSON.parse(require("fs").readFileSync("deskuptime-results.json","utf8"));
               for (const x of r) {
                 const s = x.healthy ? "✅ UP" : "❌ DOWN";
+                // Which host answered is a fact the payload has carried since
+                // P1-26, and this table was the last of the six surfaces that
+                // could not read it: a client domain parked at a registrar and a
+                // domain answered by its own host produced two identical UP
+                // rows, in the one table a customer can paste into their own
+                // status page. The verdict is untouched — a cross-host 200 is
+                // still UP, so down-count and the exit code never move — but the
+                // cell names the host, in the owner wording rather than a second
+                // sentence written here, and through markdownCell like every
+                // other cell because `finalUrl` is as site-chosen as the URL.
+                const redirect = readRedirectTarget({ url: x.url, finalUrl: x.finalUrl });
+                const status = redirect.offHost ? `${s} ⚠️ ${redirect.label}` : s;
                 // The day count and the duration are read through the owners the
                 // CLI, both status lists and the client report already use. This
                 // block used to judge on its own whether a number was usable, so
@@ -172,7 +184,7 @@ runs:
                 // report'"'"'s own cell(), and one `|` or one newline in a URL
                 // was enough to write a forged row — including one claiming a
                 // site was DOWN while every real check was UP.
-                console.log(`| ${markdownCell(x.url)} | ${markdownCell(s)} | ${markdownCell(x.statusCode ?? "—")} | ${markdownCell(formatMs(x.responseTimeMs))} | ${markdownCell(sslCell)} |`);
+                console.log(`| ${markdownCell(x.url)} | ${markdownCell(status)} | ${markdownCell(x.statusCode ?? "—")} | ${markdownCell(formatMs(x.responseTimeMs))} | ${markdownCell(sslCell)} |`);
               }
             '
             echo ""

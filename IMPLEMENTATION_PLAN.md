@@ -1,7 +1,26 @@
 STATUS: I GANG
-Iteration: 43 — 2026-09-26
-Arbejdsgrene: `ceo/off-host-paid` (P1-27, målt + fix)
-Næste handling: **P1-27 er færdig.** Den samme kendsgerning fra P1-26 nåde nu de fire betalte flader, hvor den gjorde mest skade. Målt før rettelsen (P1-26's kørsel, uændret af rettelsen): `watch --once` skrev `baseline recorded: UP (200)`, begge statuslister skrev `✅ up … (200)`, rapporten skrev `| … | UP (200) | 100 % |`, og webhook-payloaden bar `type: "up"` uden at kende `finalUrl`. Målt efter rettelsen mod de samme to fixture-servere:
+Iteration: 44 — 2026-09-26
+Arbejdsgrene: `ceo/action-off-host` (P1-28, målt + fix)
+Næste handling: **P1-28 er færdig.** Den sidste af de seks flader kan nu se hvilken vært der svarede. Målt før rettelsen med rigtig Action-scriptkørsel mod en payload præcis som `check --json` sender siden P1-26 (exit 0, `down=0`, valideringen accepterede de to additive felter) — men step-summary skrev to **uadskilelige** rækker:
+
+```
+| http://127.0.0.1:64652/flyttet | ✅ UP | 200 | 4ms | — |   ← 127.0.0.1:64651 svarede
+| http://127.0.0.1:64652/gammel  | ✅ UP | 200 | 3ms | — |   ← 127.0.0.1:64652 svarede
+```
+
+Det er præcis P1-26's skade i den tabel et bureau kan kopiere direkte ind på kundens egen status-side: et kunde-domæne der udløber og bliver parkeret ved en registrar læses som det domæne der stadig serverer. Efter rettelsen mod samme payload:
+
+```
+| http://127.0.0.1:64652/flyttet | ✅ UP ⚠️ answered by 127.0.0.1:64651 (asked 127.0.0.1:64652) | 200 | 4ms | — |
+| http://127.0.0.1:64652/gammel  | ✅ UP | 200 | 3ms | — |
+down=0, exit 0  (uændret: en cross-host 200 er en oplysning, ikke en dom)
+```
+
+Rettelsen er fire linjer i `action.yml`'s `node -e`-blok: den spørger `readRedirectTarget()` — den samme ene ejer som de otte andre flader — med den **rå** kendsgerning `x.finalUrl` frem for tabellens eget `offHostRedirect`-flag, og læser `redirect.label`, den korte sætning ejeren selv har til en celle. `markdownCell()` gælder stadig for den nye tekst, fordi `finalUrl` er lige så site-valgt som URL'en. Valideringen, `down-count` og exit-koden er uændrede — målt før og efter, exit 0 og `down=0` i begge tilfælde. 1 ny test + 2 strukturelle låse → **322/322**; audit 0/0; `node --check`, YAML-parse og `git diff --check` grønne på Node 26.7.0; **ingen eksisterende test rettet**. Mutationstest: uden rettelsen fejler 2 tests (den adfærdsmæssige og den strukturelle lås). Næste opgave: **P1-29** — et `HEAD` der blokeres med 403 rapporterer et sundt site som DOWN (den modsatte fejltype; skal måles først).
+
+## Status fra tidligere iteration (43, P1-27)
+
+P1-27 lod den samme kendsgerning fra P1-26 nå de fire betalte flader, hvor den gjorde mest skade. Målt før rettelsen (P1-26's kørsel, uændret af rettelsen): `watch --once` skrev `baseline recorded: UP (200)`, begge statuslister skrev `✅ up … (200)`, rapporten skrev `| … | UP (200) | 100 % |`, og webhook-payloaden bar `type: "up"` uden at kende `finalUrl`. Målt efter rettelsen mod de samme to fixture-servere:
 
 ```
 watch --once  ->  🔀 …/flyttet answered by another host — the response came from 127.0.0.1:64651, not 127.0.0.1:64652
@@ -33,7 +52,7 @@ Dette offentlige repo leverer den gratis, fuldt brugbare DeskUptime-CLI (MIT). D
 Den aktuelle gate-definition er registreret her:
 
 - Root: `npm ci --ignore-scripts` skal lykkes med den committede lockfil.
-- Root: `npm test` (317 tests, 317 passed på Node 26.7.0 efter P1-26: 314 + 3 nye tests om hvilken værst der svarede; tællet stiger med hver målte iteration, så læs tallet herfra `npm test` selv). **Bemærk:** på en maskine med kun Node 22 fejler de 7 installtests + action-testen, fordi `install.sh` og `action.yml` korrekt kræver Node 24+; brug den installerede `PATH`-node (26.7.0) — på Mads' maskine `/opt/homebrew/opt/node@26/bin/node` — ellers er gate ikke grøn af miljøårsager.
+- Root: `npm test` (322 tests, 322 passed på Node 26.7.0 efter P1-28: 321 + 1 ny test om hvilken vært der svarede i step-summary'en; tællet stiger med hver målte iteration, så læs tallet herfra `npm test` selv). **Bemærk:** på en maskine med kun Node 22 fejler de 7 installtests + action-testen, fordi `install.sh` og `action.yml` korrekt kræver Node 24+; brug den installerede `PATH`-node (26.7.0) — på Mads' maskine `/opt/homebrew/opt/node@26/bin/node` — ellers er gate ikke grøn af miljøårsager.
 - Root: `npm run audit` skal rapportere 0 sårbarheder.
 - Root: `npm run lint` findes ikke i `package.json`; rapporteres som manglende gate, ikke som grønt.
 - Root: `npm run build` findes ikke i `package.json`; der er ingen JS-build/typecheck-script.
@@ -1491,15 +1510,34 @@ Bemærk at `Content: 87 bytes` og `contentHash` i samme kørsel beskriver **park
 
 **Fælden undervejs, noteret fordi næste iteration rammer den samme målelinje:** min egen kontrolrække-assertion skrev `/{sitePort} (200)/` mod `status`-outputtet, men der står `…/gammel (200)` — porten står i URL'en, ikke i parentesen. Fejlen var i testens regex, ikke i koden; rettet.
 
-### P1-28 — NÆSTE — GitHub Action: samme kendsgerning i step-summary og nedtællingen
+### P1-28 — FÆRDIG 2026-09-26 — GitHub Action: samme kendsgerning i step-summary og nedtællingen (`ceo/action-off-host`)
 
-**Begrundelse:** `action.yml` er bureauets egen overflade, når kunden bruger CI, og den læser *kun* felterne den får. `action.yml:175` skriver `| url | ✅ UP | 200 | … |` — samme påstand uden `finalUrl`. Med P1-26's additive JSON-felter er rettelsen lille: valideringen skal acceptere dem, og summary-tabellen skal have samme celle-escaper-vej som de øvrige. Nedtællingen (`down-count`) ændres **ikke** — en cross-host-redirect er ikke DOWN, samme regel som overalt.
+**Begrundelse:** `action.yml` er bureauets egen overflade, når kunden bruger CI, og den læser *kun* felterne den får. Efter P1-26/P1-27 var de otte andre flader rettet, og denne var den **sidste**.
+
+**Målt før rettelsen, nul kode ændret.** Rigtig Action-scriptkørsel (scriptet udskrevet af `action.yml` og kørt i bash, præcis som testene gør) mod en payload i det format `check --json` sender siden P1-26:
+
+```
+$ bash <action-script>            (exit 0, down=0)
+$ cat $GITHUB_STEP_SUMMARY
+| http://127.0.0.1:64652/flyttet | ✅ UP | 200 | 4ms | — |   ← 127.0.0.1:64651 svarede (offHostRedirect: true)
+| http://127.0.0.1:64652/gammel  | ✅ UP | 200 | 3ms | — |   ← 127.0.0.1:64652 svarede (offHostRedirect: false)
+```
+
+To rækker der er umulige at skelne. Det er P1-26's skade i den eneste tabel et bureau kan kopiere direkte ind på kundens egen status-side, og den bruges *uden* DeskUptimes eget output at læse i.
+
+**Rettelsen:** `action.yml`'s summary-blok spørger `readRedirectTarget({ url: x.url, finalUrl: x.finalUrl })` — den samme ene ejer som `check`, de to statuslister, rapporten og payloaden — og læser `redirect.label`, den korte sætning ejeren selv skrev til en celle i P1-27. To bevidste valg:
+
+1. **Den rå kendsgerning, ikke tabellens eget flag.** Blokken læser `x.finalUrl`, ikke `x.offHostRedirect`. Flaget er ejerens *svar*; en håndskrevet, gendannet eller af et andet værktøj skrevet payload kan så ikke få cellen til at tie om et `finalUrl` der peger på en anden vært. Det er samme bar som SSL-tælleren lige over, hvor `readSslState()` er svaret, så cellen og tælleren ikke kan komme i uoverensstemmelse.
+2. **Verdiktet er uændret, kun cellen.** En cross-host 200 er stadig UP, så `down-count`, `::error::` og exit-koden røres ikke — målt før *og* efter (exit 0, `down=0` i begge tilfælde). Det er P1-26's bevidste regel: `www → apex` er den mest almindelige redirect på nettet, så en ændret værtsregel ville give False-alarmer på sunde sites. Payload-valideringen er heller ikke rørt; de to additive felter blev allerede accepteret (målt), så intet nyttedes.
 
 **Acceptkriterier:**
 
-1. Step-summary har samme sætning som `check` for et cross-host-svar, via `readRedirectTarget` + `markdownCell` (ikke en kopi af sætningen).
-2. `action.yml`'s payload-validering afviser ikke de to nye additive felter, og `down-count`/`exit` er uændret for et 200 fra en anden vært.
-3. Ny test i `test/status.test.js` mod den eksisterende `stubAction`-fixture: et resultat med `offHostRedirect: true` giver linjen, et uden giver ingen.
+1. Step-summary har samme sætning som `check` for et cross-host-svar, via `readRedirectTarget` + `markdownCell` (ikke en kopi af sætningen). ✅ — `⚠️ answered by parked.example (asked kunde.dk)` i Status-cellen; låst strukturelt på at kilden ikke indeholder sætningen `answered by` i kode (kommentarer strippet, fordi kommentaren citerer den fejl den erstatter).
+2. `action.yml`'s payload-validering afviser ikke de to nye additive felter, og `down-count`/`exit` er uændret for et 200 fra en anden vært. ✅ — målt før og efter: exit 0, `down=0`; testen assertér `^down=0$` i `$GITHUB_OUTPUT` med `fail-on-down=true`.
+3. Ny test i `test/status.test.js` mod den eksisterende `stubAction`-fixture: et resultat med `offHostRedirect: true` giver linjen, et uden giver ingen. ✅ — fire rækker i én kørsel: cross-host, egen vært, `kunde.dk` → `kunde.dk:80` (samme vært) og `https://kunde.dk` → `http://kunde.dk` (skema skiftet), så kun **én** ⚠️ i hele tabellen. `stubAction` kopierer den rigtige `status.js` med, så cellen læses gennem den rigtige ejer.
+4. `npm test` grøn, ingen eksisterende test rettet. ✅ **322/322** (321 + 1 ny adfærdsmæssig; de to strukturelle låse sidder på den eksisterende regel-scan-test). Mutationstest: med den gamle celle fejler 2 tests.
+
+**Hvorfor `label` og ikke `note`:** ejeren definerer selv `label` som "det samme få ord, en tabelcelle, en liste-række eller en notifikation kan bære" (`note` er hele sætningen, brugt hvor der er plads). Status-cellen i summary'en *er* en tabelcelle, og den har allerede URL'en i første kolonne — så den korte form er den, ejeren er bygget til her. Den lange sætning bruges i `check`, hvor der er plads.
 
 ### P1-29 — NÆSTE — `HEAD` der blokeres med 403 rapportérer et sundt site som DOWN
 
@@ -1554,6 +1592,8 @@ Bemærk at `Content: 87 bytes` og `contentHash` i samme kørsel beskriver **park
 - Merge til `main` deployer ikke; npm, GitHub Releases og Homebrew må kun publiceres af Mads via de eksisterende tag-workflows.
 
 ## Iterationslog
+
+- **Iteration 44 (P1-28, målt + fix):** ❓ 2 og ❓ 3 ubesvarede, så opgaven var P1-27's egen anvisning: samme kendsgerning på den **sidste** af de ni flader. Målt først med rigtig Action-scriptkørsel mod en payload i det format `check --json` sender siden P1-26, nul kode ændret, og alle rækker noteret i statusblokken øverst. **Fund:** step-summary skrev to rækker der var umulige at skelne — `| …/flyttet | ✅ UP | 200 | 4ms | — |` (svar fra en anden vært) og `| …/gammel | ✅ UP | 200 | 3ms | — |` (svar fra egen vært). Det er P1-26's skade i den eneste tabel et bureau kan kopiere ind på kundens egen status-side, og den bruges uden DeskUptimes eget output at læse i. **To ting målt, som bekræfter at nedtællingen ikke fejler:** valideringen accepterede de to additive felter (exit 0), og `down=0` før *og* efter rettelsen — en cross-host 200 er en oplysning, ikke en dom, samme regel som overalt. Rettelsen er fire linjer i `action.yml`'s summary-blok: den spørger `readRedirectTarget()` (den samme ene ejer som de otte andre flader) med den **rå** `x.finalUrl` frem for tabellens eget `offHostRedirect`-flag, fordi flaget er svaret og en håndskrevet payload ellers kunne tie om et `finalUrl` der peger på en anden vært — samme bar som SSL-tælleren lige over, hvor `readSslState()` er svaret. `redirect.label` bruges (ikke `note`), fordi ejeren selv definerer `label` som den korte form til en tabelcelle, og Status-cellen *er* en tabelcelle med URL'en i kolonne 1. `markdownCell()` gælder stadig, fordi `finalUrl` er lige så site-valgt som URL'en. 1 ny adfærdsmæssig test med fire rækker i én kørsel (cross-host, egen vært, `:80`-alvarianten, skema-skift) så kun **én** ⚠️ må stå i tabellen, assert på `^down=0$` med `fail-on-down=true`, plus to strukturelle låse på den eksisterende regel-scan-test (blokken skal nå ejeren, og koden må ikke indeholde sætningen `answered by` — kommentarer strippet, fordi kommentaren citerer den fejl den erstatter). 1 ny test → **322/322**; audit 0/0; `node --check`, YAML-parse af `action.yml` og `git diff --check` grønne på Node 26.7.0; **ingen eksisterende test rettet**. Mutationstest: med den gamle celle fejler 2 tests. Målemetode noteret, fordi den er billigere end nogen nye servere: `stubAction`-fixture'en i `test/status.test.js` kan bruges *uden* `node --test` — skriv et lille script der kopierer `display.js`/`status.js` ind i et midlertidigt `src/`, skriver `cli.js` med `console.log(<payload som JSON-streng>)` og kører `action.yml`'s udskrevne `run:`-blok i bash med `GITHUB_OUTPUT`/`GITHUB_STEP_SUMMARY` peget på temp-filer. Bemærk: `console.log(payload)` med et array-objekt giver **ikke** JSON (Node pretty-prints), så strengen skal dobbelt-encodes — ellers fejler valideringen med "did not return valid JSON", som ligner en fejl i koden man lige har rettet. Næste: **P1-29**, den modsatte fejltype — et `HEAD` der blokeres med 403 giver en falsk DOWN på et sundt site, og den skal måles først fordi rettelsen ikke må blive "kast 403 væk".
 
 - **Iteration 43 (P1-27, målt + fix):** ❓ 2 og ❓ 3 ubesvarede, så opgaven var P1-26's egen anvisning: samme kendsgerning på de fire betalte flader. Målt før rettelsen (P1-26's kørsel) og efter rettelsen mod de samme to fixture-servere, output fra alle fire flader noteret i statusblokken øverst. **Fundet:** ikke en ny løgn men en kastet kendsgerning — motoren måler `finalUrl` på hvert pass siden P0-3, og `runPass` skrev den aldrig videre, så `watch --status`, `status`, `report` og webhook-payloaden *kunne ikke* se den. Dertil et forhold P1-26 ikke havde set: **et cross-host svar kan ikke komme ud som sit eget event-type**, fordi en redirect bevidst ikke er DOWN, så `up`/`down`/`baseline` alle er sande og kanalen intet kan branche på — payloaden måtte derfor bære kendsgerningen, ellers måtte hver Pro-kanal selv genberegne værtssammenligningen, altså flytte den beslutning P1-26 flyttede ind i én ejer ud igen. Rettelsen følger rækken fra P1-13: `readRedirectTarget()` er stadig den ene ejer og fik et `label` (kort sætning til en celle, samme ord som `note`), `readEntry()` spørger den for begge statuslister (state-nøglen er ikke i entry'en, så den gives ind), rapporten spørger den selv med to additive felter, og `runPass` gemmer `entry.lastFinalUrl` **og** latcher på den svarende vært i `entry.answeredBy`, så et parkeret domæne ikke sender en betalende kunde en notifikation hvert minut, mens et skift til en anden fremmed vært stadig høres. To bevidste afvigelser fra `check`, begge noterede i opgaven: rapporten får kun værten (aldrig hele `finalUrl`, fordi dokumentet sendes videre til en kunde og en sti kan indeholde et token), og hændelsen latches på værten (en roterende sti ellers ville give en notifikation hvert 60. sekund). En cross-host-række navngives højt i rapporten som et udløbet certifikat og tælles i opsummeringen, fordi en 100 %-kolonne læses forbi. 4 nye tests (3 i `test/status.test.js`, 1 i `test/webhook.test.js`) → **321/321**; audit 0/0; `node --check` alle JS-filer, `matrix --check`, `sh -n`/`bash -n` og `git diff --check` grønne på Node 26.7.0; **ingen eksisterende test rettet**. Næste: **P1-28** — `action.yml`'s step-summary, som bureauer bruger når kunden kører CI.
 

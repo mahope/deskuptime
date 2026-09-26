@@ -605,6 +605,51 @@ test('action: the summary and the SSL counter cannot disagree about an unusable 
   assert.equal(readFileSync(join(temp, 'github-summary'), 'utf8').includes('| 9 |'), false);
 });
 
+test('action: the step summary names the host that answered, and still counts 0 down', async (t) => {
+  // The sixth and last surface. P1-26 named the host change on `check`, P1-27
+  // on the two status lists, the client report and the webhook payload, and this
+  // table — the one a bureau can paste into a customer's own status page — was
+  // left saying nothing. Measured before the fix, against a payload the CLI has
+  // emitted since P1-26:
+  //
+  //   | http://127.0.0.1:64652/flyttet | ✅ UP | 200 | 4ms | — |   ← 64651 answered
+  //   | http://127.0.0.1:64652/gammel  | ✅ UP | 200 | 3ms | — |   ← 64652 answered
+  //
+  // Two rows, indistinguishable: a domain that expired and got parked at a
+  // registrar reads exactly like the domain that is still serving.
+  const { root, temp } = stubAction(t, JSON.stringify([
+    { url: 'http://kunde.dk/flyttet', healthy: true, statusCode: 200, responseTimeMs: 4, finalUrl: 'http://parked.example/lander', offHostRedirect: true, sslDaysRemaining: null, sslExpiringSoon: null },
+    { url: 'http://kunde.dk/egen-vaert', healthy: true, statusCode: 200, responseTimeMs: 3, finalUrl: 'http://kunde.dk/egen-vaert', offHostRedirect: false, sslDaysRemaining: null, sslExpiringSoon: null },
+    // The default port is the same host, and so is a scheme change — a site that
+    // answers on both is not news on every pass.
+    { url: 'http://kunde.dk/port-80', healthy: true, statusCode: 200, responseTimeMs: 3, finalUrl: 'http://kunde.dk:80/port-80', offHostRedirect: false, sslDaysRemaining: null, sslExpiringSoon: null },
+    { url: 'https://kunde.dk/https', healthy: true, statusCode: 200, responseTimeMs: 3, finalUrl: 'http://kunde.dk/https', offHostRedirect: false, sslDaysRemaining: null, sslExpiringSoon: null },
+  ]));
+  await run('bash', ['-c', actionScript()], {
+    cwd: temp,
+    env: actionEnv({
+      DU_URLS: 'http://kunde.dk/flyttet http://kunde.dk/egen-vaert http://kunde.dk/port-80 https://kunde.dk/https',
+      DU_FAIL_ON_DOWN: 'true',
+      DU_SSL_DAYS: '0',
+      DU_SUMMARY: 'true',
+      GITHUB_ACTION_PATH: root,
+    }, temp),
+  });
+  const summary = readFileSync(join(temp, 'github-summary'), 'utf8');
+
+  assert.match(summary, /\| http:\/\/kunde\.dk\/flyttet \| ✅ UP ⚠️ answered by parked\.example \(asked kunde\.dk\) \| 200 \| 4ms \|/);
+  assert.match(summary, /\| http:\/\/kunde\.dk\/egen-vaert \| ✅ UP \| 200 \| 3ms \|/);
+  assert.match(summary, /\| http:\/\/kunde\.dk\/port-80 \| ✅ UP \| 200 \| 3ms \|/);
+  assert.match(summary, /\| https:\/\/kunde\.dk\/https \| ✅ UP \| 200 \| 3ms \|/);
+  assert.equal(summary.split('⚠️').length - 1, 1, 'kun den rættelige linje må have et ⚠️');
+
+  // A cross-host 200 is a fact, not a verdict. It was already UP for
+  // `down-count` and the exit code before this change, and it stays UP: a parked
+  // domain must not turn a customer's CI red, because the tool cannot know
+  // whether the host change was intended.
+  assert.match(readFileSync(join(temp, 'github-output'), 'utf8'), /^down=0$/m);
+});
+
 test('action: the step summary has no certificate or duration rule of its own', () => {
   // A behavioural test cannot prove a surface stopped owning a fact — the
   // duplicates P1-13 and P1-14 measured returned identical answers in every
@@ -617,6 +662,19 @@ test('action: the step summary has no certificate or duration rule of its own', 
   assert.doesNotMatch(source, /String\(x\.sslDaysRemaining\)/);
   assert.doesNotMatch(source, /x\.responseTimeMs \?\? /);
   assert.doesNotMatch(source, /typeof x\.sslDaysRemaining/);
+
+  // The host that answered is read from the same owner as everywhere else, and
+  // from the raw fact rather than the summary's own boolean: a hand-edited
+  // payload that claims `offHostRedirect: false` beside a foreign `finalUrl`
+  // must still be shown, because the flag is the owner's answer, not an input.
+  assert.match(source, /readRedirectTarget\(\{ url: x\.url, finalUrl: x\.finalUrl \}\)/);
+  assert.match(source, /redirect\.offHost \? `\$\{s\} ⚠️ \$\{redirect\.label\}`/);
+  // Comments quote the bug they replace, so the sentence is searched for in code
+  // only — the same reason the CLI scan above strips its comments.
+  const action = source
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/^\s*\/\/.*$/gm, '');
+  assert.doesNotMatch(action, /answered by/);
 
   // `check --json`'s renewal flag is the third copy of the same window rule.
   // Comments are stripped first: the fix quotes the expression it replaced, so
