@@ -1,3 +1,91 @@
+## Status fra denne iteration (55, P1-39)
+
+**Hvorfor denne flade:** ❓ 1–3 er stadig ubesvarede, så målingen gik på den
+ene del af produktet, der aldrig var målt på **overvågningspasset selv**.
+P1-13 → P1-38 har målt ni overflader for, hvad de *påstår*; ingen måling havde
+spurgt, hvad der sker, når en måling **ikke kan gemmes**. Det er den
+forudsætning, hele betalte værdi hviler på: en kunde betaler for at høre om
+sitet er nede, og et pass der dør undervejs fortæller intet.
+
+**Målt først, nul kode ændret.** Rigtig CLI, rigtig `--webhook` med en rigtig
+modtager, to lokale fixtures (200 og 500), state-fil med to sites op i går,
+Pro-licens fra `passthrough`-stubben (aldrig et kald til mahope.tools), og et
+`~/.deskuptime` der ikke kan skrives — målt som et **immutabelt** dirs
+(`chflags uchg`), altså EPERM, og som en **read-only** dir (EACCES) i en anden
+kørsel. Ingen rigtige diske blev rørt.
+
+```
+før, uwritebar state-fil, betalt webhook:
+  exit 1, 0 leveringer, stdout tom
+  node:fs:697 … EPERM … state.json.89611.751db7f6-….tmp
+      at saveState (src/watch.js:105)
+      at recheckLicense (src/watch.js:694)   ← før loopen overhovedet startede
+```
+
+Nul leveringer, fordi **intet blev tjekket**: `recheckLicense()` skriver
+licensen, før `runPass()` når at måle noget. Den betalte kunde fik ingen
+alarmer, ingen tjek, og en stacktrace der pegede på en midlertidig filnavn.
+Samme klasse en anden vej, målt i samme kørsel: `watch --once` — kommandoen
+et cron-job kører — døde i `acquireStateLock()` med `EACCES … state.json.lock`,
+exit 1, ingen site tjekket. "Der kører allerede et pass" og "disken er fuld" er
+to forskellige problemer, og brugeren fik samme rå kast for begge.
+
+**Efter: 0 → 1 levering, samme måling.**
+
+```
+  loopt kører stadig efter 12 s, exit null (slået ned af mig, ikke død)
+  stdout: 🚨 http://127.0.0.1:61670/ is DOWN — HTTP 500
+  levering: {"type":"down","message":"is DOWN — HTTP 500","measuredAt":…,
+             "previousChecked":"2026-09-25T12:00:00.000Z","transition":"observed",…}
+  stderr:  ⚠️  Could not write the monitoring state — EPERM — …/state.json.
+              Nothing is remembered while this lasts: check free disk space …
+```
+
+**Beslutningen, som ikke er gratis.** `saveStateOrWarn()` lader passet leve, så
+den betalte kanal svigter aldrig på grund af en disket fejl. Prisen er at
+passets tællere og dets dag i rapporten går tabt, indtil filen kan skrives
+igen — det står i beskeden, ikke i en kommentar. Og fordi et gemt verdict
+ikke kan læses, kan loopen *ikke* vide at et nedet site allerede er meldt: i
+samme proces holder entry'en sig i hukommelsen, så et site der bliver nede
+ikke meldes igen hvert 30. sekund, men **efter en genstart** gør det. Dobbelt
+melding er valgt frem for stilhed om et nedbrud.
+
+**Fejl i min egen måling, noteret fordi det er den tredje gang:** målingen
+brugte `spawnSync`, som blokerer event loopet i *forældreprocessen* — og
+serverne boede i forælderen. Første genmåling viste derfor `Request timed out`
+på **begge** sites og 0 leveringer, altså et resultat der så ud som "fixet
+virker ikke". Samme fælde som P1-15's `spawnSync` og P2-1 del C's `net.Server`
+uden `closeAllConnections()`. Async `spawn` gav den rigtige måling.
+
+**Én måleforhindring fra en gammel måling holdt:** et read-only `~/.deskuptime`
+gør `watch --once` død, men **ikke** loopen — fordi `saveState()` selv
+opreparerer mappens rettigheder (`chmodSync(dir, 0o700)`) på sin første
+skrivning, mens `acquireStateLock()` bare skriver uden at reparere. Derfor
+brugte målingen et immutabelt dirs til loop-testen. Forskellen er ikke tilfældig
+og er nu målt frem for antaget; selve rettelsen er den samme på begge veje.
+
+**Fire mutationer målt, alle døde:** gammel `saveState()`-kast i `runPass` (2
+fejl), låset kaster igen (2), errno skjult i beskeden (1), låse-fejl blandet med
+`busy` (1). 6 nye tests i `test/passstate.test.js` (registreret i `npm test` —
+samme fælde som P1-10 fandt) → **365/365** (359 + 6); audit 0/0; `node --check`
+alle JS-filer, `matrix --check` og `git diff --check` grønne på Node 26.7.0.
+Ingen exit-kode for en eksisterende sund kørsel ændret (kun den nye
+`stateError`-gren er exit 1), ingen matrix-række, ingen ny claim, ingen
+deploy-note nødvendig. Diffen er 104 linjer; **ingen review-agent** — over 30
+minutters grænse.
+
+**Næste opgave er målt, ikke gættet (se P1-40 nede):** ét beskadiget URL-nøgle
+i `state.json` tager hele passet med, og det er den dokumenterede cron-vej.
+
+STATUS: I GANG
+Iteration: 55 — 2026-09-26
+Arbejdsgrene: `ceo/state-write-resilience` (P1-39, målt + fix)
+Næste handling: **P1-39 er færdig.** ❓ 1–3 er stadig ubesvarede. Næste opgave:
+P1-40 — ét beskadiget URL-nøgle i `state.json` dræber alle 24 andre sites med
+en stacktrace. Målingen ligger klar i denne iterations log; spørgsmålet der
+kræver et valg er, om et site vi ikke kan tjekke skal give exit 2, navngives
+hvert pass, eller begge deler.
+
 ## Status fra denne iteration (54, P1-38 — ❓ 12 lukket)
 
 **Hvorfor denne flade:** ❓ 12 lå som det *eneste* konkrete, målte fund i
@@ -2131,7 +2219,54 @@ fælde som P1-19's mutation uden betydning — en grøn mutationstest kan være
 vished, ikke dækning.
 
 
+### P1-40 — MÅLT 2026-09-26, ikke rettet — Ét beskadiget URL-nøgle i `state.json` dræber alle andre sites
+
+**Målt** i P1-39's kørsel, nul kode ændret, rigtig CLI og rigtig state-fil med
+to gode sites + `kunde.dk` som nøgle:
+
+```
+watch --once   → exit 1, stdout tom, ingen site tjekket
+watch (loop)   → exit 1, samme
+  TypeError: Invalid URL: kunde.dk
+      at assertValidHttpUrls (src/status.js:1319)
+      at runPass (src/watch.js:146)      ← hver pass
+      at startWatch (src/watch.js:687)   ← looped når aldrig i gang
+```
+
+**Hvorfor det er den næste opgave.** `runPass()` validerer hele `state.urls`
+inden første request, så ét nøgle uden scheme — en halvskrevet fil, en
+håndredigering, en rodet restore — gør overvågningen af *alle* andre sites
+til intet. Det er den dokumenterede cron-vej (`watch --once`), og det er den
+måde en kunde opdager det: cron-mailen med en stacktrace og ingen alarmer.
+Samme familie som P1-39, en anden hovedindgang.
+
+**Spørgsmålet der kræver et valg (❓ til Mads, ikke besvaret):** et site vi ikke
+kan tjekke er *ikke* et nedet site — exit 2 ville være en løgn om kundens eget
+site, og det er den betalte rapport der skal kunne læses. Men det må heller ikke
+være usynligt. Tre mulige svar: (a) nævn det på hver pass og fortsæt med de
+øvrige, (b) nævn det i `watch --status`/`report` som en egen linje "kan ikke
+tjekkes", (c) nævn det og kør resten, men behold exit 2 når *intet* kunne
+tjekkes. Min anbefaling er (c) + (b) — samme "navn det, det læses én gang"-regel
+som stale-blokken og vindueslinjen fra P1-38. Uden svar går jeg ikke i gang,
+fordi valget rører exit-koder.
+
+**Acceptkriterier, alle målbare:** 1) 2 gode sites + 1 ubrugelig nøgle giver 2
+tjek, 1 hændelse for det nedet site, og 0 for det ubrugelige; 2) nøglen er
+nævnt i output hver pass; 3) `watch --status` og `report` har en linje om den;
+4) `report --json` får additive felter; 5) ingen eksisterende exit-kode ændret
+for en kørsel hvor alle nøgler er gyldige; 6) mutationer målt.
+
+
 ## ❓ Til Mads
+
+13. **Hvad skal et site, vi ikke kan tjekke, gøre ved et pass?** Ét nøgle i
+`state.json` uden scheme tager i dag hele passet med (P1-40, målt). Skal det
+nævnes og springes over mens de øvrige sites fortsætter, eller skal passet
+fejle? Det afgør om et bureau mister alle 24 andre alarter, eller kun det ene
+site. Min anbefaling i P1-40: fortsæt med de øvrige, nævn nøglen hvert pass,
+og behold exit 2 kun når intet kunne tjekkes.
+
+- **Release-note P1-39:** En fuld disk, en skrivebeskyttet mappe eller en kvote kunne **slå overvågningen ihjel og tage alarmerne med**. Målt med rigtig CLI, rigtig webhook-modtager og et `~/.deskuptime` der ikke kan skrives: overvågningen døde med en rå Node-stacktrace, exit 1, og modtageren fik **nul beskeder** selv om et overvåget site svarede 500 — og det skete *før* nogen site blev tjekket, fordi licensen skrives, når loopen starter. Samme måling efter rettelsen: loopt kører videre, du får `🚨 … is DOWN — HTTP 500` i terminalen og beskeden i din Slack/Discord/Teams-kanal, og du får én advarsel der navngiver filen og grunden: `Could not write the monitoring state — ENOSPC — ~/.deskuptime/state.json. Nothing is remembered while this lasts: check free disk space and that the file and its folder are writable.` **Overvågning og alarmer er altså ikke længere afhængige af, at vi kan gemme noget** — det er kun de tal, der går tabt: passets uptime-tællere og dets dag i rapporten, indtil filen igen kan skrives. Og `deskuptime watch --once`, kommandoen cron kører, siger nu det samme i stedet for en stacktrace der peger på en låsefil. **Mærk:** kan vi ikke gemme et gemt verdict, ved loopen ikke at et nedet site allerede er meldt, så efter en genstart kan det meldes én gang til. Vi vælger dobbelt melding over stilhed om et nedbrud. Exit-koder for en sund kørsel, matrix-rækker og al JSON er uændrede.
 
 12. ~~Vindueskolonnen dækker ikke hele vinduet.~~ **Besvaret i kode 2026-09-26 (P1-38, `ceo/incomplete-window`):** valget var (b), den navngiven linje. Målingen og de to betingelser står i afsnittet øverst og i `docs/agency-report.md` §4. Cellen er uændret; kun en ny linje, `1 with an incomplete window` i resumelinjen og fire additive felter. **Valget, og hvorfor:** (a) ville ændre en celle i et kundedokument bureauer har sat i systemer; (b) er additivt og rører ingen konsument. **(a) er stadig mulig** som en senere ændring, hvis Mads vil have antallet i cellen — målingen og koden til den ligger i `windowCoverage`.
 
@@ -2180,6 +2315,7 @@ vished, ikke dækning.
 
 ## Iterationslog
 
+- **Iteration 55 (P1-39, målt + fix):** ❓ 1–3 ubesvarede, så målingen gik på den del af produktet, der aldrig var målt på **passet selv** — hvad der sker, når en måling ikke kan gemmes. Rigtig CLI + rigtig webhook-modtager + to lokale fixtures + Pro fra `passthrough`-stubben (aldrig et kald til mahope.tools) + et `~/.deskuptime` der ikke kan skrives (immutabelt dirs = EPERM, read-only = EACCES, ingen rigtige diske rørt), nul kode ændret. **Fund:** en skrivefejl dræbte processen med exit 1 og **nul leveringer**, før nogen site blev tjekket — kastet fra `recheckLicense()`'s `saveState()` før loopen startede. Betalt kanal, betalt site, ingen besked. Anden indgang målt i samme kørsel: `watch --once` (cron-vejen) døde i `acquireStateLock()` med `EACCES … state.json.lock` — "anden pass kører" og "disken er fuld" gav samme rå kast. **Fix:** `saveStateOrWarn()` i `src/watch.js` lader passet leve (events + rapport + exit-kode uændrede), advarslen er én ejet sætning med fil og errno, og låsen svarer med en grund frem for at kaste. **Målt efter: 0 → 1 levering**, loopt kører videre, fuld payload (`transition: observed`). Beslutningen er ikke gratis og står i planen: tællere og rapportdag tabes, og efter en genstart kan et nedet site meldes igen — dobbelt melding valgt over stilhed. **Fejl i min egen måling (tredje gang):** `spawnSync` blokerede event loopet i forælderen, hvor serverne boede, så første genmåling viste `Request timed out` på begge sites og 0 leveringer så ud som at fixet ikke virkede; async `spawn` gav den rigtige måling. **Måleforhindring fra en gammel måling holdt:** read-only dir dræber `watch --once` men ikke loopen, fordi `saveState()` selv reparerer mapperettighederne og låsen ikke gør — derfor immutabelt dirs til loop-testen. 6 nye tests i ny fil `test/passstate.test.js` (lagt til i `npm test`, samme fælde som P1-10) + 4 målte mutationer (2/2/1/1 fejl) → **365/365** (359 + 6); audit 0/0; `node --check`, `matrix --check`, `git diff --check` grønne på Node 26.7.0. Ingen exit-kode for en sund kørsel ændret, ingen matrix-række, ingen ny claim, ingen deploy-note nødvendig. **Næste: P1-40 — målt i samme kørsel:** ét nøgle i `state.json` uden scheme (`kunde.dk`) gør `runPass`/`startWatch` kaste `TypeError: Invalid URL`, exit 1, **nul sites tjekket** — alle 24 andre sites mister overvågning og alarmer for én beskadiget nøgle. Kræver et valg (❓ 13), fordi det rører exit-koder.
 - **Iteration 54 (P1-38, målt + fix):** ❓ 1–3 stadig ubesvarede, så iterationen lukkede ❓ 12 — det eneste konkrete, målte fund i køen, som den forrige iteration lagde tilbage fordi den krævede et valg. Valget er (b), den navngiven linje, fordi (a) ville ændre en celle i et kundedokument bureauer har sat i systemer. Målt først med rigtig `report` + `report --json`, nul kode ændret: `95.83% (28 recorded d, 1344 checks, 56 failed)` mod `95.83% (30 recorded d, …)` — samme tal i samme dokument, og to dage der aldrig blev overvåget fordi cron lå ned. Den svære del var ikke linjen men **modvægten**: et site tilført i denne uge har samme form (3 af 30) og er ikke et hul, og et bureau med fem sites i et års overvågning har 1 registreret dag ud af 30 for alle fem, fordi dags-buckets først begyndte at blive skrevet da `report` udkom. Uden begge betingelser ville linjen have anklaget dem om 29 manglende dage. `windowCoverage()` i `src/history.js` er den ene ejer og spørger `passAge` om tiden (P1-32's lås urørt); rapporten genberegner intet, og `monitoringSince` læses én gang og bruges af både rækken og reglen. **Modvæggen målt:** et år gammel overvågning med en historikfil fra i går gav ingen linje og en rapport der er tegn for tegn uændret. 3 nye tests + 3 målte mutationer (1 / 4 / 1 fejl) → **359/359** (356 + 3); audit 0/0; `node --check`, `matrix --check`, `git diff --check` grønne på Node 26.7.0. **Én fejl i min egen måling, noteret:** testhjlæpperen skrev ingen buckets (`for (d = oldest; d <= newest)` med `oldest > newest`), så modvægstesten målte intet og mutationen af netop det varet gav 0 fejl — vished, ikke dækning, samme fælde som P1-19. Rettet og genmålt. **Én eksisterende lås måtte udvides, ikke slækkes** (syvende gang): låsen på "every state timestamp through the one owner" søgte på et literal, refaktoreringen afløser; den kræver nu den nye ene læsning *og* at rækken skrives fra den. **Ingen ny claim, ingen matrix-række, ingen exit-kode, cellen uændret, ingen deploy-note nødvendig.** Næste: ❓ 1–3 hvis besvaret, ellers en ny målt opgave.
 
 - **Iteration 53 (P1-37, målt + fix):**
