@@ -372,12 +372,26 @@ export function describeLicense(license, { now = Date.now() } = {}) {
   }
   const validatedAt = stored.validatedAt ?? null;
   const verifiedOn = validatedAt ? validatedAt.slice(0, 10) : null;
-  const expired = !withinGrace(stored, now);
-  // A cached status is only true until its grace window closes: `status` is
-  // read-only, so it must not keep promising Pro that the next check will drop.
-  const status = !stored.status
-    ? (expired ? LICENSE_STATUS.UNVERIFIED : LICENSE_STATUS.ACTIVE)
-    : (stored.status === LICENSE_STATUS.CACHED && expired ? LICENSE_STATUS.UNVERIFIED : stored.status);
+  const withinWindow = withinGrace(stored, now);
+  // A stored Pro word is a claim about a check DeskUptime has not made *since*.
+  // `status` is read-only, so a word nobody has re-checked keeps claiming a state
+  // the next check may well drop. That was already true for `cached` and false
+  // for `active` — measured on one state file, 41 days old, same machine, same
+  // second, the only difference being the stored word:
+  //
+  //   {status: 'active', validatedAt: 41 d ago} → "Pro license: active, last verified 2026-08-16"
+  //   {status: 'cached', validatedAt: 41 d ago} → "Pro license: unverified — not verified for 41 days"
+  //
+  // `active` is the *stronger* word — the server confirmed the key — so measuring it
+  // against nothing is the worse of the two, and `active` with no `validatedAt` at
+  // all printed "Pro license: active, not verified yet". A record with no
+  // verification time has no verification, so it is not Pro either.
+  //
+  // Nothing is lost by downgrading: the key stays on disk, the detail keeps saying
+  // when it was last confirmed, and the next successful check restores `active` —
+  // exactly the path a stale `cached` already had.
+  const proWords = !stored.status || stored.status === LICENSE_STATUS.ACTIVE || stored.status === LICENSE_STATUS.CACHED;
+  const status = proWords && !withinWindow ? LICENSE_STATUS.UNVERIFIED : (stored.status ?? LICENSE_STATUS.ACTIVE);
 
   if (status === LICENSE_STATUS.ACTIVE) {
     return {

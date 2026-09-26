@@ -20,7 +20,7 @@ import { fileURLToPath } from 'url';
 import { invalidHttpUrls, readChain, readEntry, readSslState, STALE_AFTER_DAYS } from './status.js';
 import { formatMs, machinesInUse, safeText } from './display.js';
 import { DEFAULT_WINDOW_DAYS, HISTORY_DAYS, loadHistory } from './history.js';
-import { FREE, PRODUCT, renderHelpPro } from './features.js';
+import { FREE, PRODUCT, proExtras, renderHelpPro } from './features.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const pkg = JSON.parse(readFileSync(join(__dirname, '..', 'package.json'), 'utf-8'));
@@ -453,7 +453,13 @@ if (command === 'status') {
   const urls = Object.keys(state.urls);
   const license = describeLicense(state.license);
   if (license.status === LICENSE_STATUS.FREE) {
-    console.log('Free tier. Activate Pro: deskuptime activate <license-key>');
+    // A free user running `status` is asking what they have and what to do next,
+    // and the old line dead-ended at `activate <license-key>` — a key they cannot
+    // have without buying first. Every other place a free user meets the Pro
+    // boundary (--help, README, the 4th URL, `proGateMessage`) points at the
+    // checkout, and this is the first command such a user runs.
+    console.log(`Free tier. ${PRODUCT.proName} (${PRODUCT.priceLong}, ${PRODUCT.machines} machines) adds ${proExtras()}`);
+    console.log(`  Buy: ${BUY_URL}`);
   } else if (license.status === LICENSE_STATUS.ACTIVE) {
     console.log(`Pro license: active${license.detail ? `, ${license.detail}` : ''}`);
   } else if (license.status === LICENSE_STATUS.CACHED) {

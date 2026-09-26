@@ -12,7 +12,7 @@
  */
 
 import { checkUrl } from './engine.js';
-import { activateLicense, refreshLicense, normalizeLicense, proGateMessage, LICENSE_STATUS, PRO_STATUSES } from './license.js';
+import { activateLicense, refreshLicense, normalizeLicense, describeLicense, proGateMessage, LICENSE_STATUS, PRO_STATUSES } from './license.js';
 import { readFileSync, writeFileSync, mkdirSync, existsSync, renameSync, unlinkSync, statSync, chmodSync } from 'fs';
 import { dirname, posix, win32 } from 'path';
 import { homedir } from 'os';
@@ -119,10 +119,13 @@ export function saveState(state, options = {}) {
  * an allow-list plus the legacy case, so a new status can never hand out Pro by
  * accident while an installation that predates the status field keeps working.
  */
-export function isPro(state) {
-  const license = state?.license;
-  if (!license?.key || !license?.instance) return false;
-  return license.status == null || PRO_STATUSES.includes(license.status);
+export function isPro(state, { now = Date.now() } = {}) {
+  // `describeLicense` is the one reading of a stored license, and it is the one
+  // `deskuptime status` prints. It used to read `license.status` here instead,
+  // which meant the gate and the status line could disagree about the same
+  // record: a key stored as `active` 41 days ago got Pro in the gate while
+  // `status` said the server had not confirmed it for over a month. Ask instead.
+  return PRO_STATUSES.includes(describeLicense(state?.license, { now }).status);
 }
 
 function hashContent(str) {

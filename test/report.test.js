@@ -41,8 +41,18 @@ function writeState(home, state) {
 }
 
 function proState(urls) {
+  // A real activated license always carries the timestamp of the check that
+  // activated it (`refreshLicense` bumps `validatedAt` on every verdict). A
+  // record without one has never been confirmed, and `describeLicense` says so
+  // rather than letting the stored word `active` speak for it — see P1-18.
   return {
-    license: { key: LICENSE_KEY, instance: 'deskuptime-agency', plan: 'pro', status: 'active' },
+    license: {
+      key: LICENSE_KEY,
+      instance: 'deskuptime-agency',
+      plan: 'pro',
+      status: 'active',
+      validatedAt: new Date().toISOString(),
+    },
     urls,
   };
 }

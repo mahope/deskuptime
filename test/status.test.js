@@ -1232,15 +1232,25 @@ test('loadState drops a corrupt license record instead of granting Pro', (t) => 
   assert.equal(loaded.license.instance, 'deskuptime-maskine');
 });
 
-test('a license the server rejected loses Pro, a cached one keeps it', () => {
+test('a license the server rejected loses Pro, and a Pro word nobody re-checked loses it too', () => {
   const base = { key: LICENSE_KEY, instance: 'deskuptime-maskine' };
+  const fresh = new Date().toISOString();
+  const fortyOneDays = new Date(Date.now() - 41 * 24 * 60 * 60 * 1000).toISOString();
   assert.equal(isPro({ license: { ...base, status: 'invalid' } }), false);
-  assert.equal(isPro({ license: { ...base, status: 'cached' } }), true);
-  assert.equal(isPro({ license: { ...base, status: 'active' } }), true);
+  assert.equal(isPro({ license: { ...base, status: 'cached', validatedAt: fresh } }), true);
+  assert.equal(isPro({ license: { ...base, status: 'active', validatedAt: fresh } }), true);
   // An unverified key is not Pro either, even though it was never rejected.
   assert.equal(isPro({ license: { ...base, status: 'unverified' } }), false);
-  // Legacy state without a status keeps working until the next re-check.
-  assert.equal(isPro({ license: base }), true);
+  // Legacy state without a status keeps working — but only while something says
+  // when it was last confirmed. `active` and `cached` are claims about a check,
+  // and a record whose last confirmation is 41 days old has been contradicted by
+  // time, not by the server: `status` reads the same record as `unverified`.
+  assert.equal(isPro({ license: { ...base, validatedAt: fresh } }), true);
+  assert.equal(isPro({ license: base }), false, 'a license with no confirmation time is not Pro');
+  assert.equal(isPro({ license: { ...base, status: 'active', validatedAt: fortyOneDays } }), false);
+  assert.equal(isPro({ license: { ...base, status: 'cached', validatedAt: fortyOneDays } }), false);
+  // …and a rejection is not a measurement that goes stale, so it keeps its word.
+  assert.equal(isPro({ license: { ...base, status: 'invalid', validatedAt: fortyOneDays } }), false);
 });
 
 test('cli: status names the license state and never prints the key', async (t) => {
@@ -1256,9 +1266,38 @@ test('cli: status names the license state and never prints the key', async (t) =
   };
   const yesterday = new Date(Date.now() - 86_400_000).toISOString();
 
-  assert.match(await withLicense(null), /Free tier\. Activate Pro/);
+  // A free user gets a way to buy, not just a way to be told they are free:
+  // `deskuptime status` is the first command such a user runs, and the old line
+  // ended at `activate <license-key>` — a key they cannot have without buying.
+  const free = await withLicense(null);
+  assert.match(free, /Free tier\./);
+  assert.match(free, /buy\.stripe\.com/, 'en gratisbruger får ingen vej til at købe');
+  assert.doesNotMatch(free, new RegExp(LICENSE_KEY));
+
   assert.match(await withLicense({ key: LICENSE_KEY, instance: 'deskuptime-maskine', status: 'active', validatedAt: yesterday }), /Pro license: active, last verified/);
   assert.match(await withLicense({ key: LICENSE_KEY, instance: 'deskuptime-maskine', status: 'cached', validatedAt: yesterday }), /Pro license: cached\/offline/);
+
+  // P1-18: a Pro word is a claim about a check. `status` is read-only, so a word
+  // whose last confirmation is 41 days old is a claim about a check that never
+  // happened — the same sentence the identical record already got as `cached`.
+  const fortyOneDays = new Date(Date.now() - 41 * 86_400_000).toISOString();
+  const staleActive = await withLicense({ key: LICENSE_KEY, instance: 'deskuptime-maskine', status: 'active', validatedAt: fortyOneDays });
+  const staleCached = await withLicense({ key: LICENSE_KEY, instance: 'deskuptime-maskine', status: 'cached', validatedAt: fortyOneDays });
+  assert.match(staleActive, /Pro license: unverified/);
+  assert.match(staleActive, /not verified for 41 days/);
+  assert.doesNotMatch(staleActive, /buy\.stripe\.com/, 'denne kunde har betalt');
+  assert.equal(
+    staleActive.split('\n')[0],
+    staleCached.split('\n')[0],
+    'to state-filer der kun adskiller sig ved ét gemt ord må ikke få modsatte domme',
+  );
+  // And a record with no confirmation time at all cannot say "active, not
+  // verified yet" in one line.
+  const neverConfirmed = await withLicense({ key: LICENSE_KEY, instance: 'deskuptime-maskine', status: 'active' });
+  assert.match(neverConfirmed, /Pro license: unverified/);
+  assert.match(neverConfirmed, /never verified/);
+  assert.doesNotMatch(neverConfirmed, /Pro license: active/);
+
   const invalid = await withLicense({ key: LICENSE_KEY, instance: 'deskuptime-maskine', status: 'invalid', validatedAt: yesterday });
   assert.match(invalid, /Pro license: invalid/);
   assert.match(invalid, /still stored/);

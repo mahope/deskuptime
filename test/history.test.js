@@ -281,7 +281,7 @@ test('--days is validated instead of silently ignored', async (t) => {
   const home = tempHome(t);
   mkdirSync(join(home, '.deskuptime'), { recursive: true });
   writeFileSync(join(home, '.deskuptime', 'state.json'), JSON.stringify({
-    license: { key: LICENSE_KEY, instance: 'deskuptime-agency', plan: 'pro', status: 'active' },
+    license: { key: LICENSE_KEY, instance: 'deskuptime-agency', plan: 'pro', status: 'active', validatedAt: NOW.toISOString() },
     urls: { [URL_A]: { wasUp: true, lastStatus: 200, checks: 4, checksUp: 4, lastChecked: NOW.toISOString() } },
   }));
   const env = { ...process.env, HOME: home, USERPROFILE: home };

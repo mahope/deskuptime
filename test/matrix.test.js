@@ -210,6 +210,19 @@ test('hver kundeoverflade har ét købsflow, og det er kontraktens link', async 
   const help = await run(process.execPath, [CLI, '--help']);
   const helpLinks = [...new Set([...help.stdout.matchAll(/https:\/\/buy\.stripe\.com\/[A-Za-z0-9]+/g)].map(m => m[0]))];
   assert.deepEqual(helpLinks, [CONTRACT.buyUrl]);
+
+  // `deskuptime status` er den første kommando en gratisbruger kører, og dens
+  // eneste opgave for den bruger er at sige hvad næste skridt er. Den sluttede
+  // ved `activate <license-key>` — en nøgle brugeren ikke kan have uden at købe
+  // først, altså en dødsport uden købsknap. Én link, og det er kontraktens.
+  const { stdout: statusOut } = await cli(['status'], tempHome());
+  const statusLinks = [...new Set([...statusOut.matchAll(/https:\/\/buy\.stripe\.com\/[A-Za-z0-9]+/g)].map(m => m[0]))];
+  assert.deepEqual(statusLinks, [CONTRACT.buyUrl], 'status giver en gratisbruger ingen eller flere købsveje');
+  assert.ok(statusOut.includes(PRODUCT.proName), 'status nævner ikke hvad Pro er');
+  assert.ok(statusOut.includes(PRODUCT.priceLong), 'status nævner ikke prisen');
+  for (const row of MATRIX.filter(entry => !entry.implemented)) {
+    assert.ok(!statusOut.includes(row.en), `status lover den ubyggede kanal "${row.en}"`);
+  }
 });
 
 test('npm-beskrivelsen er genereret fra matrixen og nævner kun byggede kanaler', () => {

@@ -41,11 +41,36 @@ det er cached-grace-vinduet, der dækker det.
 
 | Tilstand | Betydning | Pro i CLI'en |
 |---|---|---|
-| `active` | Serveren bekræftede ved seneste check | Ja |
+| `active` | Serveren bekræftede ved seneste check, og det er under 7 dage siden | Ja |
 | `cached` | Ingen oplysning, men seneste bekræftelse er under 7 dage gammel | Ja |
 | `unverified` | Ingen oplysning i over 7 dage — nøglen er **aldrig afslået** | Nej |
 | `invalid` | Serveren har afslået nøglen | Nej |
 | `free` | Ingen gyldig licens gemt | Nej |
+
+**Et gemt Pro-ord er en påstand om et check.** `status` er read-only, så et ord
+bærer videre, indtil næste check modsiger det. Derfor må `active` og `cached`
+kun stå som Pro, **mens deres seneste bekræftelse er inden for 7-dages
+vinduet** — samme regel for begge, fordi `status` ellers ville svare på
+identisk evidens med modsatte ord:
+
+```
+{status: 'active', validatedAt: 41 d siden} → "Pro license: active, last verified 2026-08-16"
+{status: 'cached', validatedAt: 41 d siden} → "Pro license: unverified — not verified for 41 days"
+```
+
+En record **uden** `validatedAt` har ingen bekræftelse og er derfor heller ikke
+`active`; før dette skrev den `Pro license: active, nedan: not verified yet`.
+`describeLicense()` i `src/license.js` er den ene læsning af dette, og `isPro()`
+i `src/watch.js` spørger den — ellers ville gaten og `status` kunne være uenige
+om den samme nøgle. `refreshLicense()` gendanner `active` ved det næste
+verdikt, og nøglen slettes aldrig, så intet går tabt ved nedgraderingen.
+
+**Én købsvej pr. overflade.** `free` er den eneste Pro-relevante tilstand med
+kassen som svar, fordi det er den eneste, hvor kunden endnu ikke har betalt.
+`deskuptime status` skal derfor pege på købslinket — det er den første
+kommando en gratisbruger kører, og den må ikke ende i `activate <license-key>`
+uden en vej til den nøgle. `test/matrix.test.js` låser præcis ét købslink i
+`status`-outputtet, og at det er kontraktens.
 
 **Hvorfor `unverified` er et eget ord.** Før dette ord fandtes, læste "ingen
 bekræftelse i over 7 dage" som `invalid`, altså som *afslået*. Det er en løgn:
@@ -97,6 +122,9 @@ Ingen licensnøgle, device-id eller webhook-hemmelighed skrives i logfiler.
    to-forsøgs-loft og samme regel om at et langt `Retry-After` ikke genprøves.
 3. Samme fem tilstande i UI'en — især at `invalid` og `unverified` slår Pro fra med
    det samme, og at `unverified` ikke må få kunden til at tro nøglen er død.
+   Samme regel for **`active` og `cached`**: et gemt Pro-ord må kun vises som Pro,
+   mens sidste bekræftelse er under 7 dage gammel (reglen ovenfor), ellers viser
+   UI'en en bekræftelse der aldrig kom.
 4. Samme 7-dages grace uden at skrive gamle `license.instance`-id'er om
    (se P0-6: CLI'en bruger stadig det gemte id, indtil migreringen er dokumenteret).
 5. `0600` state-fil i `0700`-mappe, atomisk skrivning, validering ved indlæsning.
