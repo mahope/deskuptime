@@ -17,7 +17,7 @@ import { readFileSync, writeFileSync, mkdirSync, existsSync, renameSync, unlinkS
 import { dirname, posix, win32 } from 'path';
 import { homedir } from 'os';
 import { createHash, randomUUID } from 'crypto';
-import { assertValidHttpUrls, expiredNote, isNewerPass, partitionUsableUrls, readContentChange, readEntry, readEvent, readRedirectTarget, queuedAgeMs, readSslState, STALE_AFTER_DAYS, unusableUrlNote, withoutCredentials } from './status.js';
+import { assertValidHttpUrls, expiredNote, findUrlKey, isNewerPass, partitionUsableUrls, readContentChange, readEntry, readEvent, readRedirectTarget, queuedAgeMs, readSslState, STALE_AFTER_DAYS, unusableUrlNote, urlIdentity, withoutCredentials } from './status.js';
 import { recordPass } from './report.js';
 import { formatMs, safeText } from './display.js';
 import { loadHistory, pruneHistory, recordHistoryPass, saveHistory } from './history.js';
@@ -662,13 +662,25 @@ export function printStatus(options = {}) {
 }
 
 /**
- * How many of the saved keys are addresses we can actually monitor. A key that
- * is not an address cannot be checked, so it must not hold one of the free
- * tier's three slots: it used to, and the only way to get the slot back was to
- * hand-edit `state.json` — the file that also holds the license key.
+ * How many of the saved keys are addresses we can actually monitor, counting
+ * each site once.
+ *
+ * A key that is not an address cannot be checked, so it must not hold one of the
+ * free tier's three slots: it used to, and the only way to get the slot back was
+ * to hand-edit `state.json` — the file that also holds the license key.
+ *
+ * Two keys for the same site are one site, and they are counted as one for the
+ * same reason: `https://kunde.dk` and `https://kunde.dk/` took two of the three
+ * slots, so a customer could not add their third site (measured 2026-09-26).
+ * `addMonitoredUrls()` no longer writes the second form, so this only counts
+ * apart for a file written before that, or hand-edited.
  */
 export function monitoredCount(state) {
-  return partitionUsableUrls(Object.keys(state?.urls ?? {})).usable.length;
+  const identities = new Set();
+  for (const url of partitionUsableUrls(Object.keys(state?.urls ?? {})).usable) {
+    identities.add(urlIdentity(url));
+  }
+  return identities.size;
 }
 
 function addMonitoredUrls(state, urls, pro) {
@@ -676,6 +688,17 @@ function addMonitoredUrls(state, urls, pro) {
   let added = 0;
   for (const url of urls) {
     if (state.urls[url]) continue;
+    // The same site in another spelling — `https://kunde.dk` and
+    // `https://kunde.dk/`, the form a browser's address bar shows — used to be
+    // saved a second time: it took a second of the free tier's three slots, was
+    // requested again on every pass, and got a second row with its own numbers
+    // in the client report. It is the same site, so it says so and names the key
+    // it is already stored under, which is also the spelling `unwatch` needs.
+    const sameSite = findUrlKey(state.urls, url);
+    if (sameSite) {
+      console.log(`⚠️  Already monitoring this site as ${sameSite} — ${url} not added.`);
+      continue;
+    }
     // A saved key that is not an address cannot be monitored, so it must not
     // hold a slot: on the free tier it used to consume one of the three, and
     // the only way to get the slot back was to hand-edit `state.json` — the
@@ -892,9 +915,15 @@ export function unwatchUrls(urls, opts = {}) {
     const removed = [];
     const missing = [];
     for (const url of wanted) {
-      if (state.urls[url]) {
-        delete state.urls[url];
-        removed.push(url);
+      // The key the site is actually stored under, in any spelling: the address
+      // bar says `https://kunde.dk/` and the file says `https://kunde.dk`, and
+      // "not monitored" for the same site would send the user off to hand-edit
+      // the file that holds the license key. An exact key still wins, so a file
+      // that holds both forms loses one of them and keeps the other.
+      const key = findUrlKey(state.urls, url);
+      if (key) {
+        delete state.urls[key];
+        removed.push(key);
       } else {
         missing.push(url);
       }

@@ -1384,6 +1384,53 @@ export function isCheckableUrl(value) {
   return isHttpUrl(value) && !hasUrlCredentials(value);
 }
 
+/**
+ * The one form two addresses are compared in, so "is this the same site?" has a
+ * single answer everywhere.
+ *
+ * Measured 2026-09-26, real CLI, real state file and a real client report: the
+ * free tier counts three saved keys, and `https://kunde.dk` and `https://kunde.dk/`
+ * were two of them. The second one is the same site — `new URL()` says so, and a
+ * browser's address bar only ever shows the second form, so the duplicate is the
+ * form a user copies — and it took a slot, was requested again on every pass, and
+ * got its own row with its own numbers in the report a bureau sends to a
+ * customer, under a summary that read `2 site(s) · 2 up`. One customer site, two
+ * rows and one free slot gone.
+ *
+ * `new URL()` is the parser the validator already uses, so this cannot disagree
+ * with `isHttpUrl()`. It lowercases scheme and host, drops a default port, and
+ * gives an empty path its `/` — a redirect's worth of normalisation, none of
+ * which changes which server answers. A string that is not an address compares
+ * as itself, so the P1-40 class (`kunde.dk`) is untouched: two unusable keys are
+ * still two keys, because neither can be measured anyway.
+ */
+export function urlIdentity(value) {
+  const text = String(value).trim();
+  try {
+    return new URL(text).toString();
+  } catch {
+    return text;
+  }
+}
+
+/** Are these two addresses the same site, in any of the forms it can be typed? */
+export function sameUrl(a, b) {
+  return a === b || urlIdentity(a) === urlIdentity(b);
+}
+
+/**
+ * The saved key this address is already stored under, or `null`.
+ *
+ * An exact hit wins over a normalised one, so `unwatch` of a key that exists
+ * verbatim removes that key — which is what keeps a state file that holds both
+ * forms repairable by hand instead of guessing which half to drop.
+ */
+export function findUrlKey(urls, url) {
+  if (Object.hasOwn(urls, url)) return url;
+  const identity = urlIdentity(url);
+  return Object.keys(urls).find((key) => urlIdentity(key) === identity) ?? null;
+}
+
 /** The one sentence for an address we refuse, so it never prints a password. */
 export function invalidUrlMessage(url) {
   if (hasUrlCredentials(url)) {
