@@ -17,7 +17,7 @@ import { buildReport, renderReportJson, renderReportMarkdown } from './report.js
 import { readFileSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
-import { invalidHttpUrls, readChain, readContentState, readDisclosure, readEntry, readSecurityHeaders, readSslState, contentSkipNote, SECURITY_HEADER, STALE_AFTER_DAYS } from './status.js';
+import { invalidHttpUrls, readChain, readContentState, readDisclosure, readEntry, readRedirectTarget, readSecurityHeaders, readSslState, contentSkipNote, SECURITY_HEADER, STALE_AFTER_DAYS } from './status.js';
 import { formatMs, machinesInUse, safeText } from './display.js';
 import { DEFAULT_WINDOW_DAYS, HISTORY_DAYS, loadHistory } from './history.js';
 import { FREE, PRODUCT, proExtras, renderHelpPro } from './features.js';
@@ -125,6 +125,7 @@ if (command === 'check') {
     // Machine-readable output: stdout is pure JSON for piping into jq/CI
     const out = results.map(r => {
       const content = readContentState(r.content);
+      const redirect = readRedirectTarget({ url: r.url, finalUrl: r.finalUrl });
       const ssl = readSslState({
         days: r.ssl?.validDays,
         expired: r.ssl?.isExpired,
@@ -136,6 +137,14 @@ if (command === 'check') {
         healthy: r.healthy,
         statusCode: r.statusCode,
         responseTimeMs: r.responseTimeMs,
+        // Where the response actually came from. The engine measured this on
+        // every check since P0-3 and no surface could read it, so a URL that
+        // redirects to another host was reported as a plain 200 — the same UP
+        // for a parked domain, a hijacked domain and a typo. `offHostRedirect`
+        // is the sentence the JSON could not say; `finalUrl` is the raw fact.
+        // Both additive, so nothing that reads the old fields changes.
+        finalUrl: redirect.finalUrl,
+        offHostRedirect: redirect.offHost,
         sslDaysRemaining: r.ssl?.validDays ?? null,
         sslExpired: r.ssl?.isExpired ?? false,
         sslExpiredDays: r.ssl?.expiredDays ?? null,
@@ -172,6 +181,7 @@ if (command === 'check') {
     for (const result of results) {
       const summary = summarize(result);
       const content = readContentState(result.content);
+      const redirect = readRedirectTarget({ url: result.url, finalUrl: result.finalUrl });
       const statusSymbol = result.healthy ? '✅' : '❌';
       const sslEmoji = summary.sslIcon;
       const changedEmoji = result.content?.changed === true ? '🔄' : result.content?.changed === false ? '⏸️' : '—';
@@ -181,6 +191,12 @@ if (command === 'check') {
       // checked, so it goes through safeText() — see src/display.js.
       console.log(`${statusSymbol} ${safeText(result.url, { max: 0 })}`);
       console.log(`   Status:   ${httpStatus} — ${result.healthy ? 'UP' : 'DOWN'}`);
+      // A 200 is a claim about whoever answered, and the answer is not always the
+      // URL that was asked. Named here, on the free surface that decides the exit
+      // code, so "UP" can no longer mean "somebody answered 200".
+      if (redirect.offHost) {
+        console.log(`   ⚠️  ${safeText(redirect.note, { max: 0 })}`);
+      }
       console.log(`   Response: ${formatMs(result.responseTimeMs)}`);
       console.log(`   ${sslEmoji} SSL:     ${safeText(summary.ssl, { max: 0 })}`);
       if (content.measured) {

@@ -10,7 +10,7 @@ import { fileURLToPath } from 'node:url';
 import { checkUrl, checkUrls } from '../src/engine.js';
 import { checkReachability } from '../src/checkers/ping.js';
 import { getStateFile, loadState, runPass, saveState, isPro } from '../src/watch.js';
-import { readChain, readDisclosure, readHttpsState, readSecurityHeaders, SECURITY_HEADER, urlScheme } from '../src/status.js';
+import { readChain, readDisclosure, readHttpsState, readRedirectTarget, readSecurityHeaders, SECURITY_HEADER, urlScheme } from '../src/status.js';
 
 const run = promisify(execFile);
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
@@ -1869,4 +1869,121 @@ test('action: a payload whose sslExpiringSoon is not a boolean fails the step', 
       return true;
     },
   );
+});
+
+// ── check: a 200 from another host is not a 200 from the site (P1-26) ──
+//
+// Measured with the real CLI against a local site that 301s to a *different*
+// host and answers 200 there — a registrar's parking page, or a domain pointed
+// at one — before any code changed:
+//
+//   $ deskuptime check http://127.0.0.1:58853/
+//   ✅ http://127.0.0.1:58853/
+//      Status:   200 — UP                                     ← exit 0
+//   $ deskuptime headers http://127.0.0.1:58853/
+//      301 → http://127.0.0.1:58851/lander
+//      Final: http://127.0.0.1:58851/lander (200) — redirected
+//
+// `finalUrl` was measured by `checkReachability` on every check and died in the
+// engine: not the terminal, not `--json`, not `watch`, not the client report. So
+// "UP" was a claim about a URL nobody asked about — and a client's domain that
+// expires and gets parked answers 200, which is 100 % uptime in a bureau's
+// report for a site that has not existed for a month.
+
+test('redirect target: the host that answered is read once, and only when it can be', () => {
+  // The same host, spelled the way a redirect spells it: a path and a default
+  // port are not another host. `http://a.dk` and `http://a.dk:80/` are one host.
+  const same = readRedirectTarget({ url: 'http://acme.dk/gammel', finalUrl: 'http://acme.dk:80/ny' });
+  assert.equal(same.offHost, false);
+  assert.equal(same.askedHost, 'acme.dk');
+  assert.equal(same.answeredHost, 'acme.dk');
+  assert.equal(same.note, '');
+
+  // An http → https upgrade is the site's own doing, not another host, and
+  // `readHttpsState` already has a verdict about it (`forcesHttps`).
+  assert.equal(readRedirectTarget({ url: 'http://acme.dk/', finalUrl: 'https://acme.dk/' }).offHost, false);
+
+  // A different port is a different server, and `host` (not `hostname`) says so.
+  assert.equal(readRedirectTarget({ url: 'http://acme.dk/', finalUrl: 'http://acme.dk:8080/' }).offHost, true);
+
+  // The finding: the 200 came from somewhere else, and it is named.
+  const off = readRedirectTarget({ url: 'https://kunde.dk/', finalUrl: 'http://parked.example/lander' });
+  assert.equal(off.offHost, true);
+  assert.equal(off.finalUrl, 'http://parked.example/lander');
+  assert.match(off.note, /parked\.example/);
+  assert.match(off.note, /kunde\.dk/);
+
+  // A rule that cannot be measured claims nothing — the bar `readSslState` and
+  // `readContentState` are held to. No response, or an unparseable URL, is not
+  // a host change.
+  assert.equal(readRedirectTarget({ url: 'https://kunde.dk/', finalUrl: null }).offHost, false);
+  assert.equal(readRedirectTarget({ url: 'https://kunde.dk/' }).offHost, false);
+  assert.equal(readRedirectTarget({ url: 'kunde.dk', finalUrl: 'https://andet.dk/' }).offHost, false);
+  assert.equal(readRedirectTarget({}).offHost, false);
+  assert.equal(readRedirectTarget({ url: 'https://kunde.dk/', finalUrl: '' }).finalUrl, null);
+});
+
+test('check: a response from another host is named, and a redirect on the same host is not', async (t) => {
+  // Two hosts, as two ports: the monitored site 301s off to the second one.
+  const parked = createServer((req, res) => {
+    res.writeHead(200, { 'content-type': 'text/html' });
+    res.end('<html><title>This domain may be for sale</title></html>');
+  });
+  const parkedPort = await listen(parked);
+  t.after(() => close(parked));
+
+  const site = createServer((req, res) => {
+    if (req.url === '/flyttet') {
+      res.writeHead(301, { location: `http://127.0.0.1:${parkedPort}/lander` });
+      res.end();
+      return;
+    }
+    // A redirect on its own host — the ordinary kind, which must stay quiet.
+    if (req.url === '/gammel') {
+      res.writeHead(301, { location: '/ny' });
+      res.end();
+      return;
+    }
+    res.writeHead(200, { 'content-type': 'text/html' });
+    res.end('<html><title>Client site</title></html>');
+  });
+  const sitePort = await listen(site);
+  t.after(() => close(site));
+
+  // The harm: a domain that is now a parking page reads as a healthy site.
+  const hijacked = `http://127.0.0.1:${sitePort}/flyttet`;
+  const human = await run(process.execPath, [CLI, 'check', hijacked, '--timeout', REQUEST_TIMEOUT]);
+  assert.match(human.stdout, /⚠️  answered by another host/, human.stdout);
+  assert.match(human.stdout, new RegExp(String(parkedPort)), 'the note must name the host that answered');
+  // A redirect is not a DOWN: `www.acme.dk → acme.dk` is the most ordinary
+  // redirect on the web, and failing it would be a false alarm on a healthy site.
+  assert.match(human.stdout, /200 — UP/, human.stdout);
+
+  const json = JSON.parse((await run(process.execPath, [CLI, 'check', hijacked, '--json', '--timeout', REQUEST_TIMEOUT])).stdout);
+  assert.equal(json[0].healthy, true, 'the verdict itself is unchanged');
+  assert.equal(json[0].offHostRedirect, true);
+  assert.equal(json[0].finalUrl, `http://127.0.0.1:${parkedPort}/lander`);
+  // Everything the fix does not touch is byte-identical, so no existing consumer
+  // of `check --json` changes.
+  assert.equal(json[0].url, hijacked);
+  assert.equal(json[0].statusCode, 200);
+
+  // The control: the same site, reached by a path redirect on its own host.
+  const own = `http://127.0.0.1:${sitePort}/gammel`;
+  const quiet = await run(process.execPath, [CLI, 'check', own, '--timeout', REQUEST_TIMEOUT]);
+  assert.doesNotMatch(quiet.stdout, /answered by another host/, quiet.stdout);
+  const quietJson = JSON.parse((await run(process.execPath, [CLI, 'check', own, '--json', '--timeout', REQUEST_TIMEOUT])).stdout);
+  assert.equal(quietJson[0].offHostRedirect, false);
+  assert.equal(quietJson[0].finalUrl, `http://127.0.0.1:${sitePort}/ny`);
+});
+
+test('check: the host comparison has one owner', () => {
+  const strip = text => text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+  const cli = strip(readFileSync(join(ROOT, 'src', 'cli.js'), 'utf8'));
+  assert.match(cli, /readRedirectTarget\(/, 'cli.js must ask the owner, not compare hosts itself');
+  assert.match(cli, /offHostRedirect: redirect\.offHost/);
+  assert.match(cli, /if \(redirect\.offHost\)/);
+  // The engine already measured this; a second reader of `finalUrl` in the
+  // terminal is a second rule that can drift from the JSON's.
+  assert.doesNotMatch(cli, /\.host\s*[!=]==?\s*/, 'the terminal must not compare hosts on its own');
 });

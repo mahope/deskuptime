@@ -112,6 +112,77 @@ export function readHttpsState({ startUrl = '', finalUrl = null } = {}) {
   };
 }
 
+/**
+ * The host part of a URL, or `null` when the string is not a URL.
+ *
+ * `host` and not `hostname`: a redirect from `http://acme.dk` to
+ * `http://acme.dk:8080` is a different server, not a spelling of the same one.
+ * It also drops the default port, so `http://acme.dk` and `http://acme.dk:80/`
+ * are one host — the thing `new URL()` already normalises for us.
+ */
+function hostKey(url) {
+  try {
+    return new URL(url).host;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Which host actually answered, and whether it is the one that was asked.
+ *
+ * The measurement was already made and thrown away. `checkReachability` reads
+ * `response.url` — the URL undici landed on after following redirects — and
+ * `checkUrl` copies it into `result.finalUrl`, and there it stopped: not the
+ * terminal, not `check --json`, not `watch`, not the client report. Measured
+ * with the real CLI against a local site that 301s to a different host and
+ * answers 200 there — a registrar's parking page, or a hijacked domain pointed
+ * at one:
+ *
+ *   $ deskuptime check http://127.0.0.1:58853/
+ *   ✅ http://127.0.0.1:58853/
+ *      Status:   200 — UP                                    ← exit 0
+ *   $ deskuptime headers http://127.0.0.1:58853/
+ *      301 → http://127.0.0.1:58851/lander
+ *      Final: http://127.0.0.1:58851/lander (200) — redirected ← the truth
+ *
+ * So "UP" was a claim about a URL nobody asked about. A client's domain that
+ * expires and gets parked answers 200, and a bureau's report says 100 % uptime
+ * for a month; a domain pointed at a phishing page stays green; a typo in the
+ * monitored URL lands on a registrar's "did you mean" page and stays green. The
+ * one surface that did the walk said so, and the surfaces that decide the verdict
+ * could not, because the fact never left the engine.
+ *
+ * This is a fact, not an alarm. `www.acme.dk → acme.dk` is the most ordinary
+ * redirect on the web and it is *reported* here too, on purpose: the tool cannot
+ * know which host change is intended, so it names the change and the reader
+ * decides. A redirect is never a DOWN — that would be a false alarm on a
+ * healthy site.
+ *
+ * `offHost` is `false` whenever either host cannot be read, because a rule that
+ * cannot be measured must not claim anything (the same bar `readSslState` and
+ * `readContentState` are held to).
+ *
+ * @param {object} [state] — `{ url, finalUrl }`; `finalUrl` is null when no
+ *   response was received at all.
+ * @returns {{ finalUrl: string|null, offHost: boolean, askedHost: string|null, answeredHost: string|null, note: string }}
+ */
+export function readRedirectTarget({ url = '', finalUrl = null } = {}) {
+  const askedHost = hostKey(url);
+  const answeredHost = hostKey(finalUrl);
+  const measured = typeof finalUrl === 'string' && finalUrl !== '' && askedHost !== null && answeredHost !== null;
+  const offHost = measured && askedHost !== answeredHost;
+  return {
+    finalUrl: typeof finalUrl === 'string' && finalUrl ? finalUrl : null,
+    offHost,
+    askedHost,
+    answeredHost,
+    note: offHost
+      ? `answered by another host — the response came from ${answeredHost}, not ${askedHost}`
+      : '',
+  };
+}
+
 /** The three states a judged security header can be in. */
 export const SECURITY_HEADER = {
   /** The site sent the header with a value. */
