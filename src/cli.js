@@ -17,7 +17,7 @@ import { buildReport, renderReportJson, renderReportMarkdown } from './report.js
 import { readFileSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
-import { invalidHttpUrls, readChain, readContentState, readEntry, readSecurityHeaders, readSslState, contentSkipNote, STALE_AFTER_DAYS } from './status.js';
+import { invalidHttpUrls, readChain, readContentState, readDisclosure, readEntry, readSecurityHeaders, readSslState, contentSkipNote, SECURITY_HEADER, STALE_AFTER_DAYS } from './status.js';
 import { formatMs, machinesInUse, safeText } from './display.js';
 import { DEFAULT_WINDOW_DAYS, HISTORY_DAYS, loadHistory } from './history.js';
 import { FREE, PRODUCT, proExtras, renderHelpPro } from './features.js';
@@ -260,9 +260,14 @@ if (command === 'headers') {
   // not either, because an empty value had been collapsed into `null` — the very
   // value a header that never arrived has.
   const security = readSecurityHeaders(r.security);
+  // And the two fields that say what a site is built on, read the same way: one
+  // reading, asked once. `X-Powered-By exposed` is a warning a bureau puts in a
+  // client's report, and an empty value used to make it vanish — the site sent
+  // the header and the tool said it sent nothing.
+  const disclosure = readDisclosure({ server: r.server, poweredBy: r.poweredBy });
 
   if (args.includes('--json')) {
-    console.log(JSON.stringify({ ...r, securityChecked: chain.measured, securityEmpty: security.empty }, null, 2));
+    console.log(JSON.stringify({ ...r, securityChecked: chain.measured, securityEmpty: security.empty, disclosureEmpty: disclosure.empty }, null, 2));
     if (!r.healthy) process.exitCode = 2;
   } else if (r.error) {
     console.log(`🧭 ${safeText(url, { max: 0 })}`);
@@ -290,8 +295,13 @@ if (command === 'headers') {
     if (r.startedHttp) {
       console.log(`   HTTPS forced: ${r.forcesHttps ? '✅ yes' : '❌ no — site served over plain HTTP'}`);
     }
-    if (r.poweredBy) {
-      console.log(`   ⚠️  X-Powered-By exposed: ${safeText(r.poweredBy, { max: 0 })}`);
+    if (disclosure.poweredBy.state === SECURITY_HEADER.PRESENT) {
+      console.log(`   ⚠️  X-Powered-By exposed: ${safeText(disclosure.poweredBy.value, { max: 0 })}`);
+    } else if (disclosure.poweredBy.state === SECURITY_HEADER.EMPTY) {
+      // Sent, and naming nothing. A smaller finding than a version string, and
+      // not the same as a site that does not send it: the site publishes the
+      // marker, so a bureau can say so instead of guessing.
+      console.log('   ⚠️  X-Powered-By sent with no value — the site sends the header, but it names no stack');
     }
     const missing = security.absent;
     for (const [k, v] of security.present) {

@@ -123,6 +123,25 @@ export const SECURITY_HEADER = {
 };
 
 /**
+ * Which of the three states a header value is in.
+ *
+ * The one classifier in this file. A measured fact must never be turned into "we
+ * saw nothing" because the value happened to be falsy, so both readers below ask
+ * this instead of deciding for themselves.
+ *
+ * @param {unknown} value — a header value as the HTTP layer produced it, `null`
+ *   for a header the site never sent, or `undefined` for one a caller omits.
+ * @returns {string} one of {@link SECURITY_HEADER}
+ */
+function headerState(value) {
+  if (value === null || value === undefined) return SECURITY_HEADER.ABSENT;
+  // `trim()` is belt and braces: the value is always a string here, but a caller
+  // that hands us one built from a number must not read as a header with content.
+  if (String(value).trim() === '') return SECURITY_HEADER.EMPTY;
+  return SECURITY_HEADER.PRESENT;
+}
+
+/**
  * One reading of a site's security headers, shared by every surface that lists them.
  *
  * Three things are true of a judged header, and the tool could only say one of
@@ -157,14 +176,50 @@ export function readSecurityHeaders(security) {
   const empty = [];
   const absent = [];
   for (const [name, value] of entries) {
-    if (value === null || value === undefined) absent.push(name);
-    // `trim()` is belt and braces: the value is always a string here, but a
-    // caller that hands us one built from a number must not read as a header
-    // with content either.
-    else if (String(value).trim() === '') empty.push(name);
+    const state = headerState(value);
+    if (state === SECURITY_HEADER.ABSENT) absent.push(name);
+    else if (state === SECURITY_HEADER.EMPTY) empty.push(name);
     else present.push([name, value]);
   }
   return { present, empty, absent };
+}
+
+/**
+ * One reading of the two headers that say what a site is built on, shared by
+ * every surface that shows them.
+ *
+ * Measured with a real CLI against a server sending `X-Powered-By: ` and
+ * `Server:   `, before any code changed:
+ *
+ * *   x-powered-by:               (no value)
+ *     headers        ->  no line at all
+ *     headers --json ->  "poweredBy": null, "server": null
+ *
+ * The same `|| null` P1-24 removed on the five judged headers, on the two fields a
+ * bureau reads as a disclosure finding. `X-Powered-By exposed` is a named warning
+ * in `headers`, and an empty value made it disappear: the tool told a bureau that
+ * a customer's site discloses no stack, while the site was in fact sending the
+ * header — and the JSON it pipes into the customer's own report said `null`, which
+ * reads as "we looked, it was not there".
+ *
+ * An empty value here is not the finding's whole story, so it is not folded into
+ * the five judged headers either. The site sends the marker and names no stack,
+ * which is a third thing to report: smaller than a version string, and different
+ * from never sending it. Callers pick their own sentence; neither may re-decide
+ * which of the three states a field is in.
+ *
+ * @param {object} [disc] — `{ server, poweredBy }` as `checkHeaders` wrote them.
+ * @returns {{ server: object, poweredBy: object, empty: string[] }} each field
+ *   is `{ state, value }`, and `empty` names the fields sent with no value.
+ */
+export function readDisclosure(disc = {}) {
+  const { server = null, poweredBy = null } = disc && typeof disc === 'object' ? disc : {};
+  const read = (value) => ({ state: headerState(value), value: value ?? null });
+  const fields = { server: read(server), poweredBy: read(poweredBy) };
+  const empty = [];
+  if (fields.server.state === SECURITY_HEADER.EMPTY) empty.push('server');
+  if (fields.poweredBy.state === SECURITY_HEADER.EMPTY) empty.push('x-powered-by');
+  return { ...fields, empty };
 }
 
 /**

@@ -131,8 +131,12 @@ export function checkHeaders(url, maxRedirects = 10, options = {}) {
         error: healthy ? null : (chain.complete ? `HTTP ${r.status}` : null),
         forcesHttps: https.forcesHttps,
         startedHttp: https.startedHttp,
-        server: h['server'] || null,
-        poweredBy: h['x-powered-by'] || null,
+        // `?? null`, not `|| null`, for the same reason as the five above: a
+        // server that sends `X-Powered-By: ` *is* disclosing that it sends the
+        // header, and `||` reported that site as disclosing nothing.
+        // `readDisclosure` reads the difference.
+        server: h['server'] ?? null,
+        poweredBy: h['x-powered-by'] ?? null,
         security,
       });
     };
