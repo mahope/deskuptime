@@ -52,6 +52,10 @@ export const LICENSE_STATUS = {
   UNVERIFIED: 'unverified',
   INVALID: 'invalid',
   FREE: 'free',
+  // The seat was released on this machine on purpose (`deskuptime deactivate`).
+  // The key is gone, but the machine is not a prospect: it is a machine that
+  // already paid, and it must never be answered with a checkout link.
+  RELEASED: 'released',
 };
 
 /** The states that entitle the machine to Pro. Everything else is free tier. */
@@ -337,11 +341,18 @@ export async function refreshLicense(license, { now = Date.now() } = {}) {
  * Validate a license object read from disk. Anything that is not a well-formed
  * license record is treated as "no license": a corrupt state file must not
  * hand out Pro, and must not crash the CLI either.
+ *
+ * A *release receipt* — the record a confirmed `deskuptime deactivate` leaves
+ * behind — is the one keyless record that is not "no license". It carries no key
+ * and no Pro, only the fact that this machine gave a seat up on purpose, so the
+ * CLI can stop answering a paying customer with a checkout link. A record that
+ * still has a usable key is read as the license it is: deactivating removes the
+ * key, so `released: true` next to one is a stale flag, not a receipt.
  */
 export function normalizeLicense(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
   const key = normalizeKey(value.key);
-  if (!KEY_PATTERN.test(key)) return null;
+  if (!KEY_PATTERN.test(key)) return value.released === true ? normalizeRelease(value) : null;
   const instance = String(value.instance ?? '').trim();
   if (!instance || instance.length > 128) return null;
   const validatedAt = typeof value.validatedAt === 'string' && Number.isFinite(Date.parse(value.validatedAt))
@@ -354,7 +365,40 @@ export function normalizeLicense(value) {
     ...(status ? { status } : {}),
     ...(validatedAt ? { validatedAt } : {}),
     ...(typeof value.plan === 'string' ? { plan: value.plan } : {}),
+    // The seat count and expiry the license server answered with, kept so a
+    // customer can see them again instead of only in the activate output.
+    ...(Number.isSafeInteger(value.machinesInUse) && value.machinesInUse >= 0 ? { machinesInUse: value.machinesInUse } : {}),
+    ...(typeof value.expiresAt === 'string' && Number.isFinite(Date.parse(value.expiresAt))
+      ? { expiresAt: new Date(value.expiresAt).toISOString() }
+      : {}),
   };
+}
+
+function normalizeRelease(value) {
+  const releasedAt = typeof value.releasedAt === 'string' && Number.isFinite(Date.parse(value.releasedAt))
+    ? new Date(value.releasedAt).toISOString()
+    : null;
+  return {
+    released: true,
+    ...(releasedAt ? { releasedAt } : {}),
+    ...(typeof value.plan === 'string' ? { plan: value.plan } : {}),
+    ...(Number.isSafeInteger(value.machinesInUse) && value.machinesInUse >= 0 ? { machinesInUse: value.machinesInUse } : {}),
+  };
+}
+
+/**
+ * The record a confirmed deactivation leaves in place of the license: when the
+ * seat was given up, and how many of the license's machines were still in use
+ * afterwards. No key — the customer released it, so it is not kept on the
+ * machine that gave it up.
+ */
+export function releaseReceipt({ plan = null, machinesInUse = null, releasedAt = new Date().toISOString() } = {}) {
+  return normalizeRelease({
+    released: true,
+    releasedAt,
+    plan,
+    machinesInUse,
+  });
 }
 
 /**
@@ -369,6 +413,17 @@ export function describeLicense(license, { now = Date.now() } = {}) {
   const stored = normalizeLicense(license);
   if (!stored) {
     return { status: LICENSE_STATUS.FREE, detail: null, validatedAt: null };
+  }
+  // A released seat is read before anything else: it is the one state where the
+  // machine is *not* on the free tier and still has nothing to buy.
+  if (stored.released) {
+    const when = stored.releasedAt ? `seat released on this machine on ${stored.releasedAt.slice(0, 10)}` : 'seat released on this machine';
+    const seats = stored.machinesInUse === undefined ? null : `${stored.machinesInUse} of ${PRODUCT.machines} machines in use`;
+    return {
+      status: LICENSE_STATUS.RELEASED,
+      validatedAt: null,
+      detail: seats ? `${when}, ${seats}` : when,
+    };
   }
   const validatedAt = stored.validatedAt ?? null;
   const verifiedOn = validatedAt ? validatedAt.slice(0, 10) : null;
@@ -394,10 +449,16 @@ export function describeLicense(license, { now = Date.now() } = {}) {
   const status = proWords && !withinWindow ? LICENSE_STATUS.UNVERIFIED : (stored.status ?? LICENSE_STATUS.ACTIVE);
 
   if (status === LICENSE_STATUS.ACTIVE) {
+    // The seat count is what the server answered when this machine activated,
+    // and validate does not report it — so it is labelled as a fact about that
+    // moment rather than as the state of the seats right now.
+    const seats = stored.machinesInUse === undefined
+      ? []
+      : [`${stored.machinesInUse} of ${PRODUCT.machines} machines in use when activated`];
     return {
       status,
       validatedAt,
-      detail: verifiedOn ? `last verified ${verifiedOn}` : 'not verified yet — run "deskuptime watch" to re-check',
+      detail: [verifiedOn ? `last verified ${verifiedOn}` : 'not verified yet — run "deskuptime watch" to re-check', ...seats].join(', '),
     };
   }
   if (status === LICENSE_STATUS.CACHED) {
@@ -453,6 +514,14 @@ export function proGateMessage(license, feature, { now = Date.now() } = {}) {
   const gate = `${feature} needs an active Pro license`;
   if (status === LICENSE_STATUS.FREE) {
     return `${gate}. Pro unlocks it here: ${BUY_URL} — then "deskuptime activate <key>".`;
+  }
+  if (status === LICENSE_STATUS.RELEASED) {
+    // This machine released its seat on purpose, so the license is paid for and
+    // the key still exists. Sending it to the checkout is the one reply that
+    // would make the customer buy a second license for a seat they are holding.
+    // `deskuptime status` names the date and the seat count; the gate says the
+    // state, so the two cannot be read as different answers.
+    return `${gate} — ${detail}. Activate the same key again to get Pro back here: deskuptime activate <license-key>`;
   }
   if (status === LICENSE_STATUS.UNVERIFIED) {
     // This customer has already paid: the server is the problem, not the key.

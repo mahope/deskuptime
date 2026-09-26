@@ -8,7 +8,7 @@
   },
   "type": "module",
   "scripts": {
-    "test": "node --test test/test.js test/ssltruth.test.js test/license.test.js test/status.test.js test/webhook.test.js test/claims.test.js test/matrix.test.js test/report.test.js test/history.test.js test/tarball.test.js test/install.test.js test/display.test.js test/budget.test.js test/statusline.test.js test/watchalert.test.js",
+    "test": "node --test test/test.js test/ssltruth.test.js test/license.test.js test/status.test.js test/webhook.test.js test/claims.test.js test/matrix.test.js test/report.test.js test/history.test.js test/tarball.test.js test/install.test.js test/display.test.js test/budget.test.js test/statusline.test.js test/watchalert.test.js test/seat.test.js",
     "audit": "npm audit",
     "check": "node src/cli.js check https://example.com",
     "release": "node tools/release.mjs",

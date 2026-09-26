@@ -290,10 +290,30 @@ if (command === 'activate') {
   if (!res.valid) {
     console.error(`❌ Activation failed: ${res.error}`);
     if (res.transient) console.error('   Nothing was stored. Pro on this machine is unchanged — try again shortly.');
+    // The one failure that is not a server fault and not a bad key: the license
+    // is fine, this machine is simply the (N+1)th. The server's sentence says
+    // "deactivate another machine" without naming the command or the number of
+    // seats, so a customer who bought three machines and is adding a fourth has
+    // nothing to act on and no way to tell whether a seat is really taken.
+    if (res.status === 409) {
+      console.error(`   ${PRODUCT.proName} covers ${PRODUCT.machines} machines. To free one, run "deskuptime deactivate" on a machine that no longer needs Pro,`);
+      console.error('   then run this command again here with the same license key.');
+    }
     process.exitCode = 1;
   } else {
     const state = loadState();
-    state.license = { key: res.key, instance: res.deviceId, plan: res.meta.plan, status: LICENSE_STATUS.ACTIVE, validatedAt: new Date().toISOString() };
+    state.license = {
+      key: res.key,
+      instance: res.deviceId,
+      plan: res.meta.plan,
+      status: LICENSE_STATUS.ACTIVE,
+      validatedAt: new Date().toISOString(),
+      // The server's own answers about the license, kept so `status` can show
+      // them later instead of only in this line. Both are optional: a server
+      // that omits them leaves the record exactly as it was.
+      ...(Number.isSafeInteger(res.meta.devicesInUse) && res.meta.devicesInUse >= 0 ? { machinesInUse: res.meta.devicesInUse } : {}),
+      ...(typeof res.meta.expiresAt === 'string' && Number.isFinite(Date.parse(res.meta.expiresAt)) ? { expiresAt: res.meta.expiresAt } : {}),
+    };
     saveState(state);
     console.log(`✅ Pro activated (${machinesInUse(res.meta.devicesInUse)} of ${PRODUCT.machines} machines in use).`);
     console.log('   Unlimited monitored URLs, intervals down to 30s, desktop notifications.');
@@ -303,11 +323,19 @@ if (command === 'activate') {
 // ── Deactivate (free this machine's seat) ──
 if (command === 'deactivate') {
   const state = loadState();
+  const { deactivateLicense, describeLicense, releaseReceipt, LICENSE_STATUS } = await import('./license.js');
   if (!state.license?.key) {
-    console.log('No Pro license is active on this machine.');
+    // A released seat is not an absent license: the machine gave its seat up on
+    // purpose, so it must not be answered as if it had never bought anything.
+    const released = describeLicense(state.license);
+    if (released.status === LICENSE_STATUS.RELEASED) {
+      console.log(`Pro license: ${released.detail}.`);
+      console.log('  To use Pro on this machine again, run: deskuptime activate <license-key>');
+    } else {
+      console.log('No Pro license is active on this machine.');
+    }
     process.exit(0);
   }
-  const { deactivateLicense } = await import('./license.js');
   const res = await deactivateLicense(state.license.key, state.license.instance);
   if (!res.deactivated) {
     // Local state is only dropped when the server confirms the seat is free —
@@ -316,9 +344,15 @@ if (command === 'deactivate') {
     console.error('   The seat was NOT released and this machine still counts as activated. Try again shortly.');
     process.exitCode = 1;
   } else {
-    delete state.license;
+    // A receipt, not a deleted license: the key is gone (it was released), but
+    // the machine remembers that it is a paying customer's machine, so no
+    // surface here can offer it the checkout again.
+    const receipt = releaseReceipt({ plan: state.license.plan, machinesInUse: res.devicesInUse });
+    state.license = receipt;
     saveState(state);
-    console.log('✅ License deactivated on this machine. The seat can now be used elsewhere.');
+    const released = describeLicense(receipt);
+    console.log(`✅ License deactivated — ${released.detail}.`);
+    console.log('   To use Pro on the new machine, run: deskuptime activate <license-key>');
   }
 }
 
@@ -452,7 +486,12 @@ if (command === 'status') {
   const state = loadState();
   const urls = Object.keys(state.urls);
   const license = describeLicense(state.license);
-  if (license.status === LICENSE_STATUS.FREE) {
+  if (license.status === LICENSE_STATUS.RELEASED) {
+    // Read before the free tier, because this machine is not one: it gave a
+    // paid seat up on purpose. The only thing to do here is activate again.
+    console.log(`Pro license: ${license.detail}.`);
+    console.log('  Nothing to buy — the license is yours. To use Pro on this machine again: deskuptime activate <license-key>');
+  } else if (license.status === LICENSE_STATUS.FREE) {
     // A free user running `status` is asking what they have and what to do next,
     // and the old line dead-ended at `activate <license-key>` — a key they cannot
     // have without buying first. Every other place a free user meets the Pro
