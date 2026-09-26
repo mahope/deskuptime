@@ -103,7 +103,10 @@ export function checkHeaders(url, maxRedirects = 10, options = {}) {
       const h = {};
       r.headers.forEach((v, k) => { h[k.toLowerCase()] = v; });
       const security = {};
-      for (const name of SECURITY_HEADERS) security[name] = h[name] || null;
+      // `?? null`, not `|| null`: a header the site sent with no value is a
+      // fact about the site, and `||` threw it away and made it identical to a
+      // header it never sent. `readSecurityHeaders` reads the difference.
+      for (const name of SECURITY_HEADERS) security[name] = h[name] ?? null;
 
       const https = readHttpsState({ startUrl: url, finalUrl: current });
       const chain = readChain({ stopReason, statusCode: r.status, steps, limit: maxRedirects });

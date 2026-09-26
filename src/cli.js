@@ -17,7 +17,7 @@ import { buildReport, renderReportJson, renderReportMarkdown } from './report.js
 import { readFileSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
-import { invalidHttpUrls, readChain, readContentState, readEntry, readSslState, contentSkipNote, STALE_AFTER_DAYS } from './status.js';
+import { invalidHttpUrls, readChain, readContentState, readEntry, readSecurityHeaders, readSslState, contentSkipNote, STALE_AFTER_DAYS } from './status.js';
 import { formatMs, machinesInUse, safeText } from './display.js';
 import { DEFAULT_WINDOW_DAYS, HISTORY_DAYS, loadHistory } from './history.js';
 import { FREE, PRODUCT, proExtras, renderHelpPro } from './features.js';
@@ -255,9 +255,14 @@ if (command === 'headers') {
   // missing all five, and a bureau pipes this output straight into a client's
   // report. `securityChecked` is the sentence the JSON could not say.
   const chain = readChain({ stopReason: r.stopReason, statusCode: r.statusCode, steps: r.steps });
+  // Same deal for the five headers: one reading, asked once, and both surfaces
+  // read it. The terminal could not say "sent with no value" and the JSON could
+  // not either, because an empty value had been collapsed into `null` — the very
+  // value a header that never arrived has.
+  const security = readSecurityHeaders(r.security);
 
   if (args.includes('--json')) {
-    console.log(JSON.stringify({ ...r, securityChecked: chain.measured }, null, 2));
+    console.log(JSON.stringify({ ...r, securityChecked: chain.measured, securityEmpty: security.empty }, null, 2));
     if (!r.healthy) process.exitCode = 2;
   } else if (r.error) {
     console.log(`🧭 ${safeText(url, { max: 0 })}`);
@@ -288,11 +293,15 @@ if (command === 'headers') {
     if (r.poweredBy) {
       console.log(`   ⚠️  X-Powered-By exposed: ${safeText(r.poweredBy, { max: 0 })}`);
     }
-    const missing = Object.entries(r.security).filter(([, v]) => !v).map(([k]) => k);
-    const present = Object.entries(r.security).filter(([, v]) => v);
-    for (const [k, v] of present) {
+    const missing = security.absent;
+    for (const [k, v] of security.present) {
       // max 60 is the historical cap and is kept, so a normal header prints as before.
       console.log(`   ✅ ${k}: ${safeText(v)}`);
+    }
+    for (const k of security.empty) {
+      // The header is there and does nothing, which is not the same as a header
+      // the site never sent — and not a pass either. Its own line, saying so.
+      console.log(`   ⚠️  sent with no value: ${k}`);
     }
     for (const k of missing) {
       console.log(`   ⬜ missing: ${k}`);

@@ -10,7 +10,7 @@ import { fileURLToPath } from 'node:url';
 import { checkUrl, checkUrls } from '../src/engine.js';
 import { checkReachability } from '../src/checkers/ping.js';
 import { getStateFile, loadState, runPass, saveState, isPro } from '../src/watch.js';
-import { readChain, readHttpsState, urlScheme } from '../src/status.js';
+import { readChain, readHttpsState, readSecurityHeaders, urlScheme } from '../src/status.js';
 
 const run = promisify(execFile);
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
@@ -998,6 +998,121 @@ test('headers: HTTP:// gets the same HTTPS verdict as http://', async (t) => {
     .replace(/^\s*\/\/.*$/gm, '');
   assert.match(cli, /securityChecked: chain\.measured/);
   assert.doesNotMatch(cli, /securityChecked:\s*r\./, 'the terminal must not decide it from the result');
+});
+
+// ── headers: a header sent with no value is not a header that is missing (P1-24) ──
+//
+// Measured with a real CLI against one local server, before any code changed:
+//
+//   x-frame-options:            (no value)
+//     headers        ->  ⬜ missing: x-frame-options
+//     headers --json ->  "x-frame-options": null
+//
+// The checker wrote `h[name] || null`, so an empty string became the same value
+// as a header that never arrived. Same fault as P1-21's discarded number: two
+// different errors became indistinguishable, and a bureau is told a customer's
+// site lacks a header the site is sending. An empty value protects nothing, so
+// it is not a pass either — it is a third state and it needs a line of its own.
+
+test('headers: sent-with-no-value, never-sent and sent are three different things', () => {
+  const security = {
+    'strict-transport-security': 'max-age=31536000',
+    'content-security-policy': null,
+    'x-content-type-options': '',
+    'x-frame-options': 'DENY',
+    // A caller may hand us a value the HTTP layer never produced.
+    'referrer-policy': '   ',
+  };
+  const reading = readSecurityHeaders(security);
+  assert.deepEqual(reading.present, [['strict-transport-security', 'max-age=31536000'], ['x-frame-options', 'DENY']]);
+  assert.deepEqual(reading.empty, ['x-content-type-options', 'referrer-policy']);
+  assert.deepEqual(reading.absent, ['content-security-policy']);
+
+  // The one the finding turned on: the same key, two different values, two
+  // different verdicts.
+  assert.deepEqual(readSecurityHeaders({ 'x-frame-options': '' }).empty, ['x-frame-options']);
+  assert.deepEqual(readSecurityHeaders({ 'x-frame-options': null }).absent, ['x-frame-options']);
+  assert.deepEqual(readSecurityHeaders({}).present, []);
+
+  // A key the object does not carry is not a header the site sent.
+  assert.deepEqual(readSecurityHeaders({ 'x-frame-options': undefined }).absent, ['x-frame-options']);
+  assert.deepEqual(readSecurityHeaders().present, []);
+  assert.deepEqual(readSecurityHeaders(null).empty, []);
+});
+
+test('headers: a header sent with no value gets its own line and its own JSON value', async (t) => {
+  const server = createServer((req, res) => {
+    res.writeHead(200, {
+      'content-type': 'text/html',
+      'x-content-type-options': 'nosniff',
+      // Sent, and carrying nothing.
+      'x-frame-options': '',
+    });
+    res.end('ok');
+  });
+  const port = await listen(server);
+  t.after(() => close(server));
+  const url = `http://127.0.0.1:${port}/`;
+
+  const out = (await run(process.execPath, [CLI, 'headers', url, '--timeout', REQUEST_TIMEOUT])).stdout;
+  assert.match(out, /⚠️  sent with no value: x-frame-options/);
+  assert.doesNotMatch(out, /missing: x-frame-options/, 'a header the site sent must never be called missing');
+  // Everything the fix does not touch still prints exactly as before.
+  assert.match(out, /✅ x-content-type-options: nosniff/);
+  assert.match(out, /⬜ missing: strict-transport-security/);
+
+  const json = JSON.parse((await run(process.execPath, [CLI, 'headers', url, '--json', '--timeout', REQUEST_TIMEOUT])).stdout);
+  assert.equal(json.security['x-frame-options'], '', 'the JSON must keep the empty value, not flatten it to null');
+  assert.equal(json.security['content-security-policy'], null, 'a header that never arrived stays null');
+  assert.deepEqual(json.securityEmpty, ['x-frame-options']);
+  assert.equal(json.securityChecked, true);
+  // Five keys still, so a consumer reading the keys does not crash (P1-23).
+  assert.equal(Object.keys(json.security).length, 5);
+});
+
+test('headers: a normal header and a silent site are unchanged by the empty case', async (t) => {
+  const normal = createServer((req, res) => {
+    res.writeHead(200, { 'content-type': 'text/html', 'x-frame-options': 'DENY', 'referrer-policy': 'no-referrer' });
+    res.end('ok');
+  });
+  const normalPort = await listen(normal);
+  t.after(() => close(normal));
+  const out = (await run(process.execPath, [CLI, 'headers', `http://127.0.0.1:${normalPort}/`, '--timeout', REQUEST_TIMEOUT])).stdout;
+  assert.match(out, /✅ x-frame-options: DENY/);
+  assert.match(out, /✅ referrer-policy: no-referrer/);
+  assert.doesNotMatch(out, /sent with no value/, 'a header with a value is a header with a value');
+
+  const silent = createServer((req, res) => {
+    res.writeHead(200, { 'content-type': 'text/html' });
+    res.end('ok');
+  });
+  const silentPort = await listen(silent);
+  t.after(() => close(silent));
+  const silentOut = (await run(process.execPath, [CLI, 'headers', `http://127.0.0.1:${silentPort}/`, '--timeout', REQUEST_TIMEOUT])).stdout;
+  for (const name of ['strict-transport-security', 'content-security-policy', 'x-content-type-options', 'x-frame-options', 'referrer-policy']) {
+    assert.match(silentOut, new RegExp(`⬜ missing: ${name}`));
+  }
+  assert.doesNotMatch(silentOut, /sent with no value/, 'a site that sent nothing sent nothing');
+
+  const silentJson = JSON.parse((await run(process.execPath, [CLI, 'headers', `http://127.0.0.1:${silentPort}/`, '--json', '--timeout', REQUEST_TIMEOUT])).stdout);
+  assert.deepEqual(silentJson.securityEmpty, [], 'an empty list, not a list of everything');
+});
+
+test('headers: the three-state reading has exactly one owner', () => {
+  // A behavioural test cannot prove a surface stopped owning the rule — as in
+  // P1-13…P1-23, the duplicated `|| null` answers identically in every test above.
+  const checker = readFileSync(join(ROOT, 'src', 'checkers', 'headers.js'), 'utf8')
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/^\s*\/\/.*$/gm, '');
+  assert.match(checker, /security\[name\] = h\[name\] \?\? null/, 'the checker must keep an empty value');
+  assert.doesNotMatch(checker, /h\[name\] \|\|/, 'the checker must not collapse an empty value back into "not sent"');
+
+  const cli = readFileSync(join(ROOT, 'src', 'cli.js'), 'utf8')
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/^\s*\/\/.*$/gm, '');
+  assert.match(cli, /readSecurityHeaders\(/);
+  assert.match(cli, /securityEmpty: security\.empty/);
+  assert.doesNotMatch(cli, /filter\(\(\[, v\]\) => !v\)/, 'the terminal must not re-decide it with falsiness');
 });
 
 function watchResult(overrides = {}) {

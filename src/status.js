@@ -112,6 +112,61 @@ export function readHttpsState({ startUrl = '', finalUrl = null } = {}) {
   };
 }
 
+/** The three states a judged security header can be in. */
+export const SECURITY_HEADER = {
+  /** The site sent the header with a value. */
+  PRESENT: 'present',
+  /** The site sent the header with no value at all. */
+  EMPTY: 'empty',
+  /** The site never sent the header. */
+  ABSENT: 'absent',
+};
+
+/**
+ * One reading of a site's security headers, shared by every surface that lists them.
+ *
+ * Three things are true of a judged header, and the tool could only say one of
+ * them. `checkHeaders` collapsed them with `h[name] || null`, and a header the
+ * server sent **with no value** became `null` — the same value as a header that
+ * never arrived. Measured against a real server sending `x-frame-options: `:
+ *
+ *   x-frame-options:            (no value)
+ *     headers        ->  ⬜ missing: x-frame-options
+ *     headers --json ->  "x-frame-options": null
+ *
+ * So a bureau was told a customer's site lacks a header it is in fact sending,
+ * and the JSON it pipes into the customer's own report says `null` — which reads
+ * as "we looked and it was not there". Both are the fault P1-21 found in a
+ * different number: a fact computed and thrown away, so two different errors
+ * became indistinguishable. A header sent empty protects nothing, so it is not
+ * a pass either — it is a third state, and it has to be sayable.
+ *
+ * Note that a whitespace-only value arrives as `''`: the HTTP layer strips
+ * optional surrounding whitespace before anything sees it, so `x-frame-options: `
+ * and `x-frame-options:    ` are one case, not two.
+ *
+ * Callers pick their own icon and their own sentence. Neither may re-decide
+ * which of the three a header is in.
+ *
+ * @param {object} [security] — `{ [name]: string | null }` from `checkHeaders`
+ * @returns {{ present: Array<[string, string]>, empty: string[], absent: string[] }}
+ */
+export function readSecurityHeaders(security) {
+  const entries = security && typeof security === 'object' ? Object.entries(security) : [];
+  const present = [];
+  const empty = [];
+  const absent = [];
+  for (const [name, value] of entries) {
+    if (value === null || value === undefined) absent.push(name);
+    // `trim()` is belt and braces: the value is always a string here, but a
+    // caller that hands us one built from a number must not read as a header
+    // with content either.
+    else if (String(value).trim() === '') empty.push(name);
+    else present.push([name, value]);
+  }
+  return { present, empty, absent };
+}
+
 /**
  * One reading of a certificate, shared by every surface that shows one.
  *
