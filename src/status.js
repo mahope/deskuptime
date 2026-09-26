@@ -533,6 +533,11 @@ const MS_PER_DAY = 24 * 60 * 60 * 1000;
  * A timestamp in the future is clock skew or a wrong system clock, not old
  * data, so it is reported as a negative age rather than invented into an
  * outage. The report prints the exact timestamp either way.
+ *
+ * The negative age is read by `passAge` below, which is the one decision about
+ * it. It used to have no reader at all: `checkAgeDays` floored it at 0, so the
+ * one path that could see it threw the sign away, and a pass dated 19 days from
+ * now was reported as `ageDays: 0` — "checked today".
  */
 export function checkAgeMs(lastChecked, now = new Date()) {
   if (typeof lastChecked !== 'string' || !lastChecked) return null;
@@ -542,24 +547,137 @@ export function checkAgeMs(lastChecked, now = new Date()) {
 }
 
 /**
+ * The four things a recorded pass time can be, in one owner.
+ *
+ * Every surface that shows a pass asks this, because each of the four used to
+ * be decided somewhere else and the two middle ones printed the same words.
+ * Measured on one state file, with a pass dated 19 days into the future on a
+ * machine whose clock is right:
+ *
+ *   | http://127.0.0.1:8811/ | UP (200) | 100% | … | 2026-10-15 10:24 UTC |
+ *   **2 site(s) · 1 up · 1 down · 2 checks · 1 failed**
+ *
+ * A document generated 2026-09-26 told a customer their site was last checked
+ * on 2026-10-15, counted it as currently up, and `--json` said
+ * `"ageDays": 0` — three claims, all of them wrong, in the one file a bureau
+ * forwards. The other three states were already distinguished; this one was
+ * floored into "today" and lost.
+ *
+ * `aged` is the ordinary case and is what every other measurement assumes.
+ * `never` and `unreadable` are kept apart because they are different facts
+ * about *history*, not two ways of saying "unknown" (P1-14). `ahead` is the
+ * fourth: a time that reads cleanly and lies about when it was written, which
+ * happens when the machine's clock was wrong, when a state file was restored
+ * onto a machine in another timezone than it was written in, and when a
+ * backup was replayed.
+ *
+ * P1-6 decided that a future timestamp must not be marked *stale*: a stale
+ * marker is a claim that monitoring stopped, and on a machine with a wrong
+ * clock that would invent an outage. That decision is kept exactly — `ahead`
+ * is not `aged` for the purpose of `isCheckStale`, and no surface here says a
+ * site is down, unreachable or unmonitored. What changes is that the age stops
+ * being a false `0` and the skew is named instead of being printed as a check
+ * that has not happened yet.
+ */
+export const PASS_AGE = {
+  /** No pass has ever been recorded for this site. */
+  NEVER: 'never',
+  /** A pass was recorded and its time cannot be read at all. */
+  UNREADABLE: 'unreadable',
+  /** The time reads cleanly and lies: it is later than this machine's clock. */
+  AHEAD: 'ahead',
+  /** A readable time that is not in the future. The ordinary case. */
+  AGED: 'aged',
+};
+
+/**
+ * How old the newest recorded pass is, as one of the four `PASS_AGE` states.
+ *
+ * `ageDays` is whole days since the pass, and `null` whenever there is no
+ * honest number to give: no pass, an unreadable one, and a pass whose time is
+ * in the future. A `0` in `ageDays` is a claim — "checked today" — and it must
+ * only ever be reachable by a pass that really did happen today. That is the
+ * whole point of this function: `Math.max(0, …)` in `checkAgeDays` made a
+ * clock 19 days fast indistinguishable from a check this morning.
+ *
+ * `aheadMs` is how far ahead the clock is, for the surfaces that name it.
+ */
+export function passAge(lastChecked, now = new Date()) {
+  const age = checkAgeMs(lastChecked, now);
+  if (age === null) {
+    // `checkAgeMs` returns null for both "no string" and "no parseable date", so
+    // the two are told apart here, by the raw value — the same separation
+    // `passRecorded` carries into the report, for the same reason.
+    return {
+      state: typeof lastChecked === 'string' && lastChecked !== '' ? PASS_AGE.UNREADABLE : PASS_AGE.NEVER,
+      ageMs: null,
+      ageDays: null,
+      aheadMs: 0,
+    };
+  }
+  if (age < 0) return { state: PASS_AGE.AHEAD, ageMs: age, ageDays: null, aheadMs: -age };
+  return { state: PASS_AGE.AGED, ageMs: age, ageDays: Math.floor(age / MS_PER_DAY), aheadMs: 0 };
+}
+
+/**
+ * The fixed wording for a pass whose time lies ahead of this machine's clock,
+ * in one place. Empty string for every other state, so a caller can print it
+ * unconditionally and get nothing for an ordinary pass.
+ *
+ * The unit follows the size, because the two are different problems: a pass
+ * 40 seconds ahead is a clock drifting mid-check, and a pass 19 days ahead is
+ * a clock that was set wrong, a state file restored from another machine, or a
+ * backup replayed. One unit for both would say "0 d ahead" about the first.
+ */
+export function clockAheadNote(aheadMs) {
+  if (!Number.isFinite(aheadMs) || aheadMs <= 0) return '';
+  const seconds = Math.round(aheadMs / 1000);
+  if (seconds < 90) return `${seconds} s ahead of this machine's clock`;
+  const minutes = Math.round(aheadMs / (60 * 1000));
+  if (minutes < 90) return `${minutes} min ahead of this machine's clock`;
+  const hours = Math.round(aheadMs / (60 * 60 * 1000));
+  if (hours < 36) return `${hours} h ahead of this machine's clock`;
+  return `${Math.round(aheadMs / MS_PER_DAY)} d ahead of this machine's clock`;
+}
+
+/**
  * True only when a pass is known to have run and is older than the window.
  *
  * Absent `lastChecked` is *not* stale: the report already shows such a site as
  * "not checked yet", and flagging it twice would say nothing new. A timestamp
  * that is present but unreadable *is* stale — a pass was recorded and we cannot
  * show that it is current, which is exactly what a client report must not do.
+ *
+ * A timestamp *ahead* of this machine's clock is neither, and that is P1-6's
+ * decision, kept deliberately: a wrong clock is not old data, and a stale
+ * marker is a claim that monitoring stopped. The branch is written out rather
+ * than left to fall out of a comparison, because the comparison is exactly what
+ * hid it — a negative age fails `> STALE_AFTER_DAYS` and read as an ordinary
+ * current pass, which is how a machine whose clock was 19 days fast came to
+ * report `ageDays: 0` and count as up in a customer document.
+ *
+ * The window is compared in ms, not in floored days, so `2.9 d` and `2.0 d` do
+ * not swap sides when the day-count rounding changes.
  */
 export function isCheckStale(lastChecked, now = new Date()) {
-  if (typeof lastChecked !== 'string' || !lastChecked) return false;
-  if (Number.isNaN(Date.parse(lastChecked))) return true;
-  return checkAgeMs(lastChecked, now) > STALE_AFTER_DAYS * MS_PER_DAY;
+  const pass = passAge(lastChecked, now);
+  if (pass.state === PASS_AGE.NEVER) return false;
+  if (pass.state === PASS_AGE.UNREADABLE) return true;
+  if (pass.state === PASS_AGE.AHEAD) return false;
+  return pass.ageMs > STALE_AFTER_DAYS * MS_PER_DAY;
 }
 
-/** Whole days since the last pass, for display. `null` when it is unknown. */
+/**
+ * Whole days since the last pass, for display. `null` when there is no honest
+ * number — no pass, an unreadable time, or a time ahead of this machine's clock.
+ *
+ * Asked of `passAge`, so a pass dated in the future cannot come back as `0`.
+ * It used to be `Math.max(0, Math.floor(age / MS_PER_DAY))`, which is a fifth
+ * answer the four states do not have: a claim that a check happened today,
+ * made about a timestamp that says it has not happened yet.
+ */
 export function checkAgeDays(lastChecked, now = new Date()) {
-  const age = checkAgeMs(lastChecked, now);
-  if (age === null) return null;
-  return Math.max(0, Math.floor(age / MS_PER_DAY));
+  return passAge(lastChecked, now).ageDays;
 }
 
 /**
@@ -592,16 +710,22 @@ export function staleAgeNote(ageDays) {
  * rule, and an unknown verdict names the age of the pass behind it — "unknown"
  * without an age reads as "no data" too.
  *
- * @param {object} state — `{ lastChecked, ageDays }`; `ageDays` is
+ * @param {object} state — `{ lastChecked, ageDays, clockAhead }`; `ageDays` is
  *   `checkAgeDays(lastChecked)`. A caller that only holds the *readable* time
  *   (`readPassTime`, which is `null` both for "no pass" and for "unreadable")
  *   passes `passRecorded` instead, so the two cases cannot collapse into
  *   "not checked yet" — measured: canonicalising `lastChecked` alone made a site
  *   with an unreadable pass time print "not checked yet" in the summary line
  *   while its own row said "stale — last check unreadable".
+ *   `clockAhead` is the owner's sentence for a pass dated ahead of this
+ *   machine's clock, and it is asked for before the "unreadable" wording:
+ *   without it a clean, readable future time reached this function as a `null`
+ *   age and was described as a time that could not be read — the same
+ *   collapse one level down, on the one state that reads cleanly.
  */
-export function unknownNote({ lastChecked, ageDays, passRecorded = Boolean(lastChecked) } = {}) {
+export function unknownNote({ lastChecked, ageDays, clockAhead = '', passRecorded = Boolean(lastChecked) } = {}) {
   if (!passRecorded) return 'not checked yet';
+  if (clockAhead) return `status unknown (last check ${clockAhead})`;
   if (ageDays === null || ageDays === undefined) return 'status unknown (last check unreadable)';
   return `status unknown (last check ${ageDays} d ago)`;
 }
@@ -715,7 +839,8 @@ export function readEntry(entry, { now = new Date(), url = '' } = {}) {
     expiredDays: value.sslExpiredDays,
   });
   const stale = isCheckStale(value.lastChecked, now);
-  const ageDays = checkAgeDays(value.lastChecked, now);
+  const pass = passAge(value.lastChecked, now);
+  const ageDays = pass.ageDays;
   const neverChecked = !value.lastChecked;
 
   return {
@@ -725,7 +850,7 @@ export function readEntry(entry, { now = new Date(), url = '' } = {}) {
     // terminal lists and in the report. The two surfaces now ask for the same
     // sentence, so neither can discover the difference on its own.
     neverChecked,
-    unknownNote: unknownNote({ lastChecked: value.lastChecked, ageDays }),
+    unknownNote: unknownNote({ lastChecked: value.lastChecked, ageDays, clockAhead: clockAheadNote(pass.aheadMs) }),
     statusCode: readStatusCode(value.lastStatus),
     sslDays: ssl.days,
     sslExpired: ssl.expired,
@@ -739,6 +864,16 @@ export function readEntry(entry, { now = new Date(), url = '' } = {}) {
     ageDays,
     stale,
     staleNote: stale ? staleAgeNote(ageDays) : '',
+    // Which of the four recorded-time states this entry is in, and what to say
+    // about it when the time lies ahead of this machine's clock. Added for the
+    // same reason the entry above is a single object: the two terminal lists
+    // print the pass time themselves, and a time 19 days in the future used to
+    // reach both of them as a bare `@ 2026-10-15T10:24:20.661Z` with the age
+    // floored to `0`, so a clock that was simply wrong looked like a check that
+    // had already happened. The verdict is untouched — a wrong clock is not an
+    // outage — and this is the sentence that says so.
+    passState: pass.state,
+    clockAhead: clockAheadNote(pass.aheadMs),
     // Where the last pass's response came from. The pass measured it, the state
     // file kept it, and the two lists that show an entry could not see it — so a
     // site that had been redirected to another host (a parked domain, a hijacked

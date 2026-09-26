@@ -352,6 +352,13 @@ export function printStatus(options = {}) {
     const ssl = row.sslNote ? `, ${row.sslNote}` : '';
     // lastChecked is state-file text, so it is flattened like the URL beside it.
     const checked = row.entry.lastChecked ? ` @ ${safeText(row.entry.lastChecked, { max: 0 })}` : '';
+    // …and the same row says when that timestamp is not a time this machine can
+    // vouch for. `readEntry` owns the sentence, so this list and the client
+    // report cannot describe the same skew differently. It is a note, not a
+    // verdict: the row keeps `✅ up`/`🚨 down` and the exit code is unchanged,
+    // because a machine with the wrong clock has a clock problem, not a site
+    // that stopped answering.
+    const ahead = row.clockAhead ? ` ⚠️ ${row.clockAhead}` : '';
     // A bare `❔ unknown` used to cover both "never monitored" and "a pass ran
     // but its verdict is unreadable", and this is the command a user runs to
     // find out whether their monitoring works at all.
@@ -361,7 +368,7 @@ export function printStatus(options = {}) {
     // through readEntry: a site whose last answer came from another host is
     // named here too, and an ordinary redirect on its own host says nothing.
     const redirect = row.redirect.label ? ` ⚠️ ${row.redirect.label}` : '';
-    console.log(`  ${VERDICT_ICON[row.verdict]}  ${safeText(row.url, { max: 0 })} (${code}${ssl})${checked}${unknown}${stale}${redirect}`);
+    console.log(`  ${VERDICT_ICON[row.verdict]}  ${safeText(row.url, { max: 0 })} (${code}${ssl})${checked}${ahead}${unknown}${stale}${redirect}`);
   }
 
   // A stale site is the reader's most consequential line and a per-row marker

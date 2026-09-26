@@ -600,7 +600,12 @@ if (command === 'status') {
     // ask. Without it a parked or hijacked domain printed as a plain `✅` here,
     // on the list a user runs to see whether their monitoring works.
     const redirect = e.redirect.label ? ` ⚠️ ${e.redirect.label}` : '';
-    console.log(`  ${up} ${safeText(u, { max: 0 })}${code}${ssl}${unknown}${stale}${redirect}`);
+    // A recorded pass time ahead of this machine's clock, with the owner's
+    // sentence. This list does not print timestamps at all, so before this it
+    // was silent about a wrong clock while `watch --status` and the client
+    // report showed the impossible date. The verdict is untouched.
+    const ahead = e.clockAhead ? ` ⚠️ ${e.clockAhead}` : '';
+    console.log(`  ${up} ${safeText(u, { max: 0 })}${code}${ssl}${unknown}${stale}${redirect}${ahead}`);
   }
   process.exit(0);
 }

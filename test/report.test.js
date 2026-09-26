@@ -807,7 +807,13 @@ test('a duplicated verdict owner is caught by reading the source, not the output
   // site object, because the report holds the readable time — `null` for both
   // "no pass" and "unreadable" — and the owner is what decides between them.
   // It is still the owner, and still exactly one call.
-  assert.match(reportSrc, /unknownNote\(\{ passRecorded: site\.passRecorded, ageDays: site\.ageDays \}\)/, 'and it must still ask for the unknown wording');
+  // P1-31: the call gained a third fact. A pass time *ahead* of this machine's
+  // clock arrives here as `ageDays: null` — the same shape as an unreadable
+  // time — so without `clockAhead` the report described a time that reads
+  // cleanly as one that could not be read. The lock is extended, not relaxed:
+  // the report still must not own the sentence, and it still makes exactly one
+  // call, now with the fact that separates the two.
+  assert.match(reportSrc, /unknownNote\(\{ passRecorded: site\.passRecorded, ageDays: site\.ageDays, clockAhead: site\.clockAhead \}\)/, 'and it must still ask for the unknown wording');
   assert.match(reportSrc, /staleAgeNote\(site\.ageDays\)/, 'and for the stale wording');
   assert.equal((statusSrc.match(/export function unknownNote\(/g) || []).length, 1, 'one unknown wording');
   assert.equal((statusSrc.match(/export function staleAgeNote\(/g) || []).length, 1, 'one stale wording');
@@ -1047,4 +1053,216 @@ test('the report reads every state timestamp through the one owner', () => {
   assert.match(source, /lastChecked: readPassTime\(entry\.lastChecked\)/, 'a raw state timestamp can reach --json again');
   assert.match(source, /monitoringSince: readPassTime\(entry\.addedAt\)/, 'a raw state timestamp can reach --json again');
   assert.equal((source.match(/readPassTime\(/g) ?? []).length, 2, 'both timestamps, and nothing else');
+});
+
+// ── P1-31: a pass time ahead of this machine's clock ──────────────────────────
+//
+// Measured before the fix, on a state file whose `lastChecked` was 19 days in
+// the future, with a real `check` and `watch --once` against local fixtures:
+//
+//   | http://127.0.0.1:8811/ | UP (200) | 100% (1 checks) | … | 2026-10-15 10:24 UTC |
+//   **2 site(s) · 1 up · 1 down · 2 checks · 1 failed**
+//   "ageDays": 0
+//
+// A document generated 2026-09-26 told a customer their site was last checked
+// on 2026-10-15, counted it as up right now, and `--json` said the pass was
+// zero days old. `checkAgeMs` documented a negative age for exactly this case
+// and had no reader: `checkAgeDays` floored it at 0.
+
+test('a pass time ahead of the clock is its own state, not a pass from today', async () => {
+  const { PASS_AGE, checkAgeDays, clockAheadNote, isCheckStale, passAge } = await import('../src/status.js');
+  const ahead = ms => new Date(NOW.getTime() + ms).toISOString();
+  const daysAgo = n => new Date(NOW.getTime() - n * 24 * 60 * 60 * 1000).toISOString();
+
+  // The four states, one owner. `aged` is the only one with a day count.
+  assert.equal(passAge(undefined, NOW).state, PASS_AGE.NEVER);
+  assert.equal(passAge('', NOW).state, PASS_AGE.NEVER);
+  assert.equal(passAge('not-a-date', NOW).state, PASS_AGE.UNREADABLE);
+  assert.equal(passAge(ahead(19 * 86400000), NOW).state, PASS_AGE.AHEAD);
+  assert.equal(passAge(daysAgo(3), NOW).state, PASS_AGE.AGED);
+
+  // The measured bug, in one assertion: 0 is a claim — "checked today" — and it
+  // must only be reachable by a pass that really happened today.
+  assert.equal(checkAgeDays(ahead(19 * 86400000), NOW), null, 'a future pass is not a pass from today');
+  assert.equal(checkAgeDays(ahead(1000), NOW), null, 'not even a second ahead');
+  assert.equal(checkAgeDays(daysAgo(0.001), NOW), 0, 'a pass that really did just happen is still 0');
+  assert.equal(checkAgeDays(daysAgo(41.9), NOW), 41);
+
+  // AC 4: `checkAgeMs` documents that a future time yields a negative age, and
+  // that claim is now true — the owner reads the sign instead of discarding it.
+  const aheadPass = passAge(ahead(19 * 86400000), NOW);
+  assert.ok(aheadPass.ageMs < 0, 'the negative age it documents is delivered and read');
+  assert.equal(aheadPass.aheadMs, -aheadPass.ageMs);
+
+  // P1-6's decision, kept and stated: a wrong clock is not old data, and a stale
+  // marker is a claim that monitoring stopped.
+  assert.equal(isCheckStale(ahead(19 * 86400000), NOW), false, 'never stale — that would invent an outage');
+  assert.equal(isCheckStale(ahead(1000), NOW), false);
+  assert.equal(isCheckStale('not-a-date', NOW), true, 'an unreadable time is still stale');
+  assert.equal(isCheckStale(daysAgo(41), NOW), true);
+  // …and the window is still compared in ms, not in floored days, so rounding
+  // cannot move the boundary.
+  assert.equal(isCheckStale(daysAgo(2.9), NOW), true, '2.9 d is outside a 2 d window');
+  assert.equal(isCheckStale(daysAgo(2), NOW), false, 'exactly at the window is still current');
+
+  // The wording is the owner's, and the unit follows the size: a clock drifting
+  // mid-check and a clock set wrong are two different problems.
+  assert.equal(clockAheadNote(0), '');
+  assert.equal(clockAheadNote(-5), '', 'a pass that is not ahead says nothing');
+  assert.equal(clockAheadNote(NaN), '');
+  assert.equal(clockAheadNote(40 * 1000), '40 s ahead of this machine\'s clock');
+  assert.equal(clockAheadNote(20 * 60 * 1000), '20 min ahead of this machine\'s clock');
+  assert.equal(clockAheadNote(5 * 60 * 60 * 1000), '5 h ahead of this machine\'s clock');
+  assert.equal(clockAheadNote(19 * 86400000), '19 d ahead of this machine\'s clock');
+});
+
+test('the report names a clock skew instead of printing a check that has not happened', async () => {
+  const ahead = new Date(NOW.getTime() + 19 * 24 * 60 * 60 * 1000).toISOString();
+  const report = buildReport(proState({
+    'https://kunde.dk/': upEntry({ lastChecked: ahead }),
+    'https://butik.dk/': upEntry(),
+  }), { now: NOW });
+
+  const skewed = report.sites.find(site => site.url === 'https://kunde.dk/');
+  const ordinary = report.sites.find(site => site.url === 'https://butik.dk/');
+
+  // The three claims that were wrong.
+  assert.equal(skewed.ageDays, null, '"ageDays: 0" claimed the pass was from today');
+  assert.equal(skewed.passState, 'ahead');
+  assert.equal(skewed.clockAhead, '19 d ahead of this machine\'s clock');
+  assert.equal(skewed.stale, false, 'P1-6: a wrong clock is not old data');
+
+  // P1-6 again, on the counts: the verdict stands and the site is not moved into
+  // the stale bucket, because "stale" is a claim that monitoring stopped and a
+  // machine with the wrong clock has a clock problem. The row names the skew.
+  assert.equal(report.partition.stale, 0);
+  assert.equal(report.partition.up, 2);
+  assert.equal(report.summary.up, 2);
+  assert.equal(skewed.status, 'up', 'the recorded verdict is not rewritten');
+
+  // The customer-facing line: the timestamp is still shown — it is the only clue
+  // about *how* wrong the clock is — but it can no longer read as a plain check.
+  const markdown = renderReportMarkdown(report);
+  const row = markdown.split('\n').find(line => line.startsWith('| https://kunde.dk/'));
+  assert.match(row, /2026-10-14 09:30 UTC ⚠️ 19 d ahead of this machine's clock/, row);
+  assert.match(markdown, /\*\*2 site\(s\) · 2 up · 0 down/, 'the summary line is unchanged');
+
+  // An ordinary pass is character for character what it was, and its JSON is
+  // byte-identical apart from the two additive fields.
+  assert.equal(ordinary.passState, 'aged');
+  assert.equal(ordinary.clockAhead, '');
+  assert.equal(ordinary.ageDays, 0);
+  const ordinaryRow = markdown.split('\n').find(line => line.startsWith('| https://butik.dk/'));
+  assert.match(ordinaryRow, /\| 2026-09-25 09:00 UTC \|$/, ordinaryRow);
+});
+
+test('a clean future time is never described as an unreadable one', async () => {
+  const { unknownNote } = await import('../src/status.js');
+  // Both arrive as `ageDays: null` at the call site, which is exactly why the
+  // collapse is possible: before P1-31 the report described a time that reads
+  // perfectly well as a time that could not be read.
+  assert.equal(unknownNote({ passRecorded: true, ageDays: null }), 'status unknown (last check unreadable)');
+  assert.equal(
+    unknownNote({ passRecorded: true, ageDays: null, clockAhead: '19 d ahead of this machine\'s clock' }),
+    'status unknown (last check 19 d ahead of this machine\'s clock)',
+  );
+  // "never checked" still wins over everything: it is a claim about history, and
+  // a site with no pass at all is not in the future.
+  assert.equal(unknownNote({ passRecorded: false, ageDays: null, clockAhead: '19 d ahead' }), 'not checked yet');
+});
+
+// A behavioural test cannot catch a duplicated owner (measured in P1-9), so AC 3
+// is locked on the source: outside `status.js`, no surface may decide the four
+// states for itself.
+test('the four pass states are decided in one place, and only there', () => {
+  // Comments are stripped, because a comment is allowed to *name* the rule — the
+  // measured failures in this repo are documented in the code that caused them.
+  const read = name => readFileSync(join(ROOT, 'src', name), 'utf8')
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/^\s*\/\/.*$/gm, '');
+  const statusSrc = read('status.js');
+
+  assert.equal((statusSrc.match(/export function passAge\(/g) ?? []).length, 1, 'one definition of the four states');
+  assert.equal((statusSrc.match(/export function clockAheadNote\(/g) ?? []).length, 1, 'one wording for a clock skew');
+  assert.equal((statusSrc.match(/export const PASS_AGE =/g) ?? []).length, 1, 'one set of state names');
+
+  for (const name of ['report.js', 'watch.js', 'cli.js', 'history.js', 'engine.js', 'display.js']) {
+    const source = read(name);
+    // No surface may age a pass with its own arithmetic. `Math.max(0, …)` is the
+    // measured defect, and a bare `now - Date.parse(lastChecked)` is the same
+    // decision written out again.
+    assert.doesNotMatch(source, /Math\.max\(0,\s*Math\.(floor|round)/, `${name} floors a pass age itself`);
+    assert.doesNotMatch(source, /getTime\(\)\s*-\s*Date\.parse/, `${name} ages a pass itself`);
+    // …and no surface may write the sentence. These are the strings the two
+    // lists and the report used to diverge on.
+    assert.doesNotMatch(source, /ahead of this machine'?s clock/, `${name} owns the clock-skew wording`);
+    assert.doesNotMatch(source, /'aged'|'ahead'|'unreadable'/, `${name} names a pass state itself`);
+  }
+
+  // The owner is asked, not re-implemented: the report and both terminal lists
+  // go through it, by name.
+  assert.match(read('report.js'), /passAge\(entry\.lastChecked, now\)/, 'the report asks the owner');
+  assert.match(statusSrc, /const pass = passAge\(value\.lastChecked, now\)/, 'readEntry asks the owner');
+
+  // The one reader of the negative age is the owner, so `checkAgeMs` documents
+  // behaviour it actually has (AC 4).
+  const ageMs = statusSrc.match(/export function checkAgeMs\([\s\S]*?\n}/)?.[0] ?? '';
+  assert.match(ageMs, /return now\.getTime\(\) - parsed/, 'the sign survives checkAgeMs');
+  assert.equal((statusSrc.match(/checkAgeMs\(/g) ?? []).length, 2, 'its definition and the one reader');
+});
+
+// P1-31's own measurement, through the real CLI, on a state file whose
+// `lastChecked` lies 19 days in the future. Before the fix all three surfaces
+// reported it as an ordinary pass from today; `status` was the quietest of them,
+// because that list prints no timestamps at all and so had nothing to give away
+// that its clock was wrong.
+test('all three surfaces name a clock skew, and none of them calls it stale (real CLI)', async (t) => {
+  const ahead = new Date(Date.now() + 19 * 24 * 60 * 60 * 1000).toISOString();
+  const home = writeState(tempHome(t), proState({
+    'https://kunde.dk/': upEntry({ lastChecked: ahead, addedAt: '2026-08-01T00:00:00.000Z' }),
+  }));
+  const env = { ...process.env, HOME: home, USERPROFILE: home };
+  const runCli = (args) => run(process.execPath, [CLI, ...args], { env });
+  const note = /ahead of this machine's clock/;
+
+  const report = (await runCli(['report'])).stdout;
+  const row = report.split('\n').find(line => line.startsWith('| https://kunde.dk/'));
+  assert.ok(row, `no row for the site:\n${report}`);
+  assert.match(row, note, `the customer document must name the skew: ${row}`);
+  assert.doesNotMatch(row, /stale/, `a wrong clock is not a dead monitoring loop: ${row}`);
+  assert.match(report, /\*\*1 site\(s\) · 1 up · 0 down/, 'P1-6: the verdict and the count stand');
+
+  // The machine surface, so a dashboard can say it without inferring it.
+  const json = JSON.parse((await runCli(['report', '--json'])).stdout);
+  const site = json.sites.find(s => s.url === 'https://kunde.dk/');
+  assert.equal(site.ageDays, null, 'not 0 — 0 claims the check happened today');
+  assert.equal(site.passState, 'ahead');
+  assert.match(site.clockAhead, note);
+  assert.equal(site.stale, false);
+  assert.equal(json.partition.up, 1, 'the site stays where the verdict put it');
+  assert.equal(json.partition.stale, 0);
+
+  // The URL list on `status`, which printed no timestamp and therefore said
+  // nothing at all about a wrong clock.
+  const status = (await runCli(['status'])).stdout;
+  assert.match(status.split('\n').find(line => line.includes('https://kunde.dk/')), note, status);
+  assert.doesNotMatch(status, /stale/, status);
+
+  // `watch --status` is the command a user runs to find out whether their
+  // monitoring works at all, so it must not show an impossible date as fact.
+  const watch = (await runCli(['watch', '--status'])).stdout;
+  const watchRow = watch.split('\n').find(line => line.includes('https://kunde.dk/'));
+  assert.ok(watchRow, watch);
+  assert.match(watchRow, note, `the list must name the skew: ${watchRow}`);
+  assert.match(watchRow, /✅ up/, 'P1-6: the recorded verdict is not rewritten');
+  assert.doesNotMatch(watch, /No monitoring pass in the last/, 'and it is not called a dead loop');
+
+  // An ordinary pass is untouched on all three.
+  const fresh = new Date().toISOString();
+  const okHome = writeState(tempHome(t), proState({ 'https://frisk.dk/': upEntry({ lastChecked: fresh }) }));
+  const okEnv = { ...process.env, HOME: okHome, USERPROFILE: okHome };
+  const okReport = (await run(process.execPath, [CLI, 'report'], { env: okEnv })).stdout;
+  assert.doesNotMatch(okReport, /ahead of this machine's clock/, `an ordinary pass says nothing: ${okReport}`);
+  const okWatch = (await run(process.execPath, [CLI, 'watch', '--status'], { env: okEnv })).stdout;
+  assert.doesNotMatch(okWatch, /ahead of this machine's clock/, okWatch);
 });

@@ -27,7 +27,7 @@
 import { PRODUCT } from './features.js';
 import { DEFAULT_WINDOW_DAYS, windowSummary } from './history.js';
 import { markdownCell as cell } from './display.js';
-import { SSL_WARN_DAYS, STALE_AFTER_DAYS, checkAgeDays, expiredNote, isCheckStale, readPassTime, readRedirectTarget, readSslState, readStatusCode, staleAgeNote, unknownNote, verdictFor } from './status.js';
+import { SSL_WARN_DAYS, STALE_AFTER_DAYS, clockAheadNote, expiredNote, isCheckStale, passAge, readPassTime, readRedirectTarget, readSslState, readStatusCode, staleAgeNote, unknownNote, verdictFor } from './status.js';
 
 export const DEFAULT_REPORT_TITLE = 'Website uptime report';
 const MAX_TITLE_LENGTH = 120;
@@ -176,6 +176,16 @@ export function buildReport(state, { title, now = new Date(), history, windowDay
       // older than the window keeps its observed status — the pass really did
       // answer 200 — but is marked stale so it is never counted as currently up.
       const stale = isCheckStale(entry.lastChecked, now);
+      // Which of the four recorded-time states this site is in, asked of the one
+      // owner. A pass dated ahead of this machine's clock used to reach this
+      // document as an ordinary current pass: `ageDays: 0` in `--json`, counted
+      // in `up`, and `2026-10-15` in the Last check column of a report generated
+      // on 2026-09-26. The verdict is not touched — a wrong clock is not an
+      // outage, and P1-6 locked that — but the age is no longer invented and the
+      // skew is named, so the recipient is not told a check happened that this
+      // machine's clock says has not happened yet.
+      const pass = passAge(entry.lastChecked, now);
+      const clockAhead = clockAheadNote(pass.aheadMs);
       // Where the last pass's answer came from, asked of the one owner. The pass
       // measured it, the state file now keeps it, and the document an agency
       // forwards used to read `UP (200)` for a domain that was answering from a
@@ -190,7 +200,7 @@ export function buildReport(state, { title, now = new Date(), history, windowDay
         url,
         status: verdictFor(entry?.wasUp),
         stale,
-        ageDays: checkAgeDays(entry.lastChecked, now),
+        ageDays: pass.ageDays,
         statusCode: readStatusCode(entry.lastStatus),
         // The two additive fields for the same fact: the boolean a CI job or an
         // agency's own system can branch on (same name as `check --json`), and
@@ -216,6 +226,13 @@ export function buildReport(state, { title, now = new Date(), history, windowDay
         // `--json` can never forward a string the Markdown column has already
         // shown as `—`. See `readPassTime`.
         lastChecked: readPassTime(entry.lastChecked),
+        // Additive, and the reason the Last check cell can say something true
+        // about a machine whose clock is wrong: which of the four states the
+        // recorded time is in, and the owner's own sentence when that time lies
+        // ahead of this machine's clock. Empty string for an ordinary pass, so a
+        // consumer can print it unconditionally.
+        passState: pass.state,
+        clockAhead,
         monitoringSince: readPassTime(entry.addedAt),
         // …and "a pass was recorded at all" is a *different* fact, kept on its
         // own so a `null` time (unreadable) cannot be read as "no pass" by the
@@ -347,7 +364,7 @@ function statusCell(site) {
     : site.status === 'down'
       ? `DOWN${site.statusCode ? ` (${site.statusCode})` : ''}`
       // Asked about the fact, not about the readable time — see `unknownNote`.
-      : unknownNote({ passRecorded: site.passRecorded, ageDays: site.ageDays });
+      : unknownNote({ passRecorded: site.passRecorded, ageDays: site.ageDays, clockAhead: site.clockAhead });
   // A 200 from another host is still a 200 — the row keeps its verdict — but the
   // customer reading this must see whose server answered, or "UP" is a claim
   // about a URL nobody asked about (a parked domain, a hijacked domain, a typo).
@@ -397,6 +414,21 @@ function sslCell(site) {
   return site.sslExpiringSoon ? `⚠️ ${site.sslDaysRemaining} d — renew soon` : `${site.sslDaysRemaining} d`;
 }
 
+/**
+ * The Last check column, in one place.
+ *
+ * A bare timestamp is a claim: it says the check happened then. When the
+ * recorded time is *ahead* of this machine's clock that claim is not available
+ * — the pass may be from yesterday or from a restored backup, and the timestamp
+ * cannot say which — so the cell names the skew instead of printing a date the
+ * reader would have to notice is impossible. An ordinary pass is unchanged,
+ * character for character.
+ */
+function lastCheckCell(site) {
+  if (site.clockAhead) return `${shortTime(site.lastChecked)} ⚠️ ${site.clockAhead}`;
+  return shortTime(site.lastChecked);
+}
+
 const HEADERS = ['Site', 'Status', 'Uptime (all)', 'Uptime (window)', 'Response', 'SSL', 'Last check'];
 
 export function renderReportMarkdown(report) {
@@ -414,7 +446,7 @@ export function renderReportMarkdown(report) {
       cell(windowCell(site, windowDays)),
       cell(site.responseMs === null ? '—' : `${site.responseMs} ms`),
       cell(sslCell(site)),
-      cell(shortTime(site.lastChecked)),
+      cell(lastCheckCell(site)),
     ];
     return `| ${cells.join(' | ')} |`;
   });
