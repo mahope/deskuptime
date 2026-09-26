@@ -228,6 +228,85 @@ test('check: HEAD 405 and HEAD 501 also fall back to GET', async (t) => {
   }
 });
 
+test('check: a WAF that answers 403 to HEAD but 200 to GET is UP', async (t) => {
+  const methods = [];
+  const server = createServer((req, res) => {
+    methods.push(req.method);
+    if (req.method === 'HEAD') {
+      res.writeHead(403);
+      res.end();
+      return;
+    }
+    res.writeHead(200, { 'content-type': 'text/html' });
+    res.end('<html><title>kunde</title><body>hej</body></html>');
+  });
+  const port = await listen(server);
+  t.after(() => close(server));
+  const url = `http://127.0.0.1:${port}/`;
+
+  const reachability = await checkReachability(url, { timeoutMs: 2000 });
+  assert.equal(reachability.healthy, true);
+  assert.equal(reachability.statusCode, 200);
+  assert.equal(reachability.error, undefined);
+  assert.deepEqual(methods, ['HEAD', 'GET']);
+
+  methods.length = 0;
+  const { stdout } = await run(process.execPath, [CLI, 'check', url, '--json', '--timeout', REQUEST_TIMEOUT]);
+  const [result] = JSON.parse(stdout);
+  assert.equal(result.healthy, true);
+  assert.equal(result.statusCode, 200);
+  assert.notEqual(result.errorType, 'http_error');
+  assert.equal(result.error, undefined);
+  assert.ok(methods.includes('GET'), 'the CLI must retry with GET');
+});
+
+test('check: a 403 that survives the GET retry is still DOWN', async (t) => {
+  const methods = [];
+  const server = createServer((req, res) => {
+    methods.push(req.method);
+    res.writeHead(403);
+    res.end('forbidden');
+  });
+  const port = await listen(server);
+  t.after(() => close(server));
+  const url = `http://127.0.0.1:${port}/blokeret`;
+
+  const reachability = await checkReachability(url, { timeoutMs: 2000 });
+  assert.equal(reachability.reachable, true);
+  assert.equal(reachability.healthy, false);
+  assert.equal(reachability.statusCode, 403);
+  assert.equal(reachability.errorType, 'http_error');
+  assert.equal(reachability.error, 'HTTP 403');
+  // The retry is what makes 403 worth having in the set: the GET answer decides.
+  assert.deepEqual(methods, ['HEAD', 'GET']);
+});
+
+test('check: 401 and 429 on HEAD are taken at face value, with no retry', async (t) => {
+  for (const headStatus of [401, 429]) {
+    const methods = [];
+    const server = createServer((req, res) => {
+      methods.push(req.method);
+      if (req.method === 'HEAD') {
+        res.writeHead(headStatus);
+        res.end();
+        return;
+      }
+      res.writeHead(200, { 'content-type': 'text/plain' });
+      res.end('ok');
+    });
+    const port = await listen(server);
+
+    const result = await checkReachability(`http://127.0.0.1:${port}/x`, { timeoutMs: 2000 });
+    assert.equal(result.healthy, false, `HEAD ${headStatus} is not a blocked HEAD`);
+    assert.equal(result.statusCode, headStatus);
+    // A second request to a client that just said "slow down" is how a monitor
+    // gets itself rate-limited harder, so these cost exactly one request.
+    assert.deepEqual(methods, ['HEAD'], `HEAD ${headStatus} must not be retried`);
+
+    await close(server);
+  }
+});
+
 test('check: a route that is 404 for both HEAD and GET is still DOWN', async (t) => {
   const methods = [];
   const server = createServer((req, res) => {

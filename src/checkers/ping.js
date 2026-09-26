@@ -12,7 +12,29 @@ import {
 // Servers that do not serve HEAD on a route answer 404/405/501 to it while the
 // same route answers GET fine (Cloudflare Workers, some API routes). Without a
 // GET retry those healthy URLs are reported DOWN.
-const HEAD_UNSUPPORTED = new Set([404, 405, 501]);
+//
+// 403 belongs in the set for the same reason, one step further down the chain:
+// WAFs and bot filters answer HEAD with 403 while serving GET normally. Measured
+// 2026-09-26 against a server doing exactly that, with a healthy 200 on GET:
+// `check` printed `Status: 403 — DOWN` and exited 2, `watch --once` stored a
+// DOWN baseline, and `watch --status` showed `🚨 down` — a false DOWN on every
+// surface, and the expensive kind: it tells a client their site is offline.
+//
+// A 12-URL read-only sample of public sites found the same shape on
+// www.netflix.com, which answers 405 to HEAD and 200 to GET, and confirmed the
+// other half on stackoverflow.com, which answers 403 to both. It found no site
+// answering 403 to HEAD and 200 to GET, so that half rests on the documented
+// WAF behaviour rather than on a sample — the retry is what makes it safe to
+// rely on, because a 403 that survives GET is still DOWN (also measured, and
+// the verdict stackoverflow.com already gets today).
+//
+// 401, 429 and the remaining 4xx stay out on purpose. "Authentication required"
+// and "too many requests" are not properties of the request method, so GET
+// answers them too and the extra request cannot change the verdict. A 429 is
+// worse than useless: an immediate GET to a rate limiter is a second request
+// from a client that was just told to slow down, which is how a monitor talks
+// itself into a longer ban.
+const HEAD_UNSUPPORTED = new Set([403, 404, 405, 501]);
 
 function toHttpResult(response, start) {
   const result = {
