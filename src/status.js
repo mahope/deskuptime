@@ -163,9 +163,15 @@ function hostKey(url) {
  * cannot be measured must not claim anything (the same bar `readSslState` and
  * `readContentState` are held to).
  *
+ * `note` is the sentence, `label` the same fact in the few words a table cell,
+ * a list row or a notification can carry. Both are written here so a surface
+ * cannot reach for `finalUrl` and re-describe the host change in its own words
+ * — that is the copy P1-26 removed from `check`, and the four paid surfaces had
+ * the same opportunity.
+ *
  * @param {object} [state] — `{ url, finalUrl }`; `finalUrl` is null when no
  *   response was received at all.
- * @returns {{ finalUrl: string|null, offHost: boolean, askedHost: string|null, answeredHost: string|null, note: string }}
+ * @returns {{ finalUrl: string|null, offHost: boolean, askedHost: string|null, answeredHost: string|null, note: string, label: string }}
  */
 export function readRedirectTarget({ url = '', finalUrl = null } = {}) {
   const askedHost = hostKey(url);
@@ -180,6 +186,7 @@ export function readRedirectTarget({ url = '', finalUrl = null } = {}) {
     note: offHost
       ? `answered by another host — the response came from ${answeredHost}, not ${askedHost}`
       : '',
+    label: offHost ? `answered by ${answeredHost} (asked ${askedHost})` : '',
   };
 }
 
@@ -656,8 +663,11 @@ export function verdictFor(wasUp) {
  * Every value returned is a fixed word or a checked number — nothing from the
  * state file is carried through as text — so an unusable field can only become
  * `null`, never a claim the caller did not check.
+ *
+ * `url` is the state's own key, not something the entry stores, so it has to be
+ * handed in: without it the cross-host reading below is unmeasured and says so.
  */
-export function readEntry(entry, { now = new Date() } = {}) {
+export function readEntry(entry, { now = new Date(), url = '' } = {}) {
   const value = entry && typeof entry === 'object' ? entry : {};
   const ssl = readSslState({
     days: value.sslValidDays,
@@ -689,6 +699,14 @@ export function readEntry(entry, { now = new Date() } = {}) {
     ageDays,
     stale,
     staleNote: stale ? staleAgeNote(ageDays) : '',
+    // Where the last pass's response came from. The pass measured it, the state
+    // file kept it, and the two lists that show an entry could not see it — so a
+    // site that had been redirected to another host (a parked domain, a hijacked
+    // domain, a typo) printed as a plain `✅ up` here while `check` named the
+    // host change. Asked of the one owner, so both lists say the same words and
+    // neither compares hosts itself. The `label` is empty unless the answer came
+    // from a different host, so an ordinary `www → apex` redirect stays silent.
+    redirect: readRedirectTarget({ url, finalUrl: typeof value.lastFinalUrl === 'string' ? value.lastFinalUrl : null }),
   };
 }
 

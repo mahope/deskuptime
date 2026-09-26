@@ -586,7 +586,7 @@ if (command === 'status') {
   // marked with its age, a certificate inside the warning window is marked, and
   // an unusable `sslValidDays` reads as unknown instead of printing itself.
   for (const u of urls) {
-    const e = readEntry(state.urls[u]);
+    const e = readEntry(state.urls[u], { url: u });
     const up = e.verdict === 'up' ? '✅' : e.verdict === 'down' ? '❌' : '·';
     const code = e.statusCode === null ? '' : ` (${e.statusCode})`;
     const ssl = e.sslNote ? ` — ${e.sslNote}` : '';
@@ -596,7 +596,11 @@ if (command === 'status') {
     // day count, so it cannot carry anything out of the state file.
     const unknown = e.verdict === 'unknown' ? ` — ${e.unknownNote}` : '';
     const stale = e.staleNote ? ` ⚠️ ${e.staleNote}` : '';
-    console.log(`  ${up} ${safeText(u, { max: 0 })}${code}${ssl}${unknown}${stale}`);
+    // The host that answered, read by the same owner `check` and `watch --status`
+    // ask. Without it a parked or hijacked domain printed as a plain `✅` here,
+    // on the list a user runs to see whether their monitoring works.
+    const redirect = e.redirect.label ? ` ⚠️ ${e.redirect.label}` : '';
+    console.log(`  ${up} ${safeText(u, { max: 0 })}${code}${ssl}${unknown}${stale}${redirect}`);
   }
   process.exit(0);
 }

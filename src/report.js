@@ -27,7 +27,7 @@
 import { PRODUCT } from './features.js';
 import { DEFAULT_WINDOW_DAYS, windowSummary } from './history.js';
 import { markdownCell as cell } from './display.js';
-import { SSL_WARN_DAYS, STALE_AFTER_DAYS, checkAgeDays, expiredNote, isCheckStale, readSslState, readStatusCode, staleAgeNote, unknownNote, verdictFor } from './status.js';
+import { SSL_WARN_DAYS, STALE_AFTER_DAYS, checkAgeDays, expiredNote, isCheckStale, readRedirectTarget, readSslState, readStatusCode, staleAgeNote, unknownNote, verdictFor } from './status.js';
 
 export const DEFAULT_REPORT_TITLE = 'Website uptime report';
 const MAX_TITLE_LENGTH = 120;
@@ -176,12 +176,28 @@ export function buildReport(state, { title, now = new Date(), history, windowDay
       // older than the window keeps its observed status — the pass really did
       // answer 200 — but is marked stale so it is never counted as currently up.
       const stale = isCheckStale(entry.lastChecked, now);
+      // Where the last pass's answer came from, asked of the one owner. The pass
+      // measured it, the state file now keeps it, and the document an agency
+      // forwards used to read `UP (200)` for a domain that was answering from a
+      // registrar's parking page — a customer's dead site, priced at 100 %.
+      //
+      // Only the *host* travels into the report, never the full `finalUrl`: a
+      // redirect path can carry a token, and this document is written to be sent
+      // to someone outside the agency. The host is the actionable part — it says
+      // whose server answered.
+      const redirect = readRedirectTarget({ url, finalUrl: typeof entry.lastFinalUrl === 'string' ? entry.lastFinalUrl : null });
       return {
         url,
         status: verdictFor(entry?.wasUp),
         stale,
         ageDays: checkAgeDays(entry.lastChecked, now),
         statusCode: readStatusCode(entry.lastStatus),
+        // The two additive fields for the same fact: the boolean a CI job or an
+        // agency's own system can branch on (same name as `check --json`), and
+        // the owner's own short sentence, so the cell below never re-describes
+        // the host change in its own words.
+        offHostRedirect: redirect.offHost,
+        offHostNote: redirect.label,
         uptimePercent: uptimePercent(entry),
         window: windowSummary(history, url, { days: windowDays, now, uptimePercent }),
         checks,
@@ -318,7 +334,11 @@ function statusCell(site) {
     : site.status === 'down'
       ? `DOWN${site.statusCode ? ` (${site.statusCode})` : ''}`
       : unknownNote(site);
-  return site.stale ? `${observed} ⚠️ ${staleAgeNote(site.ageDays)}` : observed;
+  // A 200 from another host is still a 200 — the row keeps its verdict — but the
+  // customer reading this must see whose server answered, or "UP" is a claim
+  // about a URL nobody asked about (a parked domain, a hijacked domain, a typo).
+  const crossed = site.offHostRedirect ? ` ⚠️ ${site.offHostNote}` : '';
+  return site.stale ? `${observed} ⚠️ ${staleAgeNote(site.ageDays)}${crossed}` : `${observed}${crossed}`;
 }
 
 /**
@@ -415,6 +435,19 @@ export function renderReportMarkdown(report) {
       `**Monitoring data is stale for ${stale.length} site${stale.length === 1 ? '' : 's'} — no pass in the last ${STALE_AFTER_DAYS} days:** ${stale.map(site => cell(site.ageDays === null ? site.url : `${site.url} (${site.ageDays} d)`)).join(', ')}`,
     ];
 
+  // The same rule for a site that answered, but from somewhere else. Uptime
+  // percentages look best precisely because nobody reads them closely, so a row
+  // that quietly says "UP (200) ⚠️ answered by …" would pass a glance while the
+  // number above it stays 100 % — and the recipient is the one who has to act on
+  // it. Named out loud, the way an expired certificate is.
+  const crossed = report.sites.filter(site => site.offHostRedirect);
+  const crossedLines = crossed.length === 0
+    ? []
+    : [
+      '',
+      `**${crossed.length === 1 ? 'One site is' : `${crossed.length} sites are`} answered by another host — the monitored URL no longer serves the site itself:** ${crossed.map(site => cell(site.offHostNote)).join(', ')}`,
+    ];
+
   return [
     `# ${cell(report.title)}`,
     '',
@@ -424,10 +457,11 @@ export function renderReportMarkdown(report) {
     `|${' --- |'.repeat(HEADERS.length)}`,
     ...(rows.length > 0 ? rows : [`| ${['_no monitored sites_', '—', '—', '—', '—', '—', '—'].join(' | ')} |`]),
     '',
-    `**${report.summary.sites} site(s) · ${buckets.up} up · ${buckets.down} down${unknownWords(buckets)} · ${report.summary.checks} checks · ${report.summary.failures} failed${expiring.length > 0 ? ` · ${expiring.length} SSL expiring soon` : ''}${expired.length > 0 ? ` · ${expired.length} SSL EXPIRED` : ''}${stale.length > 0 ? ` · ${stale.length} stale (no check in the last ${STALE_AFTER_DAYS} d)` : ''}**`,
+    `**${report.summary.sites} site(s) · ${buckets.up} up · ${buckets.down} down${unknownWords(buckets)} · ${report.summary.checks} checks · ${report.summary.failures} failed${expiring.length > 0 ? ` · ${expiring.length} SSL expiring soon` : ''}${expired.length > 0 ? ` · ${expired.length} SSL EXPIRED` : ''}${stale.length > 0 ? ` · ${stale.length} stale (no check in the last ${STALE_AFTER_DAYS} d)` : ''}${crossed.length > 0 ? ` · ${crossed.length} answered by another host` : ''}**`,
     ...expiredLines,
     ...attention,
     ...staleLines,
+    ...crossedLines,
     '',
     `Uptime is the share of completed monitoring passes that answered HTTP 200–399. "Uptime (all)" counts every pass since the site was added${since ? ` (earliest ${shortTime(since)})` : ''}; "Uptime (window)" counts the passes recorded in the last ${windowDays} days. A site with no completed pass yet shows — rather than 100%. The counts in the summary line are a partition: every site is in exactly one of up, down, not checked, status unknown or stale. "Up" and "down" describe sites checked within the last ${STALE_AFTER_DAYS} days; a site whose monitoring stopped is counted as stale and keeps the status from its last pass in the table, named with the age of that pass. "Status unknown" means a pass ran but its result cannot be read from the state file.`,
     '',

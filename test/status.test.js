@@ -10,7 +10,8 @@ import { fileURLToPath } from 'node:url';
 import { checkUrl, checkUrls } from '../src/engine.js';
 import { checkReachability } from '../src/checkers/ping.js';
 import { getStateFile, loadState, runPass, saveState, isPro } from '../src/watch.js';
-import { readChain, readDisclosure, readHttpsState, readRedirectTarget, readSecurityHeaders, SECURITY_HEADER, urlScheme } from '../src/status.js';
+import { readChain, readDisclosure, readEntry, readHttpsState, readRedirectTarget, readSecurityHeaders, SECURITY_HEADER, urlScheme } from '../src/status.js';
+import { buildReport, renderReportMarkdown } from '../src/report.js';
 
 const run = promisify(execFile);
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
@@ -1986,4 +1987,186 @@ test('check: the host comparison has one owner', () => {
   // The engine already measured this; a second reader of `finalUrl` in the
   // terminal is a second rule that can drift from the JSON's.
   assert.doesNotMatch(cli, /\.host\s*[!=]==?\s*/, 'the terminal must not compare hosts on its own');
+});
+
+// ── P1-27: the same fact on the four surfaces that decide something for money ──
+//
+// P1-26 gave `check` a line for a response that came from another host. Measured
+// in the same run, and unchanged by that fix, all four of these still reported a
+// parked or hijacked domain as a plain UP:
+//
+//   watch --once ->  baseline recorded: UP (200)
+//   watch --status, status ->  ✅ up … (200)
+//   report       ->  | https://kunde.dk | UP (200) | 100% (1 checks) | … |
+//   webhook      ->  {"type":"up","message":"is UP (200) — 41ms"}
+//
+// All four are paid or bureau-used, and a cross-host answer is not DOWN — so the
+// event type cannot carry it and a channel has nothing to branch on. The engine
+// measured `finalUrl` on every pass; `runPass` threw it away, so nothing after
+// the pass could see it. Now it is kept, asked of the one owner, and named.
+
+test('watch: en pass gemmer hvem der svarede, og siger det når værten ændrer sig', async () => {
+  const home = mkdtempSync(join(tmpdir(), 'deskuptime-offhost-'));
+  const opts = { stateFile: join(home, 'state.json'), home, now: new Date('2026-09-26T09:00:00.000Z') };
+  const url = 'https://kunde.dk/';
+  const state = { urls: { [url]: { addedAt: opts.now.toISOString(), wasUp: null } } };
+  const parked = { healthy: true, statusCode: 200, responseTimeMs: 41, finalUrl: 'http://parked.example/lander', content: { hash: 'a'.repeat(64) }, timestamp: opts.now.toISOString() };
+  const parkedAgain = { ...parked, finalUrl: 'http://parked.example/lander?session=2' };
+  const hijacked = { ...parked, finalUrl: 'http://phishing.example/' };
+  const ownHost = { ...parked, finalUrl: 'https://kunde.dk/ny' };
+
+  let pass = await runPass(state, { ...opts, check: async () => parked });
+  assert.equal(state.urls[url].lastFinalUrl, 'http://parked.example/lander', 'den målte kendsgerning skal overleve passet');
+  const redirects = pass.filter(e => e.type === 'redirect');
+  assert.equal(redirects.length, 1, 'et kunde-domæne der er parkeret skal sige det én gang');
+  assert.match(redirects[0].message, /answered by another host/);
+  assert.match(redirects[0].message, /parked\.example/);
+  assert.equal(redirects[0].finalUrl, 'http://parked.example/lander', 'hændelsen bærer den rå kendsgerning, så kanalen ikke skal gætte');
+  // Not DOWN, and not a recovery either: the verdict is untouched.
+  assert.equal(state.urls[url].wasUp, true);
+  assert.equal(pass.some(e => e.type === 'down'), false);
+
+  // A second pass where the *same* other host answers with a different path —
+  // a signed link, a rotating path. Not news: a paying customer must not get a
+  // notification every 60 seconds because a domain is parked.
+  pass = await runPass(state, { ...opts, check: async () => parkedAgain });
+  assert.equal(pass.filter(e => e.type === 'redirect').length, 0, 'samme fremmede vært igen er ikke en ny hændelse');
+
+  // A different other host *is* news — that is a hijack after a parking page.
+  pass = await runPass(state, { ...opts, check: async () => hijacked });
+  assert.equal(pass.filter(e => e.type === 'redirect').length, 1);
+
+  // The ordinary case: `www → apex` and any path redirect on the site's own host.
+  // Stays silent on every surface, and the latch is released so a later
+  // cross-host answer is announced again instead of being swallowed.
+  pass = await runPass(state, { ...opts, check: async () => ownHost });
+  assert.equal(pass.filter(e => e.type === 'redirect').length, 0, 'en redirect på egen vært tier');
+  assert.equal(state.urls[url].lastFinalUrl, 'https://kunde.dk/ny', 'også på egen vært gemmes den, så rækker kan vise hvor svaret kom fra');
+  assert.equal(state.urls[url].answeredBy, undefined, 'låsen skal frigives, så næste fremmede vært høres');
+  pass = await runPass(state, { ...opts, check: async () => parked });
+  assert.equal(pass.filter(e => e.type === 'redirect').length, 1, 'efter en stille pass skal et nyt skift stadig høres');
+
+  // readEntry is the one reading the two terminal lists share, and the state's
+  // key is not in the entry — so the URL has to be handed in. Without it the
+  // reading is unmeasured, and an unmeasured rule says nothing.
+  const offHost = readEntry(state.urls[url], { url, now: opts.now });
+  assert.equal(offHost.redirect.offHost, true);
+  assert.match(offHost.redirect.label, /parked\.example/);
+  assert.match(offHost.redirect.label, /asked kunde\.dk/, 'sætningen skal sige hvem der blev spurgt');
+  assert.equal(readEntry(state.urls[url], { now: opts.now }).redirect.offHost, false, 'uden URL må intet påstås');
+  assert.equal(readEntry({ lastFinalUrl: 'ikke-en-url' }, { url }).redirect.offHost, false, 'en ulæselig værts-streng tier');
+});
+
+test('de fire betalte flader kan se skiftet, og de tier på en redirect på egen vært', async (t) => {
+  // The harm, unchanged: a domain that expired and got parked, or was hijacked
+  // and now points somewhere else. A 200 either way, so nothing but the recorded
+  // measurement can tell the two apart.
+  const parked = createServer((_req, res) => {
+    res.writeHead(200, { 'content-type': 'text/html' });
+    res.end('<html><title>This domain may be for sale</title></html>');
+  });
+  const parkedPort = await listen(parked);
+  t.after(() => close(parked));
+
+  const site = createServer((req, res) => {
+    if (req.url === '/flyttet') {
+      res.writeHead(301, { location: `http://127.0.0.1:${parkedPort}/lander` });
+      res.end();
+      return;
+    }
+    if (req.url === '/gammel') {
+      res.writeHead(301, { location: '/ny' });
+      res.end();
+      return;
+    }
+    res.writeHead(200, { 'content-type': 'text/html' });
+    res.end('<html><title>Client site</title></html>');
+  });
+  const sitePort = await listen(site);
+  t.after(() => close(site));
+
+  const hijacked = `http://127.0.0.1:${sitePort}/flyttet`;
+  const own = `http://127.0.0.1:${sitePort}/gammel`;
+  const home = mkdtempSync(join(tmpdir(), 'deskuptime-offhost-cli-'));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  const env = { ...process.env, HOME: home, USERPROFILE: home };
+  const cli = (...args) => run(process.execPath, [CLI, ...args], { env });
+
+  // A real pass against both fixtures. The terminal line is the owner's sentence,
+  // so it must name the host that answered.
+  const once = await cli('watch', hijacked, own, '--once');
+  assert.match(once.stdout, new RegExp(String(parkedPort)), once.stdout);
+  assert.match(once.stdout, /answered by another host/, once.stdout);
+  assert.doesNotMatch(once.stdout, /gammel.*answered by another host/, 'egen-vært-redirecten skal ikke sige noget');
+
+  const state = JSON.parse(readFileSync(getStateFile({ env }), 'utf-8'));
+  assert.equal(state.urls[hijacked].lastFinalUrl, `http://127.0.0.1:${parkedPort}/lander`);
+  assert.equal(state.urls[own].lastFinalUrl, `http://127.0.0.1:${sitePort}/ny`);
+
+  // 1. `watch --status`
+  const watchStatus = await cli('watch', '--status');
+  assert.match(watchStatus.stdout, new RegExp(`answered by 127\\.0\\.0\\.1:${parkedPort}`), watchStatus.stdout);
+  assert.doesNotMatch(watchStatus.stdout, new RegExp(`answered by 127\\.0\\.0\\.1:${sitePort} \\(asked`), 'egen vært: ingen linje');
+
+  // 2. `status` — the other list, same state file
+  const status = await cli('status');
+  assert.match(status.stdout, new RegExp(`answered by 127\\.0\\.0\\.1:${parkedPort}`), status.stdout);
+  assert.match(status.stdout, /\/gammel \(200\)/, 'kontrolrækken er der stadig');
+  const statusQuiet = status.stdout.split('\n').find(line => line.includes('/gammel'));
+  assert.doesNotMatch(statusQuiet, /answered by/, statusQuiet);
+
+  // 3. `report` — the document an agency forwards. Rendered from the same state
+  // file through the real report code; the command itself is Pro-gated, so the
+  // gate is not simulated here.
+  const report = buildReport(state, { now: new Date() });
+  const crossed = report.sites.find(site => site.url === hijacked);
+  const quiet = report.sites.find(site => site.url === own);
+  assert.equal(crossed.offHostRedirect, true);
+  assert.match(crossed.offHostNote, new RegExp(String(parkedPort)));
+  assert.equal(quiet.offHostRedirect, false);
+  assert.equal(quiet.offHostNote, '', 'en stille række får ingen note');
+  assert.equal(quiet.status, 'up', 'verdikten er uændret — en redirect er ikke DOWN');
+
+  const markdown = renderReportMarkdown(report);
+  assert.match(markdown, new RegExp(`\\| UP \\(200\\) ⚠️ answered by 127\\.0\\.0\\.1:${parkedPort}`), markdown);
+  assert.match(markdown, /answered by another host — the monitored URL no longer serves the site itself/, 'den skal siges højt, som et udløbet certifikat');
+  assert.match(markdown, /1 answered by another host/, 'og tælles i opsummeringen');
+  const quietRow = markdown.split('\n').find(line => line.includes(own));
+  assert.doesNotMatch(quietRow, /answered by/, quietRow);
+  // A parked page is the site's content, not the customer's — the report must not
+  // forward a full redirect URL, whose path can carry a token.
+  assert.ok(!markdown.includes('/lander'), 'rapporten må ikke sende hele finalUrl videre');
+
+  // 4. The webhook payload, on the same measured facts.
+  const received = [];
+  const hook = createServer((req, res) => {
+    let body = '';
+    req.on('data', chunk => { body += chunk; });
+    req.on('end', () => { received.push(JSON.parse(body)); res.writeHead(200).end('ok'); });
+  });
+  const hookPort = await listen(hook);
+  t.after(() => close(hook));
+  const { sendWebhook } = await import('../src/watch.js');
+  await sendWebhook(`http://127.0.0.1:${hookPort}/hook`, {
+    type: 'baseline',
+    url: hijacked,
+    message: `baseline recorded: UP (200) — 12ms`,
+    measuredAt: state.urls[hijacked].lastChecked,
+    finalUrl: state.urls[hijacked].lastFinalUrl,
+  });
+  assert.equal(received[0].offHostRedirect, true, 'Pro-kanalen skal se skiftet uden at regne på værter');
+  assert.equal(received[0].finalUrl, `http://127.0.0.1:${parkedPort}/lander`);
+});
+
+test('værtssammenligningen har stadig kun én ejer', () => {
+  const strip = text => text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+  for (const name of ['watch.js', 'report.js']) {
+    const source = strip(readFileSync(join(ROOT, 'src', name), 'utf8'));
+    assert.doesNotMatch(source, /\.host\s*[!=]==?\s*/, `${name} må ikke sammenligne værter selv`);
+  }
+  const report = strip(readFileSync(join(ROOT, 'src', 'report.js'), 'utf8'));
+  assert.match(report, /readRedirectTarget\(/, 'rapporten skal spørge ejeren');
+  const watch = strip(readFileSync(join(ROOT, 'src', 'watch.js'), 'utf8'));
+  assert.match(watch, /readRedirectTarget\(/, 'watch skal spørge ejeren');
+  assert.match(watch, /redirect\.note/, 'watch-gen skal bruge ejerens sætning, ikke sin egen');
 });

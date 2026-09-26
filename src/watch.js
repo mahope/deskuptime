@@ -17,7 +17,7 @@ import { readFileSync, writeFileSync, mkdirSync, existsSync, renameSync, unlinkS
 import { dirname, posix, win32 } from 'path';
 import { homedir } from 'os';
 import { createHash, randomUUID } from 'crypto';
-import { assertValidHttpUrls, expiredNote, isNewerPass, readEntry, readEvent, readSslState, STALE_AFTER_DAYS } from './status.js';
+import { assertValidHttpUrls, expiredNote, isNewerPass, readEntry, readEvent, readRedirectTarget, readSslState, STALE_AFTER_DAYS } from './status.js';
 import { recordPass } from './report.js';
 import { formatMs, safeText } from './display.js';
 import { loadHistory, pruneHistory, recordHistoryPass, saveHistory } from './history.js';
@@ -181,7 +181,7 @@ export async function runPass(state, opts = {}) {
     // asks readEvent() what they mean, and so does the payload for the same
     // event — with the pass's own time as the reference, so the sentence in
     // `message` and the `transition` word can never disagree.
-    const event = (type, message) => ({ url, type, message, measuredAt, previousChecked });
+    const event = (type, message) => ({ url, type, message, measuredAt, previousChecked, finalUrl: result.finalUrl ?? null });
     // A baseline is "this site has never been checked", not "the last verdict
     // is unreadable" — an entry that already has a pass behind it must not be
     // announced as a first observation, and its DOWN state must reach the
@@ -208,6 +208,27 @@ export async function runPass(state, opts = {}) {
       // names the age of the *previous check*, never the moment it broke.
       const { note } = readEvent({ type: 'down', measuredAt, previousChecked });
       events.push(event('down', `is DOWN${result.error ? ' — ' + result.error : ''}${note ? ' ' + note : ''}`));
+    }
+
+    // Where the answer came from. The engine measured this on every pass and the
+    // state file threw it away, so `watch --status`, `status` and the client
+    // report all read a site that another host had answered as a plain `UP` —
+    // the four paid surfaces `check` could not name (P1-27). Asked of the one
+    // owner, kept as a raw fact, and announced once per change: a domain that
+    // stays parked must not send a paying customer a notification every minute,
+    // which is why this is latched the way the SSL warning is, and why the latch
+    // key is the *host* that answered rather than the URL (a redirect path can
+    // change every pass — a signed link, a rotating path — and that is not news).
+    const redirect = readRedirectTarget({ url, finalUrl: result.finalUrl });
+    if (redirect.finalUrl) entry.lastFinalUrl = redirect.finalUrl;
+    else delete entry.lastFinalUrl;
+    if (redirect.offHost) {
+      if (entry.answeredBy !== redirect.answeredHost) {
+        events.push(event('redirect', redirect.note));
+      }
+      entry.answeredBy = redirect.answeredHost;
+    } else {
+      delete entry.answeredBy;
     }
 
     // One reading of the certificate, so the event, the persisted entry and
@@ -285,7 +306,7 @@ export async function runPass(state, opts = {}) {
 }
 
 function eventIcon(type) {
-  return { down: '🚨', up: '✅', baseline: '•', ssl_warning: '⚠️ ', ssl_expired: '🔴 ', content_changed: '🔄' }[type] || '•';
+  return { down: '🚨', up: '✅', baseline: '•', redirect: '🔀', ssl_warning: '⚠️ ', ssl_expired: '🔴 ', content_changed: '🔄' }[type] || '•';
 }
 
 export function printPass(pass, { alertUnchangedDown = true } = {}) {
@@ -323,7 +344,7 @@ export function printStatus(options = {}) {
   // command makes no request — which is exactly why the age of the last pass is
   // part of what it says.
   const now = options.now instanceof Date ? options.now : new Date();
-  const rows = entries.map(([url, entry]) => ({ url, entry, ...readEntry(entry, { now }) }));
+  const rows = entries.map(([url, entry]) => ({ url, entry, ...readEntry(entry, { now, url }) }));
 
   console.log(`📋 ${rows.length} monitored URL(s):\n`);
   for (const row of rows) {
@@ -336,7 +357,11 @@ export function printStatus(options = {}) {
     // find out whether their monitoring works at all.
     const unknown = row.verdict === 'unknown' ? ` — ${row.unknownNote}` : '';
     const stale = row.staleNote ? ` ⚠️ ${row.staleNote}` : '';
-    console.log(`  ${VERDICT_ICON[row.verdict]}  ${safeText(row.url, { max: 0 })} (${code}${ssl})${checked}${unknown}${stale}`);
+    // The same reading `check` prints on its own row, asked of the same owner
+    // through readEntry: a site whose last answer came from another host is
+    // named here too, and an ordinary redirect on its own host says nothing.
+    const redirect = row.redirect.label ? ` ⚠️ ${row.redirect.label}` : '';
+    console.log(`  ${VERDICT_ICON[row.verdict]}  ${safeText(row.url, { max: 0 })} (${code}${ssl})${checked}${unknown}${stale}${redirect}`);
   }
 
   // A stale site is the reader's most consequential line and a per-row marker
@@ -522,6 +547,14 @@ async function notify(title, message) {
  */
 export async function sendWebhook(webhookUrl, event, { timeoutMs = WEBHOOK_TIMEOUT_MS } = {}) {
   const reading = readEvent(event);
+  // The same two additive fields `check --json` publishes, asked of the same
+  // owner, so one name for the fact holds across every surface. A Pro channel
+  // that had to compare hosts itself to notice that a parked page answered
+  // instead of the customer's site would be re-implementing the one rule
+  // `readRedirectTarget` exists to own — and every channel would get it wrong
+  // separately. `type`, `message` and `timestamp` keep their old meaning, and in
+  // the ordinary case (no cross-host answer) both new fields are `null`/`false`.
+  const redirect = readRedirectTarget({ url: event.url, finalUrl: event.finalUrl });
   try {
     const res = await fetch(webhookUrl, {
       method: 'POST',
@@ -539,6 +572,11 @@ export async function sendWebhook(webhookUrl, event, { timeoutMs = WEBHOOK_TIMEO
         // watched the change or merely found it already so.
         previousChecked: typeof event.previousChecked === 'string' ? event.previousChecked : null,
         transition: reading.transition,
+        // Where the response came from. A cross-host answer is not DOWN, so the
+        // channel cannot learn it from the event type; without these two fields
+        // a customer's parked or hijacked domain reached Slack as a green "up".
+        finalUrl: redirect.finalUrl,
+        offHostRedirect: redirect.offHost,
       }),
       signal: AbortSignal.timeout(timeoutMs),
     });

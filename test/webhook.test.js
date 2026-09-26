@@ -186,3 +186,66 @@ test('en utilgængelig endpoint kaster ikke', async () => {
   const sent = await withStderr(() => sendWebhook('http://127.0.0.1:1/hook', { type: 'up', url: 'https://yoursite.com', message: 'is up' }, { timeoutMs: 500 }));
   assert.equal(sent, false);
 });
+
+/**
+ * P1-27. A cross-host answer is not DOWN, so the event type cannot carry it: a
+ * customer's domain that expired and got parked, or was hijacked and now points
+ * at a phishing page, reached a paying customer's Slack channel as a green `up`.
+ * The channel had nothing to branch on, and the fix must not be "compare the
+ * hosts yourself in every channel" — that is the rule `readRedirectTarget` was
+ * made the single owner of in P1-26.
+ */
+test('payloaden fortæller hvilken vært der svarede, så en kanal ikke skal gætte', async () => {
+  const received = [];
+  const server = await serve((req, res) => {
+    let body = '';
+    req.on('data', chunk => { body += chunk; });
+    req.on('end', () => {
+      received.push(JSON.parse(body));
+      res.writeHead(200).end('ok');
+    });
+  });
+
+  // The parked/hijacked case: a 200 that came from somewhere else entirely.
+  await withStderr(() => sendWebhook(server.url, {
+    type: 'up',
+    url: 'https://kunde.dk/',
+    message: 'is UP (200) — 41ms',
+    measuredAt: '2026-09-26T09:00:00.000Z',
+    previousChecked: '2026-09-26T08:59:00.000Z',
+    finalUrl: 'http://parked.example/lander',
+  }));
+
+  // The ordinary case: a path redirect on the site's own host. Both fields must
+  // be present and say "nothing happened here", so a channel needs no branch
+  // order and an existing receiver that ignores them is unaffected.
+  await withStderr(() => sendWebhook(server.url, {
+    type: 'up',
+    url: 'https://kunde.dk/gammel',
+    message: 'is UP (200) — 12ms',
+    measuredAt: '2026-09-26T09:01:00.000Z',
+    previousChecked: '2026-09-26T09:00:00.000Z',
+    finalUrl: 'https://kunde.dk/ny',
+  }));
+
+  // A pass where nothing answered at all: no final URL was ever measured.
+  await withStderr(() => sendWebhook(server.url, {
+    type: 'down',
+    url: 'https://kunde.dk/',
+    message: 'is DOWN — Request timed out',
+    measuredAt: '2026-09-26T09:02:00.000Z',
+    previousChecked: '2026-09-26T09:01:00.000Z',
+  }));
+  await server.close();
+
+  assert.equal(received[0].offHostRedirect, true, 'en Pro-kanal skal kunne se skiftet uden at regne på værter');
+  assert.equal(received[0].finalUrl, 'http://parked.example/lander');
+  assert.equal(received[0].type, 'up', 'en cross-host svar er stadig ikke DOWN');
+  assert.equal(received[1].offHostRedirect, false, 'www → apex er ikke nyheder');
+  assert.equal(received[1].finalUrl, 'https://kunde.dk/ny');
+  assert.equal(received[2].offHostRedirect, false);
+  assert.equal(received[2].finalUrl, null, 'intet svar, intet finalUrl — ikke den gamle start-URL');
+  // `type`, `message` and `timestamp` keep their old meaning in all three.
+  assert.equal(received[0].message, 'is UP (200) — 41ms');
+  assert.equal(received[0].transition, 'observed');
+});
