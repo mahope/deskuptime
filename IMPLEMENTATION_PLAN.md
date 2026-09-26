@@ -1354,7 +1354,7 @@ Siden er 5 242 880 byte. Begge tal er **hvor vores egen læser standsede**, før
 
 **Ingen eksisterende test rettet.** `status.test.js:649` låser `Object.keys(result.security).length === 5` på en refused connection — den holder den gamle form, ikke en dårligere implementation, og rettelsen beholder de fem nøgler. P1-16's strukturelle lås på `readChain`/`healthy` holder uændret.
 
-**Mutationstest (4, alle døde):** `measured/complete` tilbage til `!pending` → 2 fejl; `urlScheme` erstattet af `url.startsWith(...)`-genkendelse i `readHttpsState` → 2 (enhed + `HTTP://`-e2e); `securityChecked: chain.measured` → `true` (konstant) → 2 (begge e2e-nej-tilfælde); `HTTP://`-løsningen i checkeren fjernet så `startedHttp` kun kan være sand for lowercase → den strukturelle lås + e2e.
+**Mutationstest (4, alle døde, målt på `node --test test/status.test.js` med 48 grønne i basen):** `measured/complete` tilbage til `!pending` → **2 fejl**; `urlScheme` erstattet af `startsWith`-genkendelse i `readHttpsState` → **2 fejl** (enhed + `HTTP://`-e2e); `securityChecked: chain.measured` → `true` (konstant) → **2 fejl** (begge e2e-nej-tilfælde); `startedHttp` i checkeren gjort til sit eget `url.startsWith('http://')` → **3 fejl** (den strukturelle lås + `HTTP://`-e2e + JSON-kontrollen).
 
 **Bevis:** Node 26.7.0 — `npm ci --ignore-scripts`, **`npm test` grøn med 305/305** (301 + 4), `npm run audit` 0/0, `node --check` alle JS-filer, `node tools/matrix.mjs --check`, `sh -n`/`bash -n`, YAML tab-fri og `git diff --check` grønne.
 
