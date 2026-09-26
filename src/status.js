@@ -120,6 +120,76 @@ export function expiredNote(expiredDays) {
   return expiredDays === 0 ? 'expired today' : `expired ${expiredDays}d ago`;
 }
 
+/** A byte count is a fact only when it is a whole, non-negative number. */
+function byteCount(value) {
+  return Number.isFinite(value) && value >= 0 ? Math.floor(value) : null;
+}
+
+/**
+ * One reading of the content check, shared by every surface that prints one.
+ *
+ * The content check is not always a measurement. P2-1 del B capped the body at
+ * 2 MiB so one large page cannot take the watch loop down, and it was right to:
+ * a big page is not an outage. But the cap was invisible, and the byte count it
+ * left behind was not a measurement of the page at all. Measured with the real
+ * CLI against a 5 MiB page served without a `content-length`:
+ *
+ *   check --json -> { "contentLength": 2162237, "contentHash": null }
+ *
+ * The page is 5 242 880 bytes. 2 162 237 is where *our own reader* stopped
+ * before it cancelled the stream — it moved to 2 120 910 on the next identical
+ * run, because it depends on how much the socket happened to deliver. So a CI
+ * job reporting "page size" from this field published a number no server sent,
+ * and it was different every run. The two facts a consumer needed were both
+ * missing: `tooLarge` was written by the checker and read by nobody, and the
+ * checker's own explanation ("Page is 5242880 bytes — over the 2097152-byte
+ * content-check limit") was computed and then thrown away, so the human output
+ * printed no Content line at all and `contentHash: null` was indistinguishable
+ * from a page that genuinely has no hash.
+ *
+ * So the answer is decided once, here:
+ *
+ * - `measured` is true only when the body was actually read and hashed.
+ * - `length` is the byte count to publish, and it is `null` unless the number
+ *   describes the page: our own read, or the server's own `content-length`
+ *   declaration. The streaming artifact is *not* a page size, so it never
+ *   reaches a surface as one — it is carried as `atLeast`, which says what it
+ *   really is.
+ * - `skipped` names the one deliberate skip, so a consumer can tell "we did not
+ *   look" from "there was nothing to find".
+ *
+ * @param {object} content — a `checkContentChange()` result.
+ */
+export function readContentState(content) {
+  const value = content && typeof content === 'object' ? content : {};
+  const measured = value.fetched === true;
+  const tooLarge = value.tooLarge === true;
+  const atLeast = byteCount(value.atLeastBytes);
+  // A server that declared an oversized body told us the size itself, so that
+  // number is the server's claim about the page and is labelled as such. A body
+  // we stopped reading halfway leaves us with a lower bound and nothing else.
+  const declared = !measured && tooLarge ? byteCount(value.contentLength) : null;
+  return {
+    measured,
+    length: measured ? byteCount(value.contentLength) : declared,
+    declared: declared !== null,
+    atLeast,
+    limit: byteCount(value.contentLimit),
+    skipped: tooLarge ? 'too-large' : null,
+  };
+}
+
+/**
+ * The fixed wording for a content check that was deliberately not made, in one
+ * place: what was skipped, the limit that caused it, and the lower bound the
+ * read actually reached.
+ */
+export function contentSkipNote(state) {
+  const limit = state.limit === null ? 'the content-check limit' : `the ${state.limit.toLocaleString('en-US')}-byte content-check limit`;
+  const read = state.atLeast === null ? '' : ` (read ${state.atLeast.toLocaleString('en-US')} bytes before stopping)`;
+  return `not read — page over ${limit}${read}`;
+}
+
 /**
  * How old the newest completed pass may be before a report stops presenting it
  * as current.

@@ -55,6 +55,10 @@ async function readCapped(response, limit) {
       bytes += value.byteLength;
       if (bytes > limit) {
         await reader.cancel().catch(() => {});
+        // `bytes` is where *our reader* stopped, not how big the page is: it
+        // moves from run to run with how much the socket happened to deliver.
+        // It is reported as a lower bound so no surface can print it as the
+        // page's size — see readContentState() in src/status.js.
         return { text: null, bytes, truncated: true };
       }
       chunks.push(value);
@@ -89,16 +93,17 @@ export async function checkContentChange(url, previousHash, { maxBytes = MAX_CON
     }
 
     // A server that declares an oversized body is telling us up front — skip the
-    // read rather than streaming a gigabyte to throw it away.
+    // read rather than streaming a gigabyte to throw it away. The declared size
+    // stays: it is the server's own statement about the page, not our artifact.
     const declared = Number(response.headers.get('content-length'));
     if (Number.isFinite(declared) && declared > maxBytes) {
       await response.body?.cancel().catch(() => {});
-      return { fetched: false, tooLarge: true, contentLength: declared, error: `Page is ${declared} bytes — over the ${maxBytes}-byte content-check limit, so no content signal this check` };
+      return { fetched: false, tooLarge: true, contentLength: declared, contentLimit: maxBytes, error: `Page is ${declared} bytes — over the ${maxBytes}-byte content-check limit, so no content signal this check` };
     }
 
     const { text, bytes, truncated } = await readCapped(response, maxBytes);
     if (truncated) {
-      return { fetched: false, tooLarge: true, contentLength: bytes, error: `Page is over the ${maxBytes}-byte content-check limit, so no content signal this check` };
+      return { fetched: false, tooLarge: true, contentLength: null, atLeastBytes: bytes, contentLimit: maxBytes, error: `Page is over the ${maxBytes}-byte content-check limit, so no content signal this check` };
     }
 
     const currentHash = crypto.createHash('sha256').update(text).digest('hex');

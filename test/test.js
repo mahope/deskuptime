@@ -17,6 +17,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { checkSSL } from '../src/checkers/ssl.js';
 import { checkContentChange, MAX_CONTENT_BYTES } from '../src/checkers/content.js';
+import { readContentState, contentSkipNote } from '../src/status.js';
 import { checkUrl } from '../src/engine.js';
 
 const run = promisify(execFile);
@@ -388,4 +389,111 @@ test('content: a non-UTF-8 page keeps its title and reports its real byte count'
   assert.equal(r.fetched, true);
   assert.equal(r.title, 'Smørrebrød', 'the declared charset must be honoured, not mojibake');
   assert.equal(r.contentLength, body.length, 'bytes on the wire, not characters');
+});
+
+// ── P1-21: a content check that did not happen must not look like a measurement ──
+// The 2 MiB cap from P2-1 del B keeps one big page from taking the watch loop
+// down, but it used to leave a number behind that described *our reader*, not
+// the page: `check --json` published the bytes we had read when we gave up, a
+// figure no server sent and one that moved between identical runs.
+test('content: a skipped body reports the limit and a lower bound, never a page size', async (t) => {
+  const chunk = Buffer.alloc(64 * 1024, 0x61);
+  let written = 0;
+  const base = await bodyServer(t, (_req, res) => {
+    res.writeHead(200, { 'content-type': 'text/html' });
+    const pump = setInterval(() => {
+      if (res.writableEnded || res.destroyed) return clearInterval(pump);
+      written += chunk.length;
+      res.write(chunk);
+    }, 1);
+  });
+
+  const r = await checkContentChange(`${base}/`);
+  assert.equal(r.fetched, false);
+  assert.equal(r.tooLarge, true);
+  assert.equal(r.contentLength, null, 'the byte count our reader stopped at is not the page size');
+  assert.ok(r.atLeastBytes > MAX_CONTENT_BYTES, `lower bound ${r.atLeastBytes} should exceed the cap`);
+  assert.equal(r.contentLimit, MAX_CONTENT_BYTES, 'the limit belongs to the fact, so a surface can name it');
+  assert.ok(written < 4 * 1024 * 1024, `read ${written} bytes, the cap must still stop the read`);
+});
+
+test('content: a declared oversized body keeps the server\'s own size', async (t) => {
+  const declaredBytes = 8 * 1024 * 1024;
+  const base = await bodyServer(t, (_req, res) => {
+    res.writeHead(200, { 'content-type': 'text/html', 'content-length': String(declaredBytes) });
+    res.end(Buffer.alloc(1024, 0x62));
+  });
+
+  const r = await checkContentChange(`${base}/`);
+  assert.equal(r.tooLarge, true);
+  assert.equal(r.contentLength, declaredBytes, 'the server declared this size, so it is the page size');
+  assert.equal(r.atLeastBytes, undefined, 'nothing was read, so there is no lower bound to report');
+  assert.equal(r.contentLimit, MAX_CONTENT_BYTES);
+});
+
+test('readContentState: one reading of the content check, whatever shape it arrives in', () => {
+  // Read the page: the byte count is ours and it is a measurement.
+  const read = readContentState({ fetched: true, contentLength: 4096, hash: 'abc' });
+  assert.equal(read.measured, true);
+  assert.equal(read.length, 4096);
+  assert.equal(read.skipped, null);
+
+  // Declared too large: a real size the server told us, labelled as its claim.
+  const declared = readContentState({ fetched: false, tooLarge: true, contentLength: 5242880, contentLimit: MAX_CONTENT_BYTES });
+  assert.equal(declared.measured, false);
+  assert.equal(declared.length, 5242880);
+  assert.equal(declared.declared, true);
+  assert.equal(declared.skipped, 'too-large');
+
+  // Streamed too large: the number we stopped at is a lower bound, never a size.
+  const streamed = readContentState({ fetched: false, tooLarge: true, contentLength: null, atLeastBytes: 2162237, contentLimit: MAX_CONTENT_BYTES });
+  assert.equal(streamed.length, null, 'our own progress must never be published as the page size');
+  assert.equal(streamed.atLeast, 2162237);
+  assert.equal(streamed.declared, false);
+  assert.equal(streamed.skipped, 'too-large');
+
+  // Never looked at: a DOWN site, an unreachable one, plain HTTP. Nothing was
+  // skipped and nothing was read, and neither may be reported as a fact.
+  const never = readContentState(null);
+  assert.equal(never.measured, false);
+  assert.equal(never.length, null);
+  assert.equal(never.skipped, null);
+  assert.equal(readContentState({ fetched: false, error: 'HTTP 500' }).skipped, null);
+
+  // A record that claims to be read but holds no usable count must not throw and
+  // must not print a number: `null.toLocaleString()` used to be one line away.
+  const corrupt = readContentState({ fetched: true, contentLength: -12 });
+  assert.equal(corrupt.measured, true);
+  assert.equal(corrupt.length, null);
+  assert.equal(readContentState({ fetched: true, contentLength: 'lots' }).length, null);
+  assert.equal(readContentState({ fetched: true, contentLength: Number.NaN }).length, null);
+  assert.equal(contentSkipNote(readContentState({ fetched: false, tooLarge: true, contentLimit: MAX_CONTENT_BYTES })), 'not read — page over the 2,097,152-byte content-check limit');
+  assert.match(contentSkipNote(streamed), /\(read 2,162,237 bytes before stopping\)$/);
+});
+
+test('cli: an oversized page says it was not read, in text and in JSON', { timeout: 30000 }, async (t) => {
+  const chunk = Buffer.alloc(64 * 1024, 0x61);
+  const base = await bodyServer(t, (req, res) => {
+    // HEAD must answer, or the site is DOWN for a reason unrelated to its size.
+    if (req.method === 'HEAD') { res.writeHead(200, { 'content-type': 'text/html' }); return res.end(); }
+    res.writeHead(200, { 'content-type': 'text/html' });
+    const pump = setInterval(() => {
+      if (res.writableEnded || res.destroyed) return clearInterval(pump);
+      res.write(chunk);
+    }, 1);
+  });
+
+  const { stdout } = await run(process.execPath, [CLI, 'check', `${base}/`, '--json', '--timeout', REQUEST_TIMEOUT]);
+  const r = JSON.parse(stdout)[0];
+  assert.equal(r.healthy, true, 'a big page is not an outage');
+  assert.equal(r.contentChecked, false, 'the JSON must be able to say the page was not read');
+  assert.equal(r.contentSkipped, 'too-large');
+  assert.equal(r.contentHash, null);
+  assert.equal(r.contentLength, null, `published ${r.contentLength} as the page size — our reader\'s position, not the page`);
+
+  // And the human surface names the skip, instead of printing no Content line at
+  // all and leaving `contentHash: null` to be read as "the page has no hash".
+  const text = await run(process.execPath, [CLI, 'check', `${base}/`, '--timeout', REQUEST_TIMEOUT]);
+  assert.match(text.stdout, /Content: not read — page over the 2,097,152-byte content-check limit/);
+  assert.doesNotMatch(text.stdout, /Content: (?!not read)/, 'a skipped check must not print a byte count');
 });

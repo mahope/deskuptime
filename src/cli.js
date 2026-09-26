@@ -17,7 +17,7 @@ import { buildReport, renderReportJson, renderReportMarkdown } from './report.js
 import { readFileSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
-import { invalidHttpUrls, readChain, readEntry, readSslState, STALE_AFTER_DAYS } from './status.js';
+import { invalidHttpUrls, readChain, readContentState, readEntry, readSslState, contentSkipNote, STALE_AFTER_DAYS } from './status.js';
 import { formatMs, machinesInUse, safeText } from './display.js';
 import { DEFAULT_WINDOW_DAYS, HISTORY_DAYS, loadHistory } from './history.js';
 import { FREE, PRODUCT, proExtras, renderHelpPro } from './features.js';
@@ -123,31 +123,41 @@ if (command === 'check') {
 
   if (json) {
     // Machine-readable output: stdout is pure JSON for piping into jq/CI
-    const out = results.map(r => ({
-      url: r.url,
-      reachable: r.reachable,
-      healthy: r.healthy,
-      statusCode: r.statusCode,
-      responseTimeMs: r.responseTimeMs,
-      sslDaysRemaining: r.ssl?.validDays ?? null,
-      sslExpired: r.ssl?.isExpired ?? false,
-      sslExpiredDays: r.ssl?.expiredDays ?? null,
-      // Asked of the one owner rather than re-derived here. This was
-      // `isSslExpiringSoon(r.ssl?.validDays) && r.ssl?.isExpired !== true` — a
-      // third copy of the renewal-window rule beside `summarize()`'s, and it
-      // agreed only because the checker happens to round the day count. A
-      // lapsed certificate must never read as "renew soon" in either shape.
-      sslExpiringSoon: readSslState({
-        days: r.ssl?.validDays,
-        expired: r.ssl?.isExpired,
-        expiredDays: r.ssl?.expiredDays,
-      }).expiringSoon,
-      sslError: r.ssl?.error ?? null,
-      contentLength: r.content?.contentLength ?? null,
-      contentHash: r.content?.hash ?? null,
-      errorType: r.errorType,
-      error: r.error,
-    }));
+    const out = results.map(r => {
+      const content = readContentState(r.content);
+      return {
+        url: r.url,
+        reachable: r.reachable,
+        healthy: r.healthy,
+        statusCode: r.statusCode,
+        responseTimeMs: r.responseTimeMs,
+        sslDaysRemaining: r.ssl?.validDays ?? null,
+        sslExpired: r.ssl?.isExpired ?? false,
+        sslExpiredDays: r.ssl?.expiredDays ?? null,
+        // Asked of the one owner rather than re-derived here. This was
+        // `isSslExpiringSoon(r.ssl?.validDays) && r.ssl?.isExpired !== true` — a
+        // third copy of the renewal-window rule beside `summarize()`'s, and it
+        // agreed only because the checker happens to round the day count. A
+        // lapsed certificate must never read as "renew soon" in either shape.
+        sslExpiringSoon: readSslState({
+          days: r.ssl?.validDays,
+          expired: r.ssl?.isExpired,
+          expiredDays: r.ssl?.expiredDays,
+        }).expiringSoon,
+        sslError: r.ssl?.error ?? null,
+        // The content facts, from the one owner. `contentLength` was the byte
+        // count our own reader had reached when it gave up on an oversized page
+        // — a number no server sent, and a different one on every run — so it
+        // is null unless it describes the page, and `contentChecked` /
+        // `contentSkipped` say why there is no hash.
+        contentChecked: content.measured,
+        contentSkipped: content.skipped,
+        contentLength: content.length,
+        contentHash: r.content?.hash ?? null,
+        errorType: r.errorType,
+        error: r.error,
+      };
+    });
     console.log(JSON.stringify(out, null, 2));
     process.exitCode = out.some(r => !r.healthy) ? 2 : 0;
   } else {
@@ -155,6 +165,7 @@ if (command === 'check') {
 
     for (const result of results) {
       const summary = summarize(result);
+      const content = readContentState(result.content);
       const statusSymbol = result.healthy ? '✅' : '❌';
       const sslEmoji = summary.sslIcon;
       const changedEmoji = result.content?.changed === true ? '🔄' : result.content?.changed === false ? '⏸️' : '—';
@@ -166,8 +177,15 @@ if (command === 'check') {
       console.log(`   Status:   ${httpStatus} — ${result.healthy ? 'UP' : 'DOWN'}`);
       console.log(`   Response: ${formatMs(result.responseTimeMs)}`);
       console.log(`   ${sslEmoji} SSL:     ${safeText(summary.ssl, { max: 0 })}`);
-      if (result.content?.fetched) {
-        console.log(`   ${changedEmoji} Content: ${result.content.contentLength.toLocaleString()} bytes`);
+      if (content.measured) {
+        const bytes = content.length === null ? 'size unknown' : `${content.length.toLocaleString('en-US')} bytes`;
+        console.log(`   ${changedEmoji} Content: ${bytes}`);
+      } else if (content.skipped) {
+        // A page we declined to read used to print no Content line at all, so
+        // "we deliberately did not look" was indistinguishable from "nothing to
+        // report" — and the checker had written the reason down before dropping
+        // it. Naming the skip is what makes the absent hash honest.
+        console.log(`   ⏭️  Content: ${contentSkipNote(content)}`);
       }
       if (result.error) {
         console.log(`   ⚠️  Error:  ${safeText(result.error, { max: 0 })}`);
