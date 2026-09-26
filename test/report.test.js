@@ -1193,15 +1193,21 @@ test('the four pass states are decided in one place, and only there', () => {
     // decision written out again.
     assert.doesNotMatch(source, /Math\.max\(0,\s*Math\.(floor|round)/, `${name} floors a pass age itself`);
     assert.doesNotMatch(source, /getTime\(\)\s*-\s*Date\.parse/, `${name} ages a pass itself`);
+    // …and no surface may *place* a pass by parsing it. `history.js` had its own
+    // `Date.parse(lastChecked)`, which no other pattern above catches because it
+    // never subtracts: it compared day keys instead, and got a clock 6 h fast
+    // wrong while a clock 23 h fast was right (P1-32).
+    assert.doesNotMatch(source, /Date\.parse\(\s*lastChecked/, `${name} places a pass time itself`);
     // …and no surface may write the sentence. These are the strings the two
     // lists and the report used to diverge on.
     assert.doesNotMatch(source, /ahead of this machine'?s clock/, `${name} owns the clock-skew wording`);
     assert.doesNotMatch(source, /'aged'|'ahead'|'unreadable'/, `${name} names a pass state itself`);
   }
 
-  // The owner is asked, not re-implemented: the report and both terminal lists
-  // go through it, by name.
+  // The owner is asked, not re-implemented: the report, both terminal lists and
+  // the window column go through it, by name.
   assert.match(read('report.js'), /passAge\(entry\.lastChecked, now\)/, 'the report asks the owner');
+  assert.match(read('history.js'), /passAge\(lastChecked, now\)/, 'the window column asks the owner too');
   assert.match(statusSrc, /const pass = passAge\(value\.lastChecked, now\)/, 'readEntry asks the owner');
 
   // The one reader of the negative age is the owner, so `checkAgeMs` documents
@@ -1265,4 +1271,54 @@ test('all three surfaces name a clock skew, and none of them calls it stale (rea
   assert.doesNotMatch(okReport, /ahead of this machine's clock/, `an ordinary pass says nothing: ${okReport}`);
   const okWatch = (await run(process.execPath, [CLI, 'watch', '--status'], { env: okEnv })).stdout;
   assert.doesNotMatch(okWatch, /ahead of this machine's clock/, okWatch);
+});
+
+// P1-32, measured through the real CLI on a state file whose clock is 6 h fast
+// and a history file that holds only older days. Before the fix the window
+// column said `— (last check missing from the history file)` for the 6 h skew
+// and `— (no pass in the last 1 d)` for a 19 d skew — one condition, two
+// sentences, and the first one blamed the customer's own files for a pass that
+// had not happened yet.
+test('a clock a few hours fast does not accuse the history file (real CLI)', async (t) => {
+  const day = ms => new Date(ms).toISOString().slice(0, 10);
+  const ago = (n) => new Date(Date.now() - n * 24 * 60 * 60 * 1000).toISOString();
+  const window1 = '— (no pass in the last 1 d)';
+  const missing = 'last check missing from the history file';
+
+  for (const [label, skewMs] of [['2 h', 2 * 3600e3], ['6 h', 6 * 3600e3], ['19 d', 19 * 86400e3]]) {
+    const home = tempHome(t);
+    mkdirSync(join(home, '.deskuptime'), { recursive: true });
+    // A real history file whose recorded days are all outside the 1-day window.
+    writeFileSync(join(home, '.deskuptime', 'history.json'), JSON.stringify({
+      version: 1,
+      urls: { 'https://kunde.dk/': { [day(Date.now() - 2 * 86400e3)]: { checks: 12, failures: 0 } } },
+    }));
+    writeState(home, proState({ 'https://kunde.dk/': upEntry({ lastChecked: new Date(Date.now() + skewMs).toISOString() }) }));
+    const env = { ...process.env, HOME: home, USERPROFILE: home };
+    const runCli = (args) => run(process.execPath, [CLI, ...args], { env });
+
+    const row = (await runCli(['report', '--days', '1'])).stdout.split('\n').find(l => l.startsWith('| https://kunde.dk/'));
+    assert.ok(row, `no row for the ${label} skew`);
+    assert.ok(row.includes(window1), `a ${label} clock must not read as a recorded pass: ${row}`);
+    assert.doesNotMatch(row, new RegExp(missing), `a ${label} clock must not blame the history file: ${row}`);
+
+    // The machine surface, so a dashboard reproduces the sentence rather than
+    // inferring it from the absence of a number. A future pass has no window,
+    // so there is no `passNotRecorded` to misread.
+    const site = JSON.parse((await runCli(['report', '--json', '--days', '1'])).stdout).sites.find(s => s.url === 'https://kunde.dk/');
+    assert.equal(site.window, null, `a ${label} clock must not produce a window summary`);
+  }
+
+  // The claim that is true is kept: an honest pass 2 h old whose day really is
+  // absent from the history file is still a disagreement between two files.
+  const honest = tempHome(t);
+  mkdirSync(join(honest, '.deskuptime'), { recursive: true });
+  writeFileSync(join(honest, '.deskuptime', 'history.json'), JSON.stringify({
+    version: 1,
+    urls: { 'https://kunde.dk/': { [day(Date.now() - 2 * 86400e3)]: { checks: 12, failures: 0 } } },
+  }));
+  writeState(honest, proState({ 'https://kunde.dk/': upEntry({ lastChecked: ago(0) }) }));
+  const honestRow = (await run(process.execPath, [CLI, 'report', '--days', '1'], { env: { ...process.env, HOME: honest, USERPROFILE: honest } })).stdout
+    .split('\n').find(l => l.startsWith('| https://kunde.dk/'));
+  assert.match(honestRow, new RegExp(missing), `a genuinely absent pass is still named: ${honestRow}`);
 });

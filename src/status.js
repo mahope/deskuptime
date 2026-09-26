@@ -601,6 +601,21 @@ export const PASS_AGE = {
  * clock 19 days fast indistinguishable from a check this morning.
  *
  * `aheadMs` is how far ahead the clock is, for the surfaces that name it.
+ *
+ * `passMs` is *when the pass was recorded*, in epoch ms — the one decision a
+ * surface that has to place the pass on a calendar day must not make for
+ * itself. It is `null` whenever the time cannot be placed: no pass, an
+ * unreadable one, and a pass dated ahead of this machine's clock. The last one
+ * matters, because "cannot be placed" is not the same as "is somewhere else":
+ * a pass in the future has no day that belongs to a past window, and
+ * `history.js` used to decide that for itself by comparing day keys. Measured
+ * on a state file whose clock was 6 h fast, next to one whose clock was 23 h
+ * fast — the same condition, two sentences in the same column:
+ *
+ *   — (last check missing from the history file)     ← +6 h, the pass is in the future
+ *   — (no pass in the last 1 d)                      ← +23 h, the pass is in the future
+ *
+ * Only the number of hours separated them. It asked the owner instead.
  */
 export function passAge(lastChecked, now = new Date()) {
   const age = checkAgeMs(lastChecked, now);
@@ -613,10 +628,20 @@ export function passAge(lastChecked, now = new Date()) {
       ageMs: null,
       ageDays: null,
       aheadMs: 0,
+      passMs: null,
     };
   }
-  if (age < 0) return { state: PASS_AGE.AHEAD, ageMs: age, ageDays: null, aheadMs: -age };
-  return { state: PASS_AGE.AGED, ageMs: age, ageDays: Math.floor(age / MS_PER_DAY), aheadMs: 0 };
+  if (age < 0) return { state: PASS_AGE.AHEAD, ageMs: age, ageDays: null, aheadMs: -age, passMs: null };
+  return {
+    state: PASS_AGE.AGED,
+    ageMs: age,
+    ageDays: Math.floor(age / MS_PER_DAY),
+    aheadMs: 0,
+    // The inverse of the subtraction `checkAgeMs` just did, so the sign
+    // survives in both directions: a negative age yields an instant after
+    // `now`, which is why that branch returns `null` instead.
+    passMs: now.getTime() - age,
+  };
 }
 
 /**

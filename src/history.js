@@ -21,6 +21,7 @@ import { readFileSync, writeFileSync, mkdirSync, existsSync, renameSync, unlinkS
 import { dirname, join, posix, win32 } from 'path';
 import { homedir } from 'os';
 import { randomUUID } from 'crypto';
+import { passAge } from './status.js';
 
 export const HISTORY_VERSION = 1;
 /** Kept days per URL. The report window is 30 days; the slack avoids a window
@@ -135,17 +136,27 @@ export function pruneHistory(history, { now = new Date(), days = HISTORY_DAYS } 
  * The day a pass belongs to, when that day falls inside the window — otherwise
  * `null`.
  *
- * `dayKey` deliberately falls back to today for an unreadable value, which is
- * right for a bucket being written and wrong here: an unreadable pass time must
- * not be read as "checked today". A pass dated beyond today is not inside the
- * window either — it is clock skew, and the report already has a word for the
- * age of a skew we cannot place.
+ * `passMs` is the instant the pass was recorded, as `passAge` in status.js
+ * decided it. This function used to parse `lastChecked` itself, which made it a
+ * fifth independent owner of "when did the pass happen", and it got the one
+ * case wrong that the owner had already settled: a pass dated ahead of this
+ * machine's clock. `dayKey` deliberately falls back to today for an unreadable
+ * value, which is right for a bucket being written and wrong here — an
+ * unreadable pass time must not be read as "checked today" — and a pass dated
+ * beyond today is not inside the window either, because it is clock skew.
+ *
+ * The old version expressed both of those rules as a *day* comparison, which
+ * got them right only for a skew big enough to move the date. For a clock 6 h
+ * fast, whose UTC day is still today, the pass came back as a day inside the
+ * window, and the report told the customer their last check was missing from
+ * the history file — a claim about their own files, in a document they read,
+ * about a pass that had not happened yet. At 23 h of skew the very same state
+ * file said "no pass in the last 1 d". The owner now answers the only question
+ * this needs answered: is there an instant that can be placed on a day at all.
  */
-function passDayInWindow(lastChecked, from, to) {
-  if (typeof lastChecked !== 'string' || !lastChecked) return null;
-  const parsed = Date.parse(lastChecked);
-  if (Number.isNaN(parsed)) return null;
-  const day = dayKey(new Date(parsed));
+function passDayInWindow(passMs, from, to) {
+  if (passMs === null) return null;
+  const day = dayKey(new Date(passMs));
   return day >= from && day <= to ? day : null;
 }
 
@@ -198,7 +209,9 @@ function emptyWindow({ days, from, to, passDay }) {
 export function windowSummary(history, url, { days = DEFAULT_WINDOW_DAYS, now = new Date(), uptimePercent, lastChecked } = {}) {
   const from = cutoffKey(now, days);
   const to = dayKey(now);
-  const passDay = passDayInWindow(lastChecked, from, to);
+  // Asked of the one owner of a pass time, so a pass this machine's clock puts
+  // in the future can never be counted as a day inside a past window.
+  const passDay = passDayInWindow(passAge(lastChecked, now).passMs, from, to);
   const buckets = history?.urls?.[url];
   if (!buckets || typeof buckets !== 'object') return emptyWindow({ days, from, to, passDay });
   let checks = 0;

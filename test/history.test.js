@@ -191,6 +191,45 @@ test('a day from the future is not counted as uptime', () => {
   assert.equal(windowSummary(history, URL_A, { now: NOW, uptimePercent }).days, 2);
 });
 
+// P1-32's own measurement, on the real report. `passDayInWindow` used to parse
+// `lastChecked` itself and decide "is this pass in the window?" by comparing
+// day keys, so a clock a few hours fast was answered as though the pass had
+// happened: the same column said two different sentences for one condition,
+// split only by whether the skew crossed midnight UTC.
+test('a pass ahead of the clock is never a day inside the window', () => {
+  // Recorded days, but none of them inside any of the three windows below, so
+  // the window reports no recorded day and the only thing that can decide the
+  // sentence is what the state file claims.
+  const stale = historyWithDays(URL_A, 3, { now: daysAgo(40) });
+  // P1-30's counterweight, kept and pinned at both sides of the midnight edge.
+  // +19 d is the skew P1-30 measured; +2 h and +23 h share their UTC day with
+  // "now", which is the case the old day comparison got wrong.
+  for (const aheadMs of [2 * 3600e3, 6 * 3600e3, 23 * 3600e3, 19 * 86400e3]) {
+    const lastChecked = new Date(NOW.getTime() + aheadMs).toISOString();
+    for (const days of [1, 7, 30]) {
+      // `null` is the counterweight: no recorded day in the window, and no
+      // claim that a recorded pass is missing from the history file — because
+      // a pass dated in the future has no day that belongs to a past window,
+      // so there is nothing to be missing.
+      assert.equal(
+        windowSummary(stale, URL_A, { days, now: NOW, uptimePercent, lastChecked }),
+        null,
+        `skew +${aheadMs}ms produced a window summary at --days ${days}`,
+      );
+    }
+  }
+});
+
+test('a pass the history really is missing is still named as missing', () => {
+  // The counterpart of the test above, and the reason it could be written: an
+  // honest pass 2 h old with no bucket for today is a real disagreement between
+  // two files, and the report must keep saying so.
+  const lastChecked = new Date(NOW.getTime() - 2 * 3600e3).toISOString();
+  const summary = windowSummary(historyWithDays(URL_A, 3, { now: daysAgo(40) }), URL_A, { days: 1, now: NOW, uptimePercent, lastChecked });
+  assert.equal(summary.passNotRecorded, true);
+  assert.equal(summary.uptimePercent, null);
+});
+
 test('the history file is written 0600, atomically, and a corrupt one is ignored', (t) => {
   const home = tempHome(t);
   const historyFile = join(home, '.deskuptime', 'history.json');
