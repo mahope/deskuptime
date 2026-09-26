@@ -18,7 +18,7 @@ import { buildReport, renderReportJson, renderReportMarkdown } from './report.js
 import { readFileSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
-import { invalidHttpUrls, partitionUsableUrls, readChain, readContentState, readDisclosure, readEntry, readRedirectTarget, readSecurityHeaders, readSslState, contentSkipNote, unusableUrlNote, SECURITY_HEADER, STALE_AFTER_DAYS } from './status.js';
+import { invalidHttpUrls, invalidUrlMessage, partitionUsableUrls, readChain, readContentState, readDisclosure, readEntry, readRedirectTarget, readSecurityHeaders, readSslState, contentSkipNote, unusableUrlNote, withoutCredentials, SECURITY_HEADER, STALE_AFTER_DAYS } from './status.js';
 import { formatMs, machinesInUse, safeText } from './display.js';
 import { DEFAULT_WINDOW_DAYS, HISTORY_DAYS, loadHistory } from './history.js';
 import { FREE, PRODUCT, proExtras, renderHelpPro } from './features.js';
@@ -115,7 +115,7 @@ if (command === 'check') {
   const invalidUrls = invalidHttpUrls(urls);
   if (invalidUrls.length > 0) {
     for (const url of invalidUrls) {
-      console.error(`❌ Error: Invalid URL: ${url}`);
+      console.error(`❌ Error: ${invalidUrlMessage(url)}`);
     }
     process.exit(1);
   }
@@ -231,7 +231,7 @@ if (command === 'headers') {
   }
   const invalidUrls = invalidHttpUrls([url]);
   if (invalidUrls.length > 0) {
-    console.error(`❌ Error: Invalid URL: ${url}`);
+    console.error(`❌ Error: ${invalidUrlMessage(url)}`);
     process.exit(1);
   }
 
@@ -524,7 +524,7 @@ if (command === 'watch') {
   const invalidUrls = invalidHttpUrls(options.urls);
   if (invalidUrls.length > 0) {
     for (const url of invalidUrls) {
-      console.error(`❌ Error: Invalid URL: ${url}`);
+      console.error(`❌ Error: ${invalidUrlMessage(url)}`);
     }
     process.exit(1);
   }
@@ -592,7 +592,7 @@ if (command === 'unwatch') {
   const savedKeys = Object.keys(loadState().urls);
   const invalidUrls = invalidHttpUrls(rawArgs).filter(url => !savedKeys.includes(url));
   if (invalidUrls.length > 0) {
-    for (const url of invalidUrls) console.error(`❌ Error: Invalid URL: ${url}`);
+    for (const url of invalidUrls) console.error(`❌ Error: ${invalidUrlMessage(url)}`);
     process.exit(1);
   }
   const result = await unwatchUrls(rawArgs);
@@ -684,7 +684,10 @@ if (command === 'status') {
     // was silent about a wrong clock while `watch --status` and the client
     // report showed the impossible date. The verdict is untouched.
     const ahead = e.clockAhead ? ` ⚠️ ${e.clockAhead}` : '';
-    console.log(`  ${up} ${safeText(u, { max: 0 })}${code}${ssl}${unknown}${stale}${redirect}${ahead}`);
+    // A key we never could check is shown without its credentials, like every
+    // other surface: a password in a hand-edited or restored key must not be
+    // printed on the list a user reads to see whether monitoring works (P1-45).
+    console.log(`  ${up} ${safeText(withoutCredentials(u), { max: 0 })}${code}${ssl}${unknown}${stale}${redirect}${ahead}`);
   }
   // A key that is not an address prints above like any other row — as a site
   // whose verdict is merely unknown — although it was never measured and never

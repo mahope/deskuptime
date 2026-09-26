@@ -1335,14 +1335,71 @@ export function isHttpUrl(value) {
   }
 }
 
+/**
+ * The credentials embedded in a URL, in words, or `''` when there are none.
+ *
+ * Measured 2026-09-26, real CLI and a real client report: `http://demo:pass@…`
+ * is a perfectly valid address, so it passed every check, and Node's `fetch`
+ * then refused to build a request for it (`Request cannot be constructed from a
+ * URL that includes credentials`). The site answered 200 the whole time and
+ * DeskUptime called it DOWN — forever, every pass. The same URL was written to
+ * `state.json` and printed in the report a bureau sends to its customer, under
+ * a line promising that no secret is in the document. A password typed on a
+ * command line is the one secret that reaches all three by accident.
+ */
+export function urlCredentials(value) {
+  try {
+    const { username, password } = new URL(String(value));
+    const parts = [username ? 'a username' : '', password ? 'a password' : ''].filter(Boolean);
+    return parts.join(' and ');
+  } catch {
+    return '';
+  }
+}
+
+export function hasUrlCredentials(value) {
+  return urlCredentials(value) !== '';
+}
+
+/** The same URL without its credentials, for every place that shows a URL. */
+export function withoutCredentials(value) {
+  const text = String(value);
+  if (!hasUrlCredentials(text)) return text;
+  try {
+    const url = new URL(text);
+    url.username = '';
+    url.password = '';
+    return url.toString();
+  } catch {
+    return text.replace(/\/\/[^/@]*@/, '//');
+  }
+}
+
+/**
+ * Can a pass send a request to this address? One decision, so a key that the
+ * pass skips can never be fatal at a command line (the P1-40 rule) and a key a
+ * command line accepts can never be a site we report as down.
+ */
+export function isCheckableUrl(value) {
+  return isHttpUrl(value) && !hasUrlCredentials(value);
+}
+
+/** The one sentence for an address we refuse, so it never prints a password. */
+export function invalidUrlMessage(url) {
+  if (hasUrlCredentials(url)) {
+    return `URL with ${urlCredentials(url)}: ${withoutCredentials(url)} — no pass can send a request with credentials in the URL, and a password there is stored in ~/.deskuptime/state.json and printed in the client report. Monitor the site without credentials.`;
+  }
+  return `Invalid URL: ${url}`;
+}
+
 export function invalidHttpUrls(urls) {
-  return urls.filter(url => !isHttpUrl(url));
+  return urls.filter(url => !isCheckableUrl(url));
 }
 
 export function assertValidHttpUrls(urls) {
   const invalidUrls = invalidHttpUrls(urls);
   if (invalidUrls.length > 0) {
-    throw new TypeError(`Invalid URL: ${invalidUrls.join(', ')}`);
+    throw new TypeError(invalidUrls.map(invalidUrlMessage).join(' '));
   }
 }
 
@@ -1370,9 +1427,16 @@ export function partitionUsableUrls(urls) {
   const usable = [];
   const unusable = [];
   for (const url of urls) {
-    (isHttpUrl(url) ? usable : unusable).push(url);
+    (isCheckableUrl(url) ? usable : unusable).push(url);
   }
   return { usable, unusable };
+}
+
+/** Why a saved key can never be checked, in words, without its credentials. */
+function unusableUrlReason(url) {
+  return hasUrlCredentials(url)
+    ? `has ${urlCredentials(url)} in it, which is never sent and never stored`
+    : 'is not a full address';
 }
 
 /**
@@ -1384,17 +1448,21 @@ export function partitionUsableUrls(urls) {
  * customer's own site is claimed — and gives the command that removes it.
  */
 export function unusableUrlNote(unusable, { checked = null, brief = false } = {}) {
-  const keys = unusable.map(url => safeText(String(url), { max: 0 })).join(', ');
+  const keys = unusable.map(url => safeText(withoutCredentials(String(url)), { max: 0 })).join(', ');
   // The short form is the same fact as the long one, for a place that already
   // names the key itself: a row in a status list, a cell in a client report.
-  if (brief) return 'not a full address, so no pass can check it';
+  // `kunde.dk` is not a full address; `http://demo:pass@…` very much is, so the
+  // sentence names the real reason instead of calling both the same thing.
+  if (brief) return unusable.some(hasUrlCredentials)
+    ? 'has a username or password in it, so no pass can check it — and the password is neither sent nor stored'
+    : 'not a full address, so no pass can check it';
   const skipped = unusable.length === 1 ? '1 saved URL' : `${unusable.length} saved URLs`;
   const others = checked === null
     ? ''
     : checked === 0
       ? ' No monitored site could be checked on this pass.'
       : ` The other ${checked} monitored site${checked === 1 ? '' : 's'} ${checked === 1 ? 'was' : 'were'} checked as usual.`;
-  return `Cannot be checked — not a site that is down: ${skipped} ${unusable.length === 1 ? 'is' : 'are'} not a full address (${keys}).${others} Fix the key, or drop it: deskuptime unwatch ${unusable.map(url => `'${safeText(String(url), { max: 0 })}'`).join(' ')}`;
+  return `Cannot be checked — not a site that is down: ${skipped} ${unusable.map(unusableUrlReason).join(', ')} (${keys}).${others} Fix the key, or drop it: deskuptime unwatch ${unusable.map(url => `'${safeText(withoutCredentials(String(url)), { max: 0 })}'`).join(' ')}`;
 }
 
 export function isHealthyStatus(statusCode) {

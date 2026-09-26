@@ -17,7 +17,7 @@ import { readFileSync, writeFileSync, mkdirSync, existsSync, renameSync, unlinkS
 import { dirname, posix, win32 } from 'path';
 import { homedir } from 'os';
 import { createHash, randomUUID } from 'crypto';
-import { assertValidHttpUrls, expiredNote, isNewerPass, partitionUsableUrls, readContentChange, readEntry, readEvent, readRedirectTarget, queuedAgeMs, readSslState, STALE_AFTER_DAYS, unusableUrlNote } from './status.js';
+import { assertValidHttpUrls, expiredNote, isNewerPass, partitionUsableUrls, readContentChange, readEntry, readEvent, readRedirectTarget, queuedAgeMs, readSslState, STALE_AFTER_DAYS, unusableUrlNote, withoutCredentials } from './status.js';
 import { recordPass } from './report.js';
 import { formatMs, safeText } from './display.js';
 import { loadHistory, pruneHistory, recordHistoryPass, saveHistory } from './history.js';
@@ -584,7 +584,10 @@ export function printStatus(options = {}) {
   // part of what it says.
   const now = options.now instanceof Date ? options.now : new Date();
   const { usable, unusable } = partitionUsableUrls(entries.map(([url]) => url));
-  const rows = entries.map(([url, entry]) => ({ url, entry, ...readEntry(entry, { now, url }) }));
+  // The row shows the key without its credentials, like the report and `status`
+  // do: a hand-edited or restored key must not print a password on the list a
+  // user runs to see whether their monitoring works (P1-45).
+  const rows = entries.map(([url, entry]) => ({ url: withoutCredentials(url), entry, ...readEntry(entry, { now, url }) }));
 
   console.log(`📋 ${rows.length} monitored URL(s):\n`);
   for (const row of rows) {

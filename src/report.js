@@ -27,7 +27,7 @@
 import { PRODUCT } from './features.js';
 import { DEFAULT_WINDOW_DAYS, windowCoverage, windowSummary } from './history.js';
 import { markdownCell as cell } from './display.js';
-import { SSL_WARN_DAYS, STALE_AFTER_DAYS, clockAheadNote, expiredNote, isCheckStale, isHttpUrl, passAge, readPassTime, readRedirectTarget, readResponseMs, readSslState, readStatusCode, sslLapsedNote, staleAgeNote, unknownNote, unusableUrlNote, verdictFor } from './status.js';
+import { SSL_WARN_DAYS, STALE_AFTER_DAYS, clockAheadNote, expiredNote, isCheckStale, isCheckableUrl, passAge, readPassTime, readRedirectTarget, readResponseMs, readSslState, readStatusCode, sslLapsedNote, staleAgeNote, unknownNote, unusableUrlNote, verdictFor, withoutCredentials } from './status.js';
 
 export const DEFAULT_REPORT_TITLE = 'Website uptime report';
 const MAX_TITLE_LENGTH = 120;
@@ -210,14 +210,21 @@ export function buildReport(state, { title, now = new Date(), history, windowDay
       const monitoringSince = readPassTime(entry.addedAt);
       const coverage = windowCoverage({ window, history, monitoringSince, days: windowDays, now });
       return {
-        url,
+        // The key as the *document* may show it. A URL that carries a username
+        // or a password is one nobody can send a request to (P1-40's class), and
+        // a hand-placed or restored key of that kind used to reach every cell
+        // below with the password in clear text — in a file a bureau forwards to
+        // its customer, under a line promising that no secret is in it. The
+        // history file is still read with the real key above: the redacted form
+        // is what a reader sees, not what we look up.
+        url: withoutCredentials(url),
         // A key that is not an address can never be measured, and its stored
         // `wasUp` is whatever the file says — so a client report said `UP` for a
         // `kunde.dk` that no pass has ever been able to check (P1-40). The row is
         // "status unknown" with the reason, and the key is counted apart from
         // the sites.
-        uncheckable: !isHttpUrl(url),
-        status: isHttpUrl(url) ? verdictFor(entry?.wasUp) : 'unknown',
+        uncheckable: !isCheckableUrl(url),
+        status: isCheckableUrl(url) ? verdictFor(entry?.wasUp) : 'unknown',
         stale,
         ageDays: pass.ageDays,
         statusCode: readStatusCode(entry.lastStatus),
