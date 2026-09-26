@@ -27,7 +27,7 @@
 import { PRODUCT } from './features.js';
 import { DEFAULT_WINDOW_DAYS, windowSummary } from './history.js';
 import { markdownCell as cell } from './display.js';
-import { SSL_WARN_DAYS, STALE_AFTER_DAYS, checkAgeDays, expiredNote, isCheckStale, readRedirectTarget, readSslState, readStatusCode, staleAgeNote, unknownNote, verdictFor } from './status.js';
+import { SSL_WARN_DAYS, STALE_AFTER_DAYS, checkAgeDays, expiredNote, isCheckStale, readPassTime, readRedirectTarget, readSslState, readStatusCode, staleAgeNote, unknownNote, verdictFor } from './status.js';
 
 export const DEFAULT_REPORT_TITLE = 'Website uptime report';
 const MAX_TITLE_LENGTH = 120;
@@ -199,7 +199,7 @@ export function buildReport(state, { title, now = new Date(), history, windowDay
         offHostRedirect: redirect.offHost,
         offHostNote: redirect.label,
         uptimePercent: uptimePercent(entry),
-        window: windowSummary(history, url, { days: windowDays, now, uptimePercent }),
+        window: windowSummary(history, url, { days: windowDays, now, uptimePercent, lastChecked: entry.lastChecked }),
         checks,
         failures,
         responseMs: nonNegative(entry.lastResponseMs),
@@ -212,8 +212,18 @@ export function buildReport(state, { title, now = new Date(), history, windowDay
         sslExpired: ssl.expired,
         sslExpiredDays: ssl.expiredDays,
         contentBytes: nonNegative(entry.lastContentLength),
-        lastChecked: typeof entry.lastChecked === 'string' ? entry.lastChecked : null,
-        monitoringSince: typeof entry.addedAt === 'string' ? entry.addedAt : null,
+        // The two timestamps go through the one reading of a recorded time, so
+        // `--json` can never forward a string the Markdown column has already
+        // shown as `—`. See `readPassTime`.
+        lastChecked: readPassTime(entry.lastChecked),
+        monitoringSince: readPassTime(entry.addedAt),
+        // …and "a pass was recorded at all" is a *different* fact, kept on its
+        // own so a `null` time (unreadable) cannot be read as "no pass" by the
+        // summary line or by `unknownNote`. Measured: canonicalising the time
+        // alone made the summary line claim the site had never been checked,
+        // while its own row named the time unreadable — the same collapse P1-14
+        // was written to prevent.
+        passRecorded: typeof entry.lastChecked === 'string' && entry.lastChecked !== '',
       };
     })
     // Problems first: a report that opens with a DOWN site is the one a client reads.
@@ -314,7 +324,10 @@ export function siteBuckets(sites) {
   const buckets = { up: 0, down: 0, unknown: 0, stale: 0, neverChecked: 0 };
   for (const site of Array.isArray(sites) ? sites : []) {
     if (!site || typeof site !== 'object') continue;
-    if (!site.lastChecked) buckets.neverChecked++;
+    // `buildReport` states it as its own fact, because its `lastChecked` is the
+    // *readable* time and `null` for both "no pass" and "unreadable". A report
+    // object built by hand has no such field, so the readable time is the answer.
+    if (!(site.passRecorded ?? !site.lastChecked)) buckets.neverChecked++;
     if (site.stale === true) {
       buckets.stale++;
     } else if (site.status === 'up') {
@@ -333,7 +346,8 @@ function statusCell(site) {
     ? `UP${site.statusCode ? ` (${site.statusCode})` : ''}`
     : site.status === 'down'
       ? `DOWN${site.statusCode ? ` (${site.statusCode})` : ''}`
-      : unknownNote(site);
+      // Asked about the fact, not about the readable time — see `unknownNote`.
+      : unknownNote({ passRecorded: site.passRecorded, ageDays: site.ageDays });
   // A 200 from another host is still a 200 — the row keeps its verdict — but the
   // customer reading this must see whose server answered, or "UP" is a claim
   // about a URL nobody asked about (a parked domain, a hijacked domain, a typo).
@@ -360,6 +374,11 @@ function unknownWords(buckets) {
 
 function windowCell(site, windowDays) {
   const window = site.window;
+  // The pass the state file records is inside the window, and the history file
+  // has no bucket for it. "No pass in the last N d" would be a claim about the
+  // site; the truth is about this one file, and the row next to it already shows
+  // the pass. Naming the source is the whole difference (see `emptyWindow`).
+  if (window?.passNotRecorded) return '— (last check missing from the history file)';
   if (!window) return `— (no pass in the last ${windowDays} d)`;
   // The two sibling cells have an unknown branch and this one did not, so a
   // window without a computable share printed `null% (1 recorded d, 10 checks)`
@@ -463,7 +482,7 @@ export function renderReportMarkdown(report) {
     ...staleLines,
     ...crossedLines,
     '',
-    `Uptime is the share of completed monitoring passes that answered HTTP 200–399. "Uptime (all)" counts every pass since the site was added${since ? ` (earliest ${shortTime(since)})` : ''}; "Uptime (window)" counts the passes recorded in the last ${windowDays} days. A site with no completed pass yet shows — rather than 100%. The counts in the summary line are a partition: every site is in exactly one of up, down, not checked, status unknown or stale. "Up" and "down" describe sites checked within the last ${STALE_AFTER_DAYS} days; a site whose monitoring stopped is counted as stale and keeps the status from its last pass in the table, named with the age of that pass. "Status unknown" means a pass ran but its result cannot be read from the state file.`,
+    `Uptime is the share of completed monitoring passes that answered HTTP 200–399. "Uptime (all)" counts every pass since the site was added${since ? ` (earliest ${shortTime(since)})` : ''}; "Uptime (window)" counts the passes recorded in the last ${windowDays} days. A site with no completed pass yet shows — rather than 100%. "Uptime (window)" is counted from a separate daily history file, so a row can show a recent check with an empty window column; that column then names the file that is missing the pass rather than claiming the site was not monitored. The counts in the summary line are a partition: every site is in exactly one of up, down, not checked, status unknown or stale. "Up" and "down" describe sites checked within the last ${STALE_AFTER_DAYS} days; a site whose monitoring stopped is counted as stale and keeps the status from its last pass in the table, named with the age of that pass. "Status unknown" means a pass ran but its result cannot be read from the state file.`,
     '',
     `Generated on one machine, without an account: no page content, response headers or license data is included, and nothing was uploaded.`,
   ].join('\n');

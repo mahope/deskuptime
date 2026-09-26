@@ -132,20 +132,81 @@ export function pruneHistory(history, { now = new Date(), days = HISTORY_DAYS } 
 }
 
 /**
+ * The day a pass belongs to, when that day falls inside the window — otherwise
+ * `null`.
+ *
+ * `dayKey` deliberately falls back to today for an unreadable value, which is
+ * right for a bucket being written and wrong here: an unreadable pass time must
+ * not be read as "checked today". A pass dated beyond today is not inside the
+ * window either — it is clock skew, and the report already has a word for the
+ * age of a skew we cannot place.
+ */
+function passDayInWindow(lastChecked, from, to) {
+  if (typeof lastChecked !== 'string' || !lastChecked) return null;
+  const parsed = Date.parse(lastChecked);
+  if (Number.isNaN(parsed)) return null;
+  const day = dayKey(new Date(parsed));
+  return day >= from && day <= to ? day : null;
+}
+
+/**
+ * No recorded day in the window — or a pass the state file knows about and the
+ * history file does not.
+ *
+ * Measured through the real `report` on a state file whose newest pass was 14
+ * minutes old while its history file held no bucket for that day, the window
+ * column claimed there had been no pass at all:
+ *
+ *   | https://kunde.dk/ | UP (200) | 100% (4 checks) | — (no pass in the last 30 d) | … | 09:18 UTC |
+ *
+ * One row, two claims about the same site, and the customer is the one who reads
+ * it. The two files disagree for ordinary reasons, all of them reachable on an
+ * install that works: `runPass` writes the history in a `try/catch` and keeps
+ * monitoring when it fails (a full disk, a read-only home), and an agency moving
+ * monitoring to a new machine copies the one file the README names —
+ * `state.json` — and not `history.json`. So the window is not "no data about
+ * this site"; it is *this source* having no data, and the report can see the
+ * difference because it holds both.
+ *
+ * `passNotRecorded` says it, so the machine surface can reproduce the sentence
+ * instead of inferring it. The shape is the same either way: `uptimePercent`
+ * stays `null`, because there is genuinely no share to compute.
+ */
+function emptyWindow({ days, from, to, passDay }) {
+  if (!passDay) return null;
+  return {
+    days: 0,
+    windowDays: days,
+    checks: 0,
+    failures: 0,
+    uptimePercent: null,
+    from: passDay < from ? from : passDay,
+    to,
+    passNotRecorded: true,
+  };
+}
+
+/**
  * Uptime inside the reporting window, as a whole number of recorded days.
  * `uptimePercent` comes from report.js, so the window and the lifetime figure
  * are computed by the same definition and cannot disagree.
+ *
+ * `lastChecked` is the pass the state file records for this URL. It is only ever
+ * used to say that the history file is missing a pass that demonstrably ran —
+ * see `emptyWindow`.
  */
-export function windowSummary(history, url, { days = DEFAULT_WINDOW_DAYS, now = new Date(), uptimePercent } = {}) {
-  const buckets = history?.urls?.[url];
-  if (!buckets || typeof buckets !== 'object') return null;
+export function windowSummary(history, url, { days = DEFAULT_WINDOW_DAYS, now = new Date(), uptimePercent, lastChecked } = {}) {
   const from = cutoffKey(now, days);
+  const to = dayKey(now);
+  const passDay = passDayInWindow(lastChecked, from, to);
+  const buckets = history?.urls?.[url];
+  if (!buckets || typeof buckets !== 'object') return emptyWindow({ days, from, to, passDay });
   let checks = 0;
   let failures = 0;
   let recordedDays = 0;
   let first = null;
   for (const [day, bucket] of Object.entries(buckets)) {
-    if (!DAY_KEY.test(day) || day < from || day > dayKey(now)) continue;
+    if (!DAY_KEY.test(day) || day < from || day > to) continue;
     const dayChecks = counter(bucket?.checks);
     if (dayChecks === 0) continue;
     recordedDays++;
@@ -153,7 +214,7 @@ export function windowSummary(history, url, { days = DEFAULT_WINDOW_DAYS, now = 
     failures += Math.min(counter(bucket?.failures), dayChecks);
     if (!first || day < first) first = day;
   }
-  if (recordedDays === 0) return null;
+  if (recordedDays === 0) return emptyWindow({ days, from, to, passDay });
   const percent = typeof uptimePercent === 'function' ? uptimePercent({ checks, checksUp: checks - failures }) : null;
   return {
     days: recordedDays,
@@ -162,7 +223,10 @@ export function windowSummary(history, url, { days = DEFAULT_WINDOW_DAYS, now = 
     failures,
     uptimePercent: percent,
     from: first,
-    to: dayKey(now),
+    to,
+    // Always present, so a consumer can branch on the field without first
+    // having to prove it can be absent. The disagreement case is `emptyWindow`.
+    passNotRecorded: false,
   };
 }
 

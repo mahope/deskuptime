@@ -398,6 +398,41 @@ export function readStatusCode(value) {
 }
 
 /**
+ * A recorded time, when it is one we can read — otherwise `null`.
+ *
+ * `readStatusCode`'s sibling, for the two timestamps the client report forwards.
+ * They were the last two raw values in `report --json`: the same document
+ * printed `—` for an unreadable pass time and named it `stale — last check
+ * unreadable` in Markdown, while the machine surface a CI job or an agency's own
+ * system reads carried the state's own string. Measured through the real CLI on a
+ * hand-edited state file, no code changed:
+ *
+ *   | https://a.dk/ | UP (200) ⚠️ stale — last check unreadable | … | — |   ← Markdown
+ *   "lastChecked": "OWNED"                                                      ← --json
+ *   "monitoringSince": "OWNED"
+ *
+ * So the paid machine surface forwarded, verbatim, a value the human surface had
+ * already declared unreadable — and a state file is user input (restored from a
+ * backup, hand-edited, written by another tool), which is the whole reason
+ * `readStatusCode` clamps and `readSslState` measures before answering. A
+ * consumer that feeds `lastChecked` into a dashboard gets `OWNED` on a timeline;
+ * one that does `new Date(site.lastChecked)` gets `NaN` and shows "Invalid Date".
+ *
+ * `null` is the answer the rest of the report already gives, and it is falsy, so
+ * a consumer's `if (site.lastChecked)` behaves as it does for a site that was
+ * never checked. Readable timestamps are returned canonicalised to ISO, so the
+ * JSON carries the same instant the Markdown column prints.
+ *
+ * @param {*} value — a raw `lastChecked` or `addedAt` from a state file
+ */
+export function readPassTime(value) {
+  if (typeof value !== 'string' || !value) return null;
+  const parsed = Date.parse(value);
+  if (Number.isNaN(parsed)) return null;
+  return new Date(parsed).toISOString();
+}
+
+/**
  * The fixed wording for a lapsed certificate, in one place: `expired 12d ago`,
  * `expired today`, or an honest "unknown" when only the fact is known.
  */
@@ -558,10 +593,15 @@ export function staleAgeNote(ageDays) {
  * without an age reads as "no data" too.
  *
  * @param {object} state — `{ lastChecked, ageDays }`; `ageDays` is
- *   `checkAgeDays(lastChecked)`.
+ *   `checkAgeDays(lastChecked)`. A caller that only holds the *readable* time
+ *   (`readPassTime`, which is `null` both for "no pass" and for "unreadable")
+ *   passes `passRecorded` instead, so the two cases cannot collapse into
+ *   "not checked yet" — measured: canonicalising `lastChecked` alone made a site
+ *   with an unreadable pass time print "not checked yet" in the summary line
+ *   while its own row said "stale — last check unreadable".
  */
-export function unknownNote({ lastChecked, ageDays } = {}) {
-  if (!lastChecked) return 'not checked yet';
+export function unknownNote({ lastChecked, ageDays, passRecorded = Boolean(lastChecked) } = {}) {
+  if (!passRecorded) return 'not checked yet';
   if (ageDays === null || ageDays === undefined) return 'status unknown (last check unreadable)';
   return `status unknown (last check ${ageDays} d ago)`;
 }

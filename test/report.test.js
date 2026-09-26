@@ -803,7 +803,11 @@ test('a duplicated verdict owner is caught by reading the source, not the output
   // lists said neither — three surfaces, three owners, two of them silent.
   assert.doesNotMatch(reportSrc, /'not checked yet'/, 'the report must ask unknownNote(), not own the sentence');
   assert.doesNotMatch(reportSrc, /stale — last check/, 'the report must ask staleAgeNote(), not own the sentence');
-  assert.match(reportSrc, /unknownNote\(site\)/, 'and it must still ask for the unknown wording');
+  // P1-30: the call now passes the two *facts* the wording names instead of the
+  // site object, because the report holds the readable time — `null` for both
+  // "no pass" and "unreadable" — and the owner is what decides between them.
+  // It is still the owner, and still exactly one call.
+  assert.match(reportSrc, /unknownNote\(\{ passRecorded: site\.passRecorded, ageDays: site\.ageDays \}\)/, 'and it must still ask for the unknown wording');
   assert.match(reportSrc, /staleAgeNote\(site\.ageDays\)/, 'and for the stale wording');
   assert.equal((statusSrc.match(/export function unknownNote\(/g) || []).length, 1, 'one unknown wording');
   assert.equal((statusSrc.match(/export function staleAgeNote\(/g) || []).length, 1, 'one stale wording');
@@ -924,4 +928,123 @@ test('a status code outside 100-599 is unknown, not a claim about a server', () 
     assert.equal(readEntry({ wasUp: false, lastStatus: code }, { now: NOW }).statusCode, code);
     assert.match(renderReportMarkdown(report), new RegExp(`\\(${code}\\)`), `the code ${code} belongs in the report`);
   }
+});
+
+/**
+ * P1-30: the paid report measured against the real CLI for the first time.
+ *
+ * Everything above this block is a unit test on `buildReport`. These three are
+ * the measurement itself, kept as tests because both defects are silent: a
+ * customer reading the document, and a CI job reading the JSON, would not notice
+ * either one — they only ever see a confident number.
+ */
+
+// A pass the state file records and the history file does not. Measured through
+// the real `report`, the row claimed there had been no recent pass while the
+// same row showed a check from 14 minutes earlier:
+//
+//   | https://kunde.dk/ | UP (200) | 100% (4 checks) | — (no pass in the last 30 d) | … | 09:18 UTC |
+//
+// Both files are written by the same pass, so this is not a corrupt file: the
+// history write is deliberately allowed to fail (a full disk, a read-only home),
+// and an agency moving monitoring to a new machine copies the file the README
+// names — `state.json` — and not `history.json`.
+test('a check the history file is missing is named, not reported as no data (real CLI)', async (t) => {
+  const fresh = new Date().toISOString();
+  const home = writeState(tempHome(t), proState({
+    'https://kunde.dk/': upEntry({ lastChecked: fresh, addedAt: fresh, checks: 4, checksUp: 4 }),
+  }));
+  const env = { ...process.env, HOME: home, USERPROFILE: home };
+  const runCli = (args) => run(process.execPath, [CLI, ...args], { env });
+
+  const { stdout } = await runCli(['report']);
+  const row = stdout.split('\n').find(line => line.startsWith('| https://kunde.dk/'));
+  assert.ok(row, `no row for the site:\n${stdout}`);
+  assert.match(row, /last check missing from the history file/, `the row must name the source: ${row}`);
+  assert.doesNotMatch(row, /no pass in the last 30 d/, `the row must not claim the site went unmonitored: ${row}`);
+  // The verdict the pass gave is untouched: this is a note about a column, not a
+  // change of status, and the uptime column still has the lifetime figure.
+  assert.match(row, /UP \(200\)/);
+  assert.match(row, /100% \(4 checks\)/);
+  // The summary line still counts the site once, as up.
+  assert.match(stdout, /\*\*1 site\(s\) · 1 up · 0 down · 4 checks · 0 failed/, stdout);
+
+  // And the machine surface can reproduce the sentence rather than infer it.
+  const json = JSON.parse((await runCli(['report', '--json'])).stdout);
+  const site = json.sites.find(s => s.url === 'https://kunde.dk/');
+  assert.equal(site.window.uptimePercent, null, 'there is no share to compute');
+  assert.equal(site.window.passNotRecorded, true);
+  assert.equal(json.partition.up, 1, 'the disagreement must not move the site between buckets');
+  assert.equal(json.partition.neverChecked, 0);
+});
+
+test('a site with no pass in the window is not blamed for the history file', () => {
+  const history = { urls: {} };
+  // A pass that is older than the window: the plain wording is correct, and the
+  // new sentence would be a false alarm on every ordinary report.
+  const stale = buildReport(proState({ 'https://gammel.dk/': upEntry({ lastChecked: '2026-08-16T09:00:00.000Z' }) }), { now: NOW, history });
+  assert.equal(stale.sites[0].window, null);
+  assert.match(renderReportMarkdown(stale), /— \(no pass in the last 30 d\)/);
+
+  // Never checked: also the plain wording — the Status column already says
+  // "not checked yet", and P1-14 is the reason that sentence exists.
+  const never = buildReport(proState({ 'https://aldrig.dk/': { addedAt: '2026-09-25T08:00:00.000Z' } }), { now: NOW, history });
+  assert.equal(never.sites[0].window, null);
+  assert.match(renderReportMarkdown(never), /— \(no pass in the last 30 d\)/);
+
+  // A pass dated in the future cannot be placed in the window either. It is
+  // clock skew, which P1-6 decided must not be turned into an outage — so it
+  // must not be turned into a missing file either.
+  const skewed = buildReport(proState({ 'https://fremtid.dk/': upEntry({ lastChecked: '2026-10-15T09:00:00.000Z' }) }), { now: NOW, history });
+  assert.equal(skewed.sites[0].window, null);
+  const row = renderReportMarkdown(skewed).split('\n').find(line => line.startsWith('| https://fremtid.dk/'));
+  assert.match(row, /— \(no pass in the last 30 d\)/);
+  assert.doesNotMatch(row, /history file/, 'clock skew is not a missing history file');
+});
+
+// The last two raw values in the paid machine surface. Measured before this
+// fix, `--json` carried the state's own strings while the Markdown beside them
+// printed "—" and named the time unreadable:
+//
+//   "lastChecked": "OWNED"      "monitoringSince": "OWNED"
+test('report --json forwards no timestamp it has already called unreadable', () => {
+  const report = buildReport(proState({
+    'https://a.dk/': upEntry({ lastChecked: 'OWNED', addedAt: 'OWNED' }),
+    'https://b.dk/': upEntry({ lastChecked: '2026-09-25T09:00:00.000Z', addedAt: '2026-08-01T00:00:00.000Z' }),
+  }), { now: NOW });
+  const [a, b] = report.sites;
+  assert.equal(a.lastChecked, null);
+  assert.equal(a.monitoringSince, null);
+  // A readable time is canonicalised, so JSON and the Markdown column carry the
+  // same instant.
+  assert.equal(b.lastChecked, '2026-09-25T09:00:00.000Z');
+  assert.equal(b.monitoringSince, '2026-08-01T00:00:00.000Z');
+
+  const json = renderReportJson(report);
+  assert.doesNotMatch(json, /OWNED/, 'the raw state string must not reach a consumer');
+
+  // "Unreadable" must not collapse into "never checked": a pass did run, the
+  // report already says so in the Status column, and the summary line has to
+  // agree with it. Only the row and the summary line are read here — the
+  // footnote names the "not checked" bucket by definition, and it always has.
+  const markdown = renderReportMarkdown(report);
+  const row = markdown.split('\n').find(line => line.startsWith('| https://a.dk/'));
+  const summary = markdown.split('\n').find(line => line.startsWith('**2 site(s)'));
+  assert.match(row, /UP \(200\) ⚠️ stale — last check unreadable/, row);
+  assert.doesNotMatch(row, /not checked/, `a pass was recorded: ${row}`);
+  assert.doesNotMatch(summary, /not checked/, `the summary line must not claim it never was: ${summary}`);
+  assert.equal(report.partition.neverChecked, 0);
+  assert.equal(report.partition.stale, 1);
+});
+
+// A behavioural test cannot catch a duplicated owner (measured in P1-9), so the
+// rule is locked on the source: the report must not read a state timestamp as a
+// raw string again.
+test('the report reads every state timestamp through the one owner', () => {
+  const source = readFileSync(join(ROOT, 'src', 'report.js'), 'utf-8').replace(/\/\*[\s\S]*?\*\//g, '');
+  // Both fields must be handed the owner's answer, not the entry's own value:
+  // `readPassTime` is what turns an unreadable time into `null`.
+  assert.match(source, /lastChecked: readPassTime\(entry\.lastChecked\)/, 'a raw state timestamp can reach --json again');
+  assert.match(source, /monitoringSince: readPassTime\(entry\.addedAt\)/, 'a raw state timestamp can reach --json again');
+  assert.equal((source.match(/readPassTime\(/g) ?? []).length, 2, 'both timestamps, and nothing else');
 });

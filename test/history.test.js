@@ -254,11 +254,18 @@ test('the report shows the window next to the lifetime figure', () => {
   assert.equal(a.window.uptimePercent, 90, '30 recorded days with 3 failures');
   assert.equal(a.window.days, 30);
 
-  assert.equal(b.window, null, 'a site with no recorded day has no window, not 100 %');
+  // P1-30: this used to assert `— (no pass in the last 30 d)` for B, whose
+  // `lastChecked` is NOW — the report was claiming there had been no recent pass
+  // about a site whose own row showed a check from this very second. B has no
+  // recorded *day*, so the column is still a dash, and it now names the file
+  // that is missing the pass instead of making a claim about the site.
+  assert.equal(b.window.uptimePercent, null, 'a site with no recorded day has no share, not 100 %');
+  assert.equal(b.window.passNotRecorded, true);
   const markdown = renderReportMarkdown(report);
   assert.ok(markdown.includes('| Uptime (all) | Uptime (window) |'), 'the window column is missing');
   assert.ok(markdown.includes('90% (30 recorded d, 30 checks, 3 failed)'));
-  assert.ok(markdown.includes('— (no pass in the last 30 d)'), 'a missing window must be shown, not guessed');
+  assert.ok(markdown.includes('— (last check missing from the history file)'), 'a missing window must be shown, not guessed');
+  assert.ok(!markdown.includes('— (no pass in the last 30 d)'), 'and must not claim the site went unmonitored');
   assert.ok(markdown.includes('the last 30 days'), 'the report must explain what the window covers');
   assert.equal(report.windowDays, DEFAULT_WINDOW_DAYS);
 
@@ -303,6 +310,9 @@ test('--days is validated instead of silently ignored', async (t) => {
   assert.match(good.stdout, /the last 7 days/);
   assert.match(good.stdout, /Uptime \(window\)/);
   assert.ok(!good.stdout.includes(LICENSE_KEY), 'the license key leaked into the CLI report');
-  // No history file exists in this home: the report must still render.
-  assert.match(good.stdout, /no pass in the last 7 d/);
+  // No history file exists in this home, while the state file records a pass
+  // from NOW: the report must still render, and it must name the missing file
+  // rather than say the site was not monitored in the last 7 days (P1-30).
+  assert.match(good.stdout, /last check missing from the history file/);
+  assert.doesNotMatch(good.stdout, /no pass in the last 7 d/);
 });
