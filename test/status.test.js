@@ -423,10 +423,11 @@ function stubAction(t, payload) {
   });
   mkdirSync(join(root, 'src'), { recursive: true });
   writeFileSync(join(root, 'src', 'cli.js'), `console.log(${JSON.stringify(payload)});\n`);
-  // The summary table reaches the real cell escaper, so the stub has to be the
-  // real one — a hand-written copy would let the stub pass on escaping the
-  // action does not do.
+  // The summary table reaches the real cell escaper and the real certificate
+  // reading, so the stub has to carry the real ones — a hand-written copy would
+  // let the stub pass on rules the action does not apply.
   copyFileSync(join(ROOT, 'src', 'display.js'), join(root, 'src', 'display.js'));
+  copyFileSync(join(ROOT, 'src', 'status.js'), join(root, 'src', 'status.js'));
   return { root, temp };
 }
 
@@ -519,6 +520,110 @@ test('action: all healthy URLs exit 0 and report down=0', async (t) => {
     }, temp),
   });
   assert.match(readFileSync(join(temp, 'github-output'), 'utf8'), /^down=0$/m);
+});
+
+/**
+ * The step summary is the fifth surface, and it was the only one that still
+ * decided on its own whether a number was a number. Measured on one payload
+ * the CLI cannot produce (a hand-edited result, a restored file, another tool
+ * writing the JSON), before the fix:
+ *
+ *   | URL             | Status | HTTP | Response | SSL days |
+ *   | https://negativ.dk/ | ✅ UP | 200 | -5ms     | -2       |
+ *   | https://streng.dk/   | ✅ UP | 200 | —ms      | 9        |
+ *
+ * `-2` is exactly what P1-7 found and removed from the two terminal lists, and
+ * `-5ms` is what P1-11 removed from the client report — in the one table a
+ * customer reads in their own CI run, and can paste into a status page. The
+ * summary had been swept for hostile *text* (markdownCell) but never for
+ * unusable *numbers*.
+ */
+async function summaryFor(t, payload, extra = {}) {
+  const { root, temp } = stubAction(t, JSON.stringify(payload));
+  await run('bash', ['-c', actionScript()], {
+    cwd: temp,
+    env: actionEnv({
+      DU_URLS: payload.map(x => x.url).join(' '),
+      DU_FAIL_ON_DOWN: 'false',
+      DU_SSL_DAYS: '0',
+      DU_SUMMARY: 'true',
+      GITHUB_ACTION_PATH: root,
+      ...extra,
+    }, temp),
+  });
+  return readFileSync(join(temp, 'github-summary'), 'utf8');
+}
+
+test('action: the step summary reads the day count and the duration through the one owner', async (t) => {
+  const summary = await summaryFor(t, [
+    { url: 'https://negativ.dk/', healthy: true, statusCode: 200, responseTimeMs: -5, sslDaysRemaining: -2, sslExpiringSoon: false },
+    { url: 'https://streng.dk/', healthy: true, statusCode: 200, responseTimeMs: null, sslDaysRemaining: '9', sslExpiringSoon: false },
+    { url: 'https://sandt.dk/', healthy: true, statusCode: 200, responseTimeMs: 0, sslDaysRemaining: 40, sslExpiringSoon: false },
+  ]);
+
+  // Unknown is unknown — the same `—` the terminal lists and the report print.
+  assert.match(summary, /\| https:\/\/negativ\.dk\/ \| ✅ UP \| 200 \| — \| — \|/);
+  assert.match(summary, /\| https:\/\/streng\.dk\/ \| ✅ UP \| 200 \| — \| — \|/);
+  assert.doesNotMatch(summary, /-5ms|—ms|\| -2 \||\| 9 \|/);
+
+  // A real measurement still survives: 0 ms is a measurement, not an absence,
+  // and a 40-day certificate is not a renewal.
+  assert.match(summary, /\| https:\/\/sandt\.dk\/ \| ✅ UP \| 200 \| 0ms \| 40 \|/);
+});
+
+test('action: a lapsed certificate uses the same sentence as every other surface', async (t) => {
+  const summary = await summaryFor(t, [
+    { url: 'https://forfalden.dk/', healthy: true, statusCode: 200, responseTimeMs: 42, sslDaysRemaining: 0, sslExpired: true, sslExpiredDays: 12 },
+    { url: 'https://uden-dato.dk/', healthy: true, statusCode: 200, responseTimeMs: 42, sslDaysRemaining: 0, sslExpired: true },
+  ]);
+
+  assert.match(summary, /🔴 expired 12d ago/);
+  // Known to be lapsed, unknown when — the report, `check` and the status lists
+  // all say exactly this, and none of them says a bare "expired".
+  assert.match(summary, /🔴 expired — expiry date unknown/);
+});
+
+test('action: the summary and the SSL counter cannot disagree about an unusable value', async (t) => {
+  // `sslDaysRemaining: "9"` is inside a 14-day window as a *string*. The old
+  // counter happened to guard it with its own `typeof` check; now the same
+  // reading decides the cell and the count, so neither can call it a day.
+  const { root, temp } = stubAction(t, JSON.stringify([
+    { url: 'https://streng.dk/', healthy: true, statusCode: 200, responseTimeMs: 5, sslDaysRemaining: '9', sslExpiringSoon: false },
+  ]));
+  await run('bash', ['-c', actionScript()], {
+    cwd: temp,
+    env: actionEnv({
+      DU_URLS: 'https://streng.dk/',
+      DU_FAIL_ON_DOWN: 'false',
+      DU_SSL_DAYS: '14',
+      DU_SUMMARY: 'true',
+      GITHUB_ACTION_PATH: root,
+    }, temp),
+  });
+  assert.equal(readFileSync(join(temp, 'github-summary'), 'utf8').includes('| 9 |'), false);
+});
+
+test('action: the step summary has no certificate or duration rule of its own', () => {
+  // A behavioural test cannot prove a surface stopped owning a fact — the
+  // duplicates P1-13 and P1-14 measured returned identical answers in every
+  // test. So the rule itself is pinned: the table must reach the owners.
+  const source = readFileSync(join(ROOT, 'action.yml'), 'utf8');
+  assert.match(source, /require\(process\.env\.DU_ACTION_PATH \+ "\/src\/status\.js"\)/);
+  assert.match(source, /require\(process\.env\.DU_ACTION_PATH \+ "\/src\/display\.js"\)/);
+  assert.match(source, /readSslState\(\{ days: x\.sslDaysRemaining/);
+  assert.match(source, /formatMs\(x\.responseTimeMs\)/);
+  assert.doesNotMatch(source, /String\(x\.sslDaysRemaining\)/);
+  assert.doesNotMatch(source, /x\.responseTimeMs \?\? /);
+  assert.doesNotMatch(source, /typeof x\.sslDaysRemaining/);
+
+  // `check --json`'s renewal flag is the third copy of the same window rule.
+  // Comments are stripped first: the fix quotes the expression it replaced, so
+  // a source scan would otherwise match the explanation of the bug.
+  const cli = readFileSync(join(ROOT, 'src', 'cli.js'), 'utf8')
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/^\s*\/\/.*$/gm, '');
+  assert.doesNotMatch(cli, /isSslExpiringSoon\(r\.ssl/);
+  assert.match(cli, /sslExpiringSoon: readSslState\(\{/);
 });
 
 test('headers: connection refusal returns a structured error without crashing', async (t) => {

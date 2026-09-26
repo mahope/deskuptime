@@ -17,11 +17,13 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { execFileSync, spawnSync } from 'node:child_process';
+import { execFile, execFileSync, spawnSync } from 'node:child_process';
+import { promisify } from 'node:util';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import tls from 'node:tls';
+import https from 'node:https';
 import { fileURLToPath } from 'node:url';
 
 import { checkSSL } from '../src/checkers/ssl.js';
@@ -32,6 +34,10 @@ import { readEntry, readSslState, expiredNote, SSL_WARN_DAYS } from '../src/stat
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const NODE = process.execPath;
+// Asynchronous, because the TLS fixture lives in *this* process: a synchronous
+// spawn would block the event loop and the fixture could never accept the
+// connection, which looks exactly like the CLI timing out.
+const run = promisify(execFile);
 
 const URL_UP = 'https://acme.dk/';
 const freshEntry = (extra = {}) => ({
@@ -171,6 +177,55 @@ test('a corrupt negative day count is still unknown, not expired', () => {
   assert.equal(report.sslExpired, false);
   assert.equal(report.sslDaysRemaining, null);
   assert.equal(renderReportMarkdown(buildReport({ urls: { [URL_UP]: entry } })).includes('expired'), false);
+});
+
+/** A real TLS server whose certificate expires in `days` days. */
+function expiringTlsServer(t, days) {
+  const dir = mkdtempSync(join(tmpdir(), 'deskuptime-days-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const key = join(dir, 'k.pem');
+  const cert = join(dir, 'c.pem');
+  execFileSync('openssl', [
+    'req', '-x509', '-newkey', 'rsa:2048', '-nodes',
+    '-keyout', key, '-out', cert, '-days', String(days),
+    '-subj', '/CN=127.0.0.1', '-addext', 'subjectAltName=IP:127.0.0.1',
+  ], { stdio: 'ignore' });
+  const server = https.createServer(
+    { key: readFileSync(key), cert: readFileSync(cert) },
+    (_req, res) => {
+      res.writeHead(200, { 'content-type': 'text/html' });
+      res.end('<html><body>ok</body></html>');
+    },
+  );
+  return new Promise((resolve) => server.listen(0, '127.0.0.1', () => resolve({
+    port: server.address().port,
+    certPath: cert,
+    close: () => new Promise((done) => { server.closeAllConnections(); server.close(done); }),
+  })));
+}
+
+test('check --json: the renewal flag is the same decision the terminal prints', { timeout: 40000 }, async (t) => {
+  if (!hasOpenssl()) return t.skip('openssl is not available');
+  // `sslExpiringSoon` in the machine payload was a third copy of the window
+  // rule — `isSslExpiringSoon(validDays) && isExpired !== true` — beside
+  // `summarize()`'s. It agreed only because the checker rounds the day count,
+  // so a plain unit test could not tell the two owners apart. Two real
+  // certificates, on either side of the window, can.
+  for (const [days, soon] of [[9, true], [40, false]]) {
+    const server = await expiringTlsServer(t, days);
+    t.after(() => server.close());
+    const url = `https://127.0.0.1:${server.port}/`;
+    const env = { ...process.env, NODE_EXTRA_CA_CERTS: server.certPath };
+    const args = [join(ROOT, 'src/cli.js'), 'check', url, '--timeout', '8000'];
+
+    const json = await run(NODE, [...args, '--json'], { env });
+    const [result] = JSON.parse(json.stdout);
+    assert.equal(result.sslExpiringSoon, soon, `${days} d: the JSON flag`);
+    assert.equal(result.sslExpired, false);
+
+    const human = await run(NODE, args, { env });
+    assert.match(human.stdout, soon ? /SSL:\s+9d ⚠️/ : /SSL:\s+40d ✅/, `${days} d: the terminal`);
+  }
 });
 
 // --- the writer -------------------------------------------------------------

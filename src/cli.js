@@ -17,7 +17,7 @@ import { buildReport, renderReportJson, renderReportMarkdown } from './report.js
 import { readFileSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
-import { invalidHttpUrls, isSslExpiringSoon, readEntry, STALE_AFTER_DAYS } from './status.js';
+import { invalidHttpUrls, readEntry, readSslState, STALE_AFTER_DAYS } from './status.js';
 import { formatMs, machinesInUse, safeText } from './display.js';
 import { DEFAULT_WINDOW_DAYS, HISTORY_DAYS, loadHistory } from './history.js';
 import { FREE, PRODUCT, renderHelpPro } from './features.js';
@@ -132,7 +132,16 @@ if (command === 'check') {
       sslDaysRemaining: r.ssl?.validDays ?? null,
       sslExpired: r.ssl?.isExpired ?? false,
       sslExpiredDays: r.ssl?.expiredDays ?? null,
-      sslExpiringSoon: isSslExpiringSoon(r.ssl?.validDays) && r.ssl?.isExpired !== true,
+      // Asked of the one owner rather than re-derived here. This was
+      // `isSslExpiringSoon(r.ssl?.validDays) && r.ssl?.isExpired !== true` — a
+      // third copy of the renewal-window rule beside `summarize()`'s, and it
+      // agreed only because the checker happens to round the day count. A
+      // lapsed certificate must never read as "renew soon" in either shape.
+      sslExpiringSoon: readSslState({
+        days: r.ssl?.validDays,
+        expired: r.ssl?.isExpired,
+        expiredDays: r.ssl?.expiredDays,
+      }).expiringSoon,
       sslError: r.ssl?.error ?? null,
       contentLength: r.content?.contentLength ?? null,
       contentHash: r.content?.hash ?? null,

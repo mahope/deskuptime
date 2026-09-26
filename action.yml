@@ -111,6 +111,7 @@ runs:
           console.log(r.filter(x => !x.healthy).length);
         ')
         SSL_FAIL_COUNT=$(node -e '
+          const { readSslState } = require(process.env.DU_ACTION_PATH + "/src/status.js");
           const days = parseInt(process.env.DU_SSL_DAYS || "0", 10);
           const r = JSON.parse(require("fs").readFileSync("deskuptime-results.json","utf8"));
           let n = 0;
@@ -121,9 +122,11 @@ runs:
             if (days > 0 && x.sslExpired === true) n++;
             // `<=`, not `<`: the CLI, `watch` and the client report all warn at
             // exactly `days` remaining, so a certificate on the boundary used to
-            // pass here and fail everywhere else. An unusable value (a string, a
-            // negative number) is unknown, not urgent — the report shows — for it.
-            else if (days > 0 && typeof x.sslDaysRemaining === "number" && x.sslDaysRemaining >= 0 && x.sslDaysRemaining <= days) n++;
+            // pass here and fail everywhere else. The window itself is this
+            // action'"'"'s own input, but whether the value is a day count at all
+            // is not: readSslState() is the one answer, so this counter and the
+            // summary cell below cannot disagree about an unusable value.
+            else if (days > 0 && readSslState({ days: x.sslDaysRemaining }).days !== null && x.sslDaysRemaining <= days) n++;
             else if (days > 0 && x.healthy && x.url.startsWith("https") && x.sslError) n++;
           }
           console.log(n);
@@ -142,19 +145,27 @@ runs:
             echo "| URL | Status | HTTP | Response | SSL days |"
             echo "|-----|--------|------|----------|----------|"
             node -e '
-              const { markdownCell } = require(process.env.DU_ACTION_PATH + "/src/display.js");
+              const { formatMs, markdownCell } = require(process.env.DU_ACTION_PATH + "/src/display.js");
+              const { expiredNote, readSslState } = require(process.env.DU_ACTION_PATH + "/src/status.js");
               const r = JSON.parse(require("fs").readFileSync("deskuptime-results.json","utf8"));
               for (const x of r) {
                 const s = x.healthy ? "✅ UP" : "❌ DOWN";
-                const ssl = x.sslExpired === true
-                  ? `🔴 expired${x.sslExpiredDays > 0 ? ` ${x.sslExpiredDays}d ago` : ""}`
-                  : x.sslDaysRemaining === null ? "—" : String(x.sslDaysRemaining);
+                // The day count and the duration are read through the owners the
+                // CLI, both status lists and the client report already use. This
+                // block used to judge on its own whether a number was usable, so
+                // a corrupt `sslDaysRemaining` printed as -2 and a negative
+                // response time as -5ms in the one table a customer reads in
+                // their CI run — where every other surface says —.
+                const ssl = readSslState({ days: x.sslDaysRemaining, expired: x.sslExpired, expiredDays: x.sslExpiredDays });
+                const sslCell = ssl.expired
+                  ? `🔴 ${expiredNote(ssl.expiredDays)}`
+                  : ssl.days === null ? "—" : String(ssl.days);
                 // Every cell goes through markdownCell. A summary is the one
                 // human surface that reached neither safeText nor the client
                 // report'"'"'s own cell(), and one `|` or one newline in a URL
                 // was enough to write a forged row — including one claiming a
                 // site was DOWN while every real check was UP.
-                console.log(`| ${markdownCell(x.url)} | ${markdownCell(s)} | ${markdownCell(x.statusCode ?? "—")} | ${markdownCell((x.responseTimeMs ?? "—") + "ms")} | ${markdownCell(ssl)} |`);
+                console.log(`| ${markdownCell(x.url)} | ${markdownCell(s)} | ${markdownCell(x.statusCode ?? "—")} | ${markdownCell(formatMs(x.responseTimeMs))} | ${markdownCell(sslCell)} |`);
               }
             '
             echo ""
