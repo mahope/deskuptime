@@ -108,6 +108,19 @@ Det er her bureauet bliver solgt, og derfor er reglerne hårde:
   negativt eller ugyldigt tal fra en håndskrevet state-fil er behandlet som
   ukendt, ikke som "forfalden nu". I `--json` hedder felterne
   `sslDaysRemaining`, `sslExpiringSoon` og `summary.sslExpiringSoon`.
+- **Ald data markeres som forældet.** Rapporten genkører intet, så "3 up ·
+  0 down" handler om det *sidste* pass, ikke om nu. Et site uden pass inden for
+  `STALE_AFTER_DAYS` (2 dage, ét sted i `src/status.js` sammen med
+  `SSL_WARN_DAYS`) skriver `UP (200) ⚠️ stale — last check 41 d ago` i
+  Status-kolonnen, tælles i resumelinjen (`1 stale (no check in the last 2 d)`)
+  og **navnes på en egen linje** med alderen. `summary.up` tæller kun
+  up-to-date sites, så en død watch-loop ikke kan se ud som et sundt site hos
+  en kunde; `summary.down` tælles *alle* sites, for et nedet site skal en kunde
+  stadig se. I `--json` hedder felterne `stale`, `ageDays` og `summary.stale`.
+  Et site uden `lastChecked` er ikke stale (det står som "not checked yet"), et
+  urædeligt tidspunkt er stale (et pass skete, men kan ikke vises som aktuelt),
+  og et tidspunkt i fremtiden er clock-skæv, ikke gamle data — rapporten
+  printer uanset det eksakte tidspunkt.
 - Uptime kan aldrig overstige 100 % og `failures` kan aldrig blive negativ.
   Tællerne læses ét sted gennem `counters()` i `src/report.js`, som klemmer
   `checksUp` til `checks`: en håndskrevet, gendannet eller halvskrevet state-fil
@@ -153,12 +166,17 @@ Det er her bureauet bliver solgt, og derfor er reglerne hårde:
   `|`/`<script>`/newline i en URL ikke kan ødelægge tabellen, at licensnøglen
   ikke lækker til Markdown eller JSON, Pro-gaten med købslink, `--json` og
   `--title`, at `checksUp > checks` hverken kan give over 100 % eller negativ
-  `failures` i Markdown, JSON eller resumelinjen, og at et rigtigt `runPass` på
-  en skæv state-fil skriver de reparerede tal tilbage på disk.
+  `failures` i Markdown, JSON eller resumelinjen, at et rigtigt `runPass` på
+  en skæv state-fil skriver de reparerede tal tilbage på disk, og at et site
+  uden pass i 2 dage markeres stale i Status, resumelje og en egen
+  opmærksomhedslinje — præcist som en død watch-loop sådan ser ud hos en kunde.
 - Mutation: at slette `recordPass`-kaldet i `runPass` giver fejl i
   uptime-testen; at gøre `isPro`-gaten væk giver fejl i gaten; at fjerne
   klemningen i `counters()` giver **4 fejl i 19**, og at læse `failures` uden
-  klemning i `buildReport` giver **2 fejl**.
+  klemning i `buildReport` giver **2 fejl**. For staleness: at tælle stale
+  sites med i `summary.up` giver **2 fejl i 23**, at gøre `isCheckStale()`
+  altid til false giver **4 fejl**, og at fjerne markeringen i Status-cellen
+  giver **2 fejl**.
 
 ## 7. Ikke bygget (bevidst)
 

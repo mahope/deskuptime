@@ -20,6 +20,57 @@ export function isSslExpiringSoon(validDays) {
   return Number.isFinite(validDays) && validDays >= 0 && validDays <= SSL_WARN_DAYS;
 }
 
+/**
+ * How old the newest completed pass may be before a report stops presenting it
+ * as current.
+ *
+ * A report says "3 up · 0 down" about the *last* pass, not about a moment in
+ * time — and nothing in the report re-checks anything. If the watch loop died,
+ * a site checked six weeks ago looks exactly like one checked eight minutes
+ * ago, so a bureau forwarding the report tells a customer their site is healthy
+ * on the strength of a measurement that long expired. Two days tolerates a
+ * daily cron without crying wolf, and is far below the point where a customer
+ * would be misled.
+ */
+export const STALE_AFTER_DAYS = 2;
+const MS_PER_DAY = 24 * 60 * 60 * 1000;
+
+/**
+ * Age in ms of the newest completed pass, or null when the state file does not
+ * say when that pass ran.
+ *
+ * A timestamp in the future is clock skew or a wrong system clock, not old
+ * data, so it is reported as a negative age rather than invented into an
+ * outage. The report prints the exact timestamp either way.
+ */
+export function checkAgeMs(lastChecked, now = new Date()) {
+  if (typeof lastChecked !== 'string' || !lastChecked) return null;
+  const parsed = Date.parse(lastChecked);
+  if (Number.isNaN(parsed)) return null;
+  return now.getTime() - parsed;
+}
+
+/**
+ * True only when a pass is known to have run and is older than the window.
+ *
+ * Absent `lastChecked` is *not* stale: the report already shows such a site as
+ * "not checked yet", and flagging it twice would say nothing new. A timestamp
+ * that is present but unreadable *is* stale — a pass was recorded and we cannot
+ * show that it is current, which is exactly what a client report must not do.
+ */
+export function isCheckStale(lastChecked, now = new Date()) {
+  if (typeof lastChecked !== 'string' || !lastChecked) return false;
+  if (Number.isNaN(Date.parse(lastChecked))) return true;
+  return checkAgeMs(lastChecked, now) > STALE_AFTER_DAYS * MS_PER_DAY;
+}
+
+/** Whole days since the last pass, for display. `null` when it is unknown. */
+export function checkAgeDays(lastChecked, now = new Date()) {
+  const age = checkAgeMs(lastChecked, now);
+  if (age === null) return null;
+  return Math.max(0, Math.floor(age / MS_PER_DAY));
+}
+
 export function isHttpUrl(value) {
   try {
     const url = new URL(value);

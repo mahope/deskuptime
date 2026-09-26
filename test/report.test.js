@@ -476,3 +476,106 @@ test('the report, check and watch share one expiry threshold', async () => {
   assert.equal(await warned(15), false);
   assert.ok(loadWatchState, 'watch state loader is available');
 });
+
+test('staleness has one definition, and only old data is stale', async () => {
+  const { STALE_AFTER_DAYS, checkAgeDays, isCheckStale } = await import('../src/status.js');
+  const at = (iso, now = NOW) => isCheckStale(iso, now);
+  const daysAgo = n => new Date(NOW.getTime() - n * 24 * 60 * 60 * 1000).toISOString();
+
+  assert.equal(STALE_AFTER_DAYS, 2);
+  assert.equal(at(daysAgo(0)), false, 'a pass from this second is current');
+  assert.equal(at(daysAgo(1.99)), false, 'a daily cron must not cry wolf');
+  assert.equal(at(daysAgo(STALE_AFTER_DAYS)), false, 'exactly at the window is still current');
+  assert.equal(at(daysAgo(STALE_AFTER_DAYS + 0.01)), true);
+  assert.equal(at(daysAgo(41)), true);
+
+  // No pass at all is not stale — the report already says "not checked yet", and
+  // flagging it twice would say nothing new.
+  assert.equal(at(undefined), false);
+  assert.equal(at(''), false);
+  assert.equal(at(null), false);
+  // A pass that ran, at a time we cannot read, is stale: we cannot show that the
+  // data is current, which is what a client report must never assume.
+  assert.equal(at('not-a-date'), true);
+  // Clock skew is not old data. The exact timestamp is printed either way.
+  assert.equal(at(new Date(NOW.getTime() + 60 * 1000).toISOString()), false);
+
+  assert.equal(checkAgeDays(daysAgo(41.9), NOW), 41, 'whole days, floored, never negative');
+  assert.equal(checkAgeDays('not-a-date', NOW), null);
+  assert.equal(checkAgeDays(new Date(NOW.getTime() - 60 * 1000).toISOString(), NOW), 0);
+  assert.equal(checkAgeDays(undefined, NOW), null);
+});
+
+test('a report does not present a dead monitoring loop as current health', async () => {
+  const daysAgo = n => new Date(NOW.getTime() - n * 24 * 60 * 60 * 1000).toISOString();
+  const report = buildReport(proState({
+    'https://acme.dk/': upEntry({ lastChecked: daysAgo(41) }),
+    'https://shop.dk/': upEntry(),
+  }), { now: NOW });
+
+  const byUrl = Object.fromEntries(report.sites.map(site => [site.url, site]));
+  // The observed result is not rewritten — the pass really did answer 200 — but
+  // it is not presented as current either.
+  assert.equal(byUrl['https://acme.dk/'].status, 'up');
+  assert.equal(byUrl['https://acme.dk/'].stale, true);
+  assert.equal(byUrl['https://acme.dk/'].ageDays, 41);
+  assert.equal(byUrl['https://shop.dk/'].stale, false);
+  assert.equal(byUrl['https://shop.dk/'].ageDays, 0);
+
+  // The headline number is the claim a client reads: a stale pass is not "up".
+  assert.equal(report.summary.stale, 1);
+  assert.equal(report.summary.up, 1);
+
+  const markdown = renderReportMarkdown(report);
+  assert.match(markdown, /UP \(200\) ⚠️ stale — last check 41 d ago/);
+  assert.match(markdown, /1 stale \(no check in the last 2 d\)/);
+  assert.match(markdown, /\*\*Monitoring data is stale for 1 site — no pass in the last 2 days:\*\* https:\/\/acme\.dk\/ \(41 d\)/);
+  assert.doesNotMatch(markdown, /2 up/, 'the stale site must not be counted as up');
+
+  const json = JSON.parse(renderReportJson(report));
+  assert.equal(json.summary.up, 1);
+  assert.equal(json.summary.stale, 1);
+  assert.equal(json.sites.find(site => site.url === 'https://acme.dk/').stale, true);
+  assert.equal(json.sites.find(site => site.url === 'https://shop.dk/').stale, false);
+});
+
+test('a fresh report is unchanged, and a site that was never checked is not stale', () => {
+  const report = buildReport(proState({
+    'https://ok.dk/': upEntry(),
+    'https://new.dk/': { addedAt: '2026-09-25T09:00:00.000Z' },
+  }), { now: NOW });
+  assert.equal(report.summary.stale, 0);
+  assert.equal(report.summary.up, 1);
+  const markdown = renderReportMarkdown(report);
+  assert.doesNotMatch(markdown, /⚠️ stale/, 'no site may be flagged when every pass is current');
+  assert.doesNotMatch(markdown, /· \d+ stale/, 'the summary must not claim stale data');
+  assert.doesNotMatch(markdown, /not checked yet.*stale/);
+  // A site whose last pass was DOWN stays visible as down, stale or not — a
+  // customer must still see it.
+  const down = buildReport(proState({
+    'https://down.dk/': upEntry({ wasUp: false, lastStatus: 503, lastChecked: '2026-01-01T00:00:00.000Z' }),
+  }), { now: NOW });
+  assert.equal(down.summary.down, 1);
+  assert.equal(down.summary.stale, 1);
+  assert.match(renderReportMarkdown(down), /DOWN \(503\) ⚠️ stale/);
+});
+
+test('the CLI marks a stopped watch loop stale, from a real state file', async (t) => {
+  const home = tempHome(t);
+  const daysAgo = n => new Date(Date.now() - n * 24 * 60 * 60 * 1000).toISOString();
+  writeState(home, proState({
+    'https://acme.dk/': upEntry({ lastChecked: daysAgo(42) }),
+    'https://shop.dk/': upEntry(),
+  }));
+
+  const { stdout } = await run(process.execPath, [CLI, 'report'], { env: { ...process.env, HOME: home, USERPROFILE: home } });
+  assert.match(stdout, /stale/, stdout);
+  assert.match(stdout, /1 stale \(no check in the last 2 d\)/, stdout);
+  assert.doesNotMatch(stdout, /2 up/, stdout);
+
+  const { stdout: jsonOut } = await run(process.execPath, [CLI, 'report', '--json'], { env: { ...process.env, HOME: home, USERPROFILE: home } });
+  const json = JSON.parse(jsonOut);
+  assert.equal(json.summary.stale, 1);
+  assert.equal(json.summary.up, 1);
+  assert.equal(json.sites.find(site => site.url === 'https://acme.dk/').ageDays, 42);
+});

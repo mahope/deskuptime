@@ -14,7 +14,10 @@
  *   - no page content, no response headers, no content hash, no IP addresses;
  *   - nothing is written and no request is made — the report is a read of the
  *     last completed pass, so it works offline and cannot be a health check in
- *     disguise. Run `deskuptime watch <url> --once` for a fresh pass.
+ *     disguise. Because nothing is re-checked, the age of that pass is part of
+ *     the claim: a site with no pass within `STALE_AFTER_DAYS` is marked stale
+ *     and is not counted as up. Run `deskuptime watch <url> --once` for a fresh
+ *     pass.
  *
  * The counters this renders are two integers per URL (see `recordPass`) plus
  * two integers per URL per day (`src/history.js`), so neither file can grow
@@ -23,7 +26,7 @@
 
 import { PRODUCT } from './features.js';
 import { DEFAULT_WINDOW_DAYS, windowSummary } from './history.js';
-import { SSL_WARN_DAYS, isSslExpiringSoon } from './status.js';
+import { SSL_WARN_DAYS, STALE_AFTER_DAYS, checkAgeDays, isCheckStale, isSslExpiringSoon } from './status.js';
 
 export const DEFAULT_REPORT_TITLE = 'Website uptime report';
 const MAX_TITLE_LENGTH = 120;
@@ -125,9 +128,16 @@ export function buildReport(state, { title, now = new Date(), history, windowDay
       const sslDaysRemaining = Number.isFinite(entry.sslValidDays) && entry.sslValidDays >= 0
         ? entry.sslValidDays
         : null;
+      // The report is a read of the last completed pass and re-checks nothing, so
+      // "how old is that pass" is part of the claim. A site whose newest pass is
+      // older than the window keeps its observed status — the pass really did
+      // answer 200 — but is marked stale so it is never counted as currently up.
+      const stale = isCheckStale(entry.lastChecked, now);
       return {
         url,
         status: siteStatus(entry),
+        stale,
+        ageDays: checkAgeDays(entry.lastChecked, now),
         statusCode: Number.isInteger(entry.lastStatus) ? entry.lastStatus : null,
         uptimePercent: uptimePercent(entry),
         window: windowSummary(history, url, { days: windowDays, now, uptimePercent }),
@@ -149,9 +159,14 @@ export function buildReport(state, { title, now = new Date(), history, windowDay
 
   const summary = {
     sites: sites.length,
-    up: sites.filter(site => site.status === 'up').length,
+    // "up" is a claim about now, so a stale pass is not one of them — the
+    // observed result stays on the site as `status`, and `stale` says why it is
+    // not counted. DOWN is deliberately not filtered the same way: a customer
+    // must still see a site that was last seen down.
+    up: sites.filter(site => site.status === 'up' && !site.stale).length,
     down: sites.filter(site => site.status === 'down').length,
     unknown: sites.filter(site => site.status === 'unknown').length,
+    stale: sites.filter(site => site.stale).length,
     checks: sites.reduce((total, site) => total + site.checks, 0),
     failures: sites.reduce((total, site) => total + site.failures, 0),
     sslExpiringSoon: sites.filter(site => site.sslExpiringSoon).length,
@@ -194,9 +209,17 @@ function uptimeCell(site) {
 }
 
 function statusCell(site) {
-  if (site.status === 'up') return `UP${site.statusCode ? ` (${site.statusCode})` : ''}`;
-  if (site.status === 'down') return `DOWN${site.statusCode ? ` (${site.statusCode})` : ''}`;
-  return 'not checked yet';
+  const observed = site.status === 'up'
+    ? `UP${site.statusCode ? ` (${site.statusCode})` : ''}`
+    : site.status === 'down'
+      ? `DOWN${site.statusCode ? ` (${site.statusCode})` : ''}`
+      : 'not checked yet';
+  return site.stale ? `${observed} ⚠️ ${staleNote(site)}` : observed;
+}
+
+/** How the age is worded, or null when it cannot be known. */
+function staleNote(site) {
+  return site.ageDays === null ? 'stale — last check unreadable' : `stale — last check ${site.ageDays} d ago`;
 }
 
 function windowCell(site, windowDays) {
@@ -243,6 +266,17 @@ export function renderReportMarkdown(report) {
       `**SSL certificate${expiring.length === 1 ? '' : 's'} expiring within ${SSL_WARN_DAYS} days — renewal needed:** ${expiring.map(site => cell(`${site.url} (${site.sslDaysRemaining} d)`)).join(', ')}`,
     ];
 
+  // Same reasoning for old data: a site whose monitoring stopped is the
+  // recipient's most consequential line, and it is invisible in a table unless
+  // it is named.
+  const stale = report.sites.filter(site => site.stale);
+  const staleLines = stale.length === 0
+    ? []
+    : [
+      '',
+      `**Monitoring data is stale for ${stale.length} site${stale.length === 1 ? '' : 's'} — no pass in the last ${STALE_AFTER_DAYS} days:** ${stale.map(site => cell(site.ageDays === null ? site.url : `${site.url} (${site.ageDays} d)`)).join(', ')}`,
+    ];
+
   return [
     `# ${cell(report.title)}`,
     '',
@@ -252,10 +286,11 @@ export function renderReportMarkdown(report) {
     `|${' --- |'.repeat(HEADERS.length)}`,
     ...(rows.length > 0 ? rows : [`| ${['_no monitored sites_', '—', '—', '—', '—', '—', '—'].join(' | ')} |`]),
     '',
-    `**${report.summary.sites} site(s) · ${report.summary.up} up · ${report.summary.down} down · ${report.summary.checks} checks · ${report.summary.failures} failed${expiring.length > 0 ? ` · ${expiring.length} SSL expiring soon` : ''}**`,
+    `**${report.summary.sites} site(s) · ${report.summary.up} up · ${report.summary.down} down · ${report.summary.checks} checks · ${report.summary.failures} failed${expiring.length > 0 ? ` · ${expiring.length} SSL expiring soon` : ''}${stale.length > 0 ? ` · ${stale.length} stale (no check in the last ${STALE_AFTER_DAYS} d)` : ''}**`,
     ...attention,
+    ...staleLines,
     '',
-    `Uptime is the share of completed monitoring passes that answered HTTP 200–399. "Uptime (all)" counts every pass since the site was added${since ? ` (earliest ${shortTime(since)})` : ''}; "Uptime (window)" counts the passes recorded in the last ${windowDays} days. A site with no completed pass yet shows — rather than 100%.`,
+    `Uptime is the share of completed monitoring passes that answered HTTP 200–399. "Uptime (all)" counts every pass since the site was added${since ? ` (earliest ${shortTime(since)})` : ''}; "Uptime (window)" counts the passes recorded in the last ${windowDays} days. A site with no completed pass yet shows — rather than 100%. "Up" in the summary counts sites checked within the last ${STALE_AFTER_DAYS} days; a site whose monitoring stopped is listed as stale with the age of its last pass.`,
     '',
     `Generated on one machine, without an account: no page content, response headers or license data is included, and nothing was uploaded.`,
   ].join('\n');
