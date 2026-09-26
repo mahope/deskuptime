@@ -39,7 +39,7 @@ function showHelp() {
 ╚${rule}╝
 
 USAGE:
-  deskuptime check <urls...> [--json] [--timeout ms]  Check one or more URLs
+  deskuptime check <urls...> [--json] [--timeout ms]  Check one or more URLs (--timeout budgets the whole check)
   deskuptime headers <url>      Redirect chain, HTTPS enforcement + security headers
   deskuptime watch <url> [--interval 300] [--webhook URL]  Monitor in background (free: up to ${FREE.urlLimit} URLs)
   deskuptime watch <url> --once                      Run one monitoring pass and exit

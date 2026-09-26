@@ -8,7 +8,15 @@ import tls from 'tls';
 import net from 'net';
 import { URL } from 'url';
 
-export function checkSSL(url) {
+/** Default deadline for the handshake. `--timeout` lowers it, never raises it. */
+export const SSL_TIMEOUT_MS = 10_000;
+
+/**
+ * @param {string} url
+ * @param {object} [options]
+ * @param {number} [options.timeoutMs] — deadline for this handshake
+ */
+export function checkSSL(url, { timeoutMs = SSL_TIMEOUT_MS } = {}) {
   return new Promise((resolve) => {
     try {
       const parsed = new URL(url);
@@ -21,7 +29,7 @@ export function checkSSL(url) {
       const socket = tls.connect(port, hostname, {
         ...(net.isIP(hostname) ? {} : { servername: hostname }),
         rejectUnauthorized: false,
-        timeout: 10000,
+        timeout: timeoutMs,
       });
 
       let settled = false;
@@ -32,7 +40,7 @@ export function checkSSL(url) {
           socket.destroy();
           resolve({ error: 'SSL handshake timed out' });
         }
-      }, 10000);
+      }, timeoutMs);
 
       socket.on('secureConnect', () => {
         if (settled) return;

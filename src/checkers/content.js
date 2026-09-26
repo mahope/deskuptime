@@ -22,6 +22,7 @@ import crypto from 'crypto';
 export const MAX_CONTENT_BYTES = 2 * 1024 * 1024;
 
 const CONTENT_TIMEOUT_MS = 20_000;
+export { CONTENT_TIMEOUT_MS };
 
 /** Best-effort charset, so the hash matches what `response.text()` would decode. */
 function charsetOf(response) {

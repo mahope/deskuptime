@@ -29,7 +29,7 @@ npx @mahope/deskuptime check https://site1.com https://site2.com
 # Machine-readable output for scripts/CI (exit code 2 if any site is down)
 npx @mahope/deskuptime check https://yoursite.com --json | jq '.[0].sslDaysRemaining'
 
-# Override the 15-second network timeout when needed
+# Budget the whole check — request, TLS handshake and page read (default 15s)
 npx @mahope/deskuptime check https://yoursite.com --timeout 30000
 
 # Monitor URLs in the background — alerts on UP/DOWN/SSL/content changes (free, up to 3 URLs)
@@ -57,6 +57,11 @@ HTTP `400–599`, timeouts, refused connections and other network failures are *
 has `reachable: true` but `healthy: false`. Redirects are followed and the final status
 is evaluated. A multi-URL check validates every URL before sending any request; one
 invalid URL fails the complete check with exit code `1`.
+
+`--timeout <ms>` is a budget for the **whole** check — the reachability request, the
+TLS handshake and the page read share it, so `--timeout 500` cannot take 30 seconds.
+Each leg still has its own maximum (15 s / 10 s / 20 s by default), so a larger budget
+only ever helps; it never makes a check slower than the default would.
 
 ## Free vs Pro
 
