@@ -418,3 +418,32 @@ function withinGrace(license, now) {
   const last = Date.parse(license?.validatedAt ?? '');
   return Number.isFinite(last) && now - last < OFFLINE_GRACE_MS;
 }
+
+/**
+ * The single answer a customer gets when a Pro-only feature is gated.
+ *
+ * `describeLicense` already separates the five states, and the difference is not
+ * cosmetic: a key the server never rejected must never be answered with a
+ * checkout link, because that is the message that makes an existing customer buy
+ * a second license. Every gate — the `report` command, `--webhook` — goes
+ * through this function, so a gate can never contradict `deskuptime status`.
+ *
+ * @param {object} license — state.license, as stored (may be absent)
+ * @param {string} feature — the gated feature, as the customer knows it
+ * @returns {string|null} the message to print, or null when the license is Pro
+ */
+export function proGateMessage(license, feature, { now = Date.now() } = {}) {
+  const { status, detail } = describeLicense(license, { now });
+  if (PRO_STATUSES.includes(status)) return null;
+
+  const gate = `${feature} needs an active Pro license`;
+  if (status === LICENSE_STATUS.FREE) {
+    return `${gate}. Pro unlocks it here: ${BUY_URL} — then "deskuptime activate <key>".`;
+  }
+  if (status === LICENSE_STATUS.UNVERIFIED) {
+    // This customer has already paid: the server is the problem, not the key.
+    // The state is named, so this reads as the same answer `status` gives.
+    return `${gate}. This machine is ${LICENSE_STATUS.UNVERIFIED} with the license server (${detail}). The key is still stored — re-check it with: deskuptime activate <license-key>`;
+  }
+  return `${gate}: ${detail}. The key is still stored — re-check it with: deskuptime activate <license-key>. If you have not bought yet: ${BUY_URL}`;
+}

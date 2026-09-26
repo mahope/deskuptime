@@ -104,9 +104,11 @@ Det er her bureauet bliver solgt, og derfor er reglerne hårde:
 - `--json`: ren JSON på stdout til CI og bureauets egne systemer.
 - `--title` fladtes til én kort linje (maks. 120 tegn) — titlen ender i en fil,
   der videresendes.
-- Uden Pro-licens skriver kommandoen **intet**, men siger hvorfor og peger på
-  købslinket. Gratisbrugere beholder `watch --once` og `status`, som skriver de
-  samme tal som tekst.
+- Uden Pro-licens skriver kommandoen **intet**, men siger hvorfor. En kunde der
+  har betalt, men hvis nøgle serveren ikke har kunnet dømme (`unverified`), får
+  beskeden "genverificér nøglen" — aldrig købslinket; købslinket er kun svaret
+  til en bruger uden licens. Se `docs/license-lifecycle.md` §2. Gratisbrugere
+  beholder `watch --once` og `status`, som skriver de samme tal som tekst.
 
 ## 5. Pris og entitlement
 

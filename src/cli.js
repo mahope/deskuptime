@@ -12,7 +12,7 @@
  */
 
 import { checkUrls, summarize } from './engine.js';
-import { startWatch, runOnce, printStatus, printPass, loadState, saveState, freeLimitMessage, isPro, upgradeHint } from './watch.js';
+import { startWatch, runOnce, printStatus, printPass, loadState, saveState, freeLimitMessage, isPro } from './watch.js';
 import { buildReport, renderReportJson, renderReportMarkdown } from './report.js';
 import { readFileSync } from 'fs';
 import { join, dirname } from 'path';
@@ -498,8 +498,11 @@ if (command === 'report') {
   if (!isPro(state)) {
     // A free user gets the same one upgrade path as everywhere else in the CLI,
     // and keeps a working alternative: `watch --once` and `status` still print
-    // the same numbers as text.
-    console.error(`❌ Error: the client report needs an active Pro license. ${upgradeHint('a client-ready uptime report you can send to a customer')}`);
+    // the same numbers as text. A customer whose key was never rejected is told
+    // to re-check the key, not to buy again — see proGateMessage().
+    const { proGateMessage } = await import('./license.js');
+    const gate = proGateMessage(state.license, 'the client report');
+    console.error(`❌ Error: ${gate || 'the client report needs an active Pro license'}`);
     process.exit(1);
   }
 

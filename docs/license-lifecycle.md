@@ -58,6 +58,14 @@ genskaber Pro, hvis serveren svarer igen.
 Nøglen slettes **aldrig** automatisk. Den bliver liggende, så en senere vellykket
 check gendanner Pro, og så support kan se hvilken nøgle kunden har.
 
+**Én gate-t tekst til alle Pro-overflader.** `proGateMessage(license, feature)`
+i `src/license.js` er det eneste sted, der fortæller en kunde hvorfor en
+Pro-funktion er lukket, og det bruger `describeLicense()`'s egen tilstand. Derfor
+kan `report` og `--webhook` ikke modsige `deskuptime status`: en `unverified`
+nøgle får overalt beskedet "genverificér nøglen" og **aldrig** et købslink, en
+`invalid` nøgle får købslinket kun som "hvis du ikke har købt endnu", og en helt
+manglende licens (`free`) er det eneste tilfælde, hvor kassen er svaret.
+
 En state-fil skrevet før dette felt fandtes (intet `status`-felt) klassificeres
 efter alder præcis som `refreshLicense` ville: inden for 7 dage `active`, derefter
 `unverified`. Ældre installationer låses altså ikke ude.

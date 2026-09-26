@@ -207,6 +207,39 @@ test('an unverified or rejected key does not get a report either', async (t) => 
     }).then(() => null, err => err);
     assert.ok(error, `a ${status} key got a report`);
     assert.equal(error.code, 1);
+    assert.match(error.stderr, /deskuptime activate <license-key>/, error.stderr);
+    assert.equal(error.stdout, '', `a report was printed for a ${status} key`);
+    if (status === 'unverified') {
+      // A key the server never judged must not be answered with the checkout:
+      // that is the double-purchase trap, and `deskuptime status` already gets
+      // it right for the very same state.
+      assert.doesNotMatch(error.stderr, /buy\.stripe\.com/, `a paying customer saw a checkout link: ${error.stderr}`);
+    } else {
+      // Rejected keys may mention the checkout, but only as "if you have not bought".
+      assert.match(error.stderr, /If you have not bought yet/);
+    }
+  }
+});
+
+test('the report gate tells a paid-but-unverified customer the same thing as status', async (t) => {
+  const license = { key: LICENSE_KEY, instance: 'deskuptime-agency', plan: 'pro', status: 'unverified', validatedAt: '2026-09-15T09:00:00.000Z' };
+  const home = writeState(tempHome(t), { license, urls: { 'https://acme.dk/': upEntry() } });
+  const env = { ...process.env, HOME: home, USERPROFILE: home };
+  const runCli = (args) => run(process.execPath, [CLI, ...args], { env }).then(
+    ({ stdout, stderr }) => ({ stdout, stderr }),
+    error => ({ stdout: error.stdout, stderr: error.stderr, code: error.code }),
+  );
+
+  const status = await runCli(['status']);
+  const report = await runCli(['report']);
+  assert.equal(report.code, 1);
+  // `status` writes the license state to stdout, the report gate to stderr, so
+  // both are read as one text — the customer reads one message either way.
+  for (const [name, surface] of [['status', status], ['report', report]]) {
+    const said = `${surface.stdout}${surface.stderr}`;
+    assert.match(said, /unverified/, `${name}: ${said}`);
+    assert.match(said, /deskuptime activate <license-key>/, `${name}: ${said}`);
+    assert.doesNotMatch(said, /buy\.stripe\.com/, `checkout link in ${name}: ${said}`);
   }
 });
 

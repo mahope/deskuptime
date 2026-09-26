@@ -12,6 +12,7 @@ import { readFileSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { PRO_BUY_URL, freeLimitMessage } from '../src/watch.js';
+import { proGateMessage } from '../src/license.js';
 import { MATRIX } from '../src/features.js';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -73,11 +74,17 @@ test('kun det aftalte betalingslink og donationslinket forekommer', () => {
 test('upgrade-vejen nævner købslinket, så gratisbrugere ikke sidder fast ved en Pro-grænse', () => {
   // Rendered, not grepped: the message a free user actually reads must carry the link.
   assert.ok(freeLimitMessage('https://yoursite.com/').includes(PRO_BUY), 'URL-grænsen skal pege på det aftalte købslink');
+  // Every Pro-only gate renders through proGateMessage(), so a free user who hits
+  // one of them is told where to buy — from one function, not a second copy.
+  assert.ok(proGateMessage(null, 'webhook alerts').includes(PRO_BUY), 'en Pro-grænse skal pege på det aftalte købslink');
   const watch = readFileSync(join(root, 'src', 'watch.js'), 'utf-8');
   assert.ok(watch.includes('upgradeHint'), 'src/watch.js mangler upgradeHint');
   const hinted = [...watch.matchAll(/upgradeHint\(([^)]*)\)/g)].map(match => match[1]);
   assert.ok(hinted.length >= 2, `upgradeHint bruges kun ${hinted.length} steder`);
-  assert.ok(hinted.some(call => call.includes('webhook alerts')), 'webhook-grænsen skal pege på upgradeHint');
+  assert.ok(
+    watch.includes("proGateMessage(state.license, 'webhook alerts')"),
+    'webhook-grænsen skal pege på proGateMessage, så den ikke kan modsige `deskuptime status`',
+  );
 });
 
 test('matrixen i README og specen dækker de samme byggede Pro-værdier', () => {

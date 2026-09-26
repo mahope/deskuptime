@@ -12,7 +12,7 @@
  */
 
 import { checkUrl } from './engine.js';
-import { activateLicense, refreshLicense, normalizeLicense, LICENSE_STATUS, PRO_STATUSES } from './license.js';
+import { activateLicense, refreshLicense, normalizeLicense, proGateMessage, LICENSE_STATUS, PRO_STATUSES } from './license.js';
 import { readFileSync, writeFileSync, mkdirSync, existsSync, renameSync, unlinkSync, statSync, chmodSync } from 'fs';
 import { dirname, posix, win32 } from 'path';
 import { homedir } from 'os';
@@ -464,7 +464,9 @@ export async function startWatch(urls, opts = {}) {
   console.log(`\n👀 Monitoring ${Object.keys(state.urls).length} URL(s), every ${interval}s.${pro ? ' [Pro]' : ' [free tier]'}.${pro && webhookUrl ? ' Webhook alerts on.' : ''} Ctrl+C to stop.\n`);
 
   if (webhookUrl && !pro) {
-    console.error(`⚠️  --webhook needs an active Pro license, so no webhook was sent yet. ${upgradeHint('webhook alerts')}`);
+    // Same gate as the other Pro-only surfaces: a key the server never rejected
+    // is answered with "re-check the key", never with the checkout.
+    console.error(`⚠️  No webhook was sent. ${proGateMessage(state.license, 'webhook alerts') || 'Webhook alerts need an active Pro license.'}`);
     console.error('    Terminal alerts keep working. Monitoring starts now; the webhook activates with the license.\n');
   } else if (pro && !webhookUrl && process.platform !== 'darwin') {
     console.error('ℹ️  Local desktop notifications are macOS-only in the CLI. Use --webhook for alerts on this platform.\n');

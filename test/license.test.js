@@ -15,6 +15,7 @@ import {
   getDeviceId,
   normalizeLicense,
   describeLicense,
+  proGateMessage,
   redactSecrets,
   LICENSE_API_BASE,
   PRODUCT_KEY,
@@ -360,6 +361,48 @@ test('describe: an unverified key says it was never rejected, so nobody buys a s
   assert.match(described.detail, /not been reachable since/);
   assert.match(described.detail, /never rejected/);
   assert.doesNotMatch(described.detail, /rejected this key/);
+});
+
+test('proGateMessage: only a free user is shown the checkout', () => {
+  const neverRejected = { key: KEY, instance: 'dev-1', status: LICENSE_STATUS.UNVERIFIED, validatedAt: new Date(NOW - 9 * DAY).toISOString() };
+  const rejected = { key: KEY, instance: 'dev-1', status: LICENSE_STATUS.INVALID, validatedAt: new Date(NOW - 1 * DAY).toISOString() };
+
+  // No license at all: this is the one case where the answer is "buy".
+  const free = proGateMessage(null, 'the client report', { now: NOW });
+  assert.match(free, /the client report needs an active Pro license/);
+  assert.ok(free.includes('https://buy.stripe.com/7sY9AS9eX3Iu418fJ5bMQ01'), `a free user must be able to buy: ${free}`);
+
+  // Already paid, never judged: pointing at the checkout here is how a customer
+  // buys a second license for a key that still works.
+  const unverified = proGateMessage(neverRejected, 'the client report', { now: NOW });
+  assert.match(unverified, /never rejected/);
+  assert.match(unverified, /deskuptime activate <license-key>/);
+  assert.doesNotMatch(unverified, /buy\.stripe\.com/, 'a customer who has paid must not see a checkout link');
+
+  // Rejected: the key can be re-checked, and the checkout is only a footnote.
+  const invalid = proGateMessage(rejected, 'the client report', { now: NOW });
+  assert.match(invalid, /rejected this key/);
+  assert.match(invalid, /deskuptime activate <license-key>/);
+  assert.match(invalid, /If you have not bought yet/);
+
+  // Pro states say nothing at all.
+  assert.equal(proGateMessage({ key: KEY, instance: 'dev-1', status: LICENSE_STATUS.ACTIVE, validatedAt: new Date(NOW).toISOString() }, 'the client report', { now: NOW }), null);
+  assert.equal(proGateMessage({ key: KEY, instance: 'dev-1', status: LICENSE_STATUS.CACHED, validatedAt: new Date(NOW - 1 * DAY).toISOString() }, 'the client report', { now: NOW }), null);
+  // A cached record whose grace has run out is no longer Pro, and must not be told to buy.
+  assert.doesNotMatch(
+    proGateMessage({ key: KEY, instance: 'dev-1', status: LICENSE_STATUS.CACHED, validatedAt: new Date(NOW - 9 * DAY).toISOString() }, 'the client report', { now: NOW }),
+    /buy\.stripe\.com/,
+  );
+});
+
+test('proGateMessage: it reuses describeLicense, so a gate cannot contradict status', () => {
+  const nineDaysAgo = new Date(NOW - 9 * DAY).toISOString();
+  for (const status of [LICENSE_STATUS.UNVERIFIED, LICENSE_STATUS.INVALID, LICENSE_STATUS.CACHED]) {
+    const license = { key: KEY, instance: 'dev-1', status, validatedAt: nineDaysAgo };
+    const { detail } = describeLicense(license, { now: NOW });
+    const gate = proGateMessage(license, 'webhook alerts', { now: NOW });
+    assert.ok(gate.includes(detail), `gate og status fortæller ikke det samme for ${status}: ${gate}`);
+  }
 });
 
 test('normalizeLicense: the unverified status survives a round-trip through the state file', () => {
