@@ -6,10 +6,14 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'http';
-import { mkdtempSync } from 'fs';
+import { mkdtempSync, readFileSync } from 'fs';
 import { tmpdir } from 'os';
-import { join } from 'path';
-import { runPass, sendWebhook } from '../src/watch.js';
+import { dirname, join } from 'path';
+import { fileURLToPath } from 'url';
+import { EVENT_TYPES, WEBHOOK_EVENT_TYPES, runPass, sendWebhook } from '../src/watch.js';
+
+const root = join(dirname(fileURLToPath(import.meta.url)), '..');
+const spec = readFileSync(join(root, 'docs', 'pro-alerts.md'), 'utf-8');
 
 function serve(handler) {
   return new Promise(resolve => {
@@ -248,4 +252,98 @@ test('payloaden fortæller hvilken vært der svarede, så en kanal ikke skal gæ
   // `type`, `message` and `timestamp` keep their old meaning in all three.
   assert.equal(received[0].message, 'is UP (200) — 41ms');
   assert.equal(received[0].transition, 'observed');
+});
+
+/**
+ * P1-34. The webhook is the only surface a machine reads, and §2 is the contract
+ * a Slack/Discord adapter is written against. Measured 26/9 with the real CLI, a
+ * real watch loop and a real receiver, the channel received six types — down, up,
+ * redirect, ssl_warning, ssl_expired, content_changed — while the spec named
+ * five, and the payload example was missing the two fields that carry the fact.
+ *
+ * The drift was invisible to the existing tests because every one of them
+ * hand-wrote its event and typed the cross-host case `up` on purpose ("a
+ * cross-host answer is not DOWN"). Nothing ever took the event `runPass` builds
+ * for a parked domain out to a receiver, so the sixth type could not be seen.
+ */
+test('et cross-host svar går hele vejen ud som type "redirect"', async () => {
+  const received = [];
+  const server = await serve((req, res) => {
+    let body = '';
+    req.on('data', chunk => { body += chunk; });
+    req.on('end', () => {
+      received.push(JSON.parse(body));
+      res.writeHead(200).end('ok');
+    });
+  });
+
+  // A real pass: one site that redirects to another host and answers 200 there.
+  // The receiver is closed in `finally`, not on the happy path: an assertion that
+  // fails before the close leaves a listening server behind, and `node --test`
+  // then waits for it instead of reporting the failure. A gate that hangs is worse
+  // than a gate that is red.
+  const stateFile = join(mkdtempSync(join(tmpdir(), 'deskuptime-redirect-')), 'state.json');
+  const url = 'https://kunde.dk/';
+  const state = { urls: { [url]: { wasUp: true, lastStatus: 200, lastChecked: '2026-09-26T09:00:00.000Z', checks: 9, checksUp: 9 } } };
+  const pass = await runPass(state, {
+    stateFile,
+    returnResults: true,
+    check: async () => ({ healthy: true, statusCode: 200, finalUrl: 'http://parked.example/lander', responseTimeMs: 12, content: { contentLength: 40, hash: 'a'.repeat(64) }, ssl: null, timestamp: '2026-09-26T09:01:00.000Z' }),
+  });
+
+  assert.deepEqual(pass.events.map(event => event.type), ['redirect'], 'et cross-host svar er sin egen hændelse');
+
+  try {
+    for (const event of pass.events) {
+      if (event.type === 'baseline') continue;
+      await withStderr(() => sendWebhook(server.url, event));
+    }
+  } finally {
+    await server.close();
+  }
+
+  assert.equal(received.length, 1);
+  assert.equal(received[0].type, 'redirect');
+  assert.equal(received[0].offHostRedirect, true);
+  assert.equal(received[0].finalUrl, 'http://parked.example/lander');
+  assert.equal(received[0].url, url, 'den bestilte URL er den kunden skal se, ikke parkeringssiden');
+  assert.match(received[0].message, /another host/);
+  assert.equal(received[0].transition, 'none', 'et cross-host svar er ingen tilstandsovergang');
+});
+
+/**
+ * The lock: the spec a Pro channel is written against, and the sender, must name
+ * the same types and the same fields. A type added to the loop without a line in
+ * §2 — exactly what `redirect` was for 26/9 — fails here.
+ */
+test('specens payload og type-liste er målt mod det, der faktisk sendes', async () => {
+  const received = [];
+  const server = await serve((req, res) => {
+    let body = '';
+    req.on('data', chunk => { body += chunk; });
+    req.on('end', () => { received.push(JSON.parse(body)); res.writeHead(200).end('ok'); });
+  });
+  try {
+    await withStderr(() => sendWebhook(server.url, { type: 'down', url: 'https://yoursite.com', message: 'is DOWN — HTTP 503' }));
+  } finally {
+    await server.close();
+  }
+
+  const payloadSection = spec.split('Payload:')[1];
+  const example = JSON.parse(payloadSection.match(/```json\n([\s\S]*?)```/)[1]);
+
+  assert.deepEqual(
+    Object.keys(example).sort(),
+    Object.keys(received[0]).sort(),
+    'docs/pro-alerts.md §2 skal vise præcis de felter der sendes — hverken færre (en kanal gætter) eller flere (en kanal læser et felt der ikke findes)',
+  );
+  assert.deepEqual(
+    example.type.split('|').map(part => part.trim()).sort(),
+    [...WEBHOOK_EVENT_TYPES].sort(),
+    'docs/pro-alerts.md §2 skal liste præcis de typer loopet sender',
+  );
+  for (const type of EVENT_TYPES) {
+    assert.ok(spec.includes(`\`${type}\``), `docs/pro-alerts.md nævner ikke type "${type}", som koden kan sende`);
+  }
+  assert.ok(!WEBHOOK_EVENT_TYPES.includes('baseline'), 'baseline er en første iagttagelse og sendes ikke');
 });

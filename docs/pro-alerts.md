@@ -66,15 +66,35 @@ Payload:
 ```json
 {
   "product": "deskuptime",
-  "type": "down | up | ssl_warning | ssl_expired | content_changed",
+  "type": "down | up | redirect | ssl_warning | ssl_expired | content_changed",
   "url": "https://yoursite.com",
   "message": "is DOWN — HTTP 503",
   "timestamp": "2026-09-25T14:26:12.000Z",
   "measuredAt": "2026-09-25T14:26:11.204Z",
   "previousChecked": "2026-09-25T14:25:41.000Z",
-  "transition": "observed"
+  "transition": "observed",
+  "finalUrl": "https://yoursite.com/",
+  "offHostRedirect": false
 }
 ```
+
+Listen er den **ene** type-værdi, loopet sender, og de er låst til
+`WEBHOOK_EVENT_TYPES` i `src/watch.js` af `test/webhook.test.js`: en type der
+tilføjes i koden uden at stå her, eller en der står her uden at blive sendt, giver
+en rød gate. `baseline` er den eneste type der *findes* i koden og ikke sendes —
+den er en første iagttagelse, ikke en hændelse.
+
+**`redirect` — oplysningen, ikke en fejl.** `type: "redirect"` betyder, at svaret
+kom fra en **anden vært** end den adresserede: et udløbet kunde-domæne der er blevet
+parkeret, et domæne der er hijacket og peger på en phishing-side, eller en
+tastefejl der lander på registrarens "mente du"-side. HTTP-koden er normalt `200`,
+så **uden denne type nåede alle disse som et grønt `up`**. En kanal skal derfor
+ikke behandle den som nedbrud — den skal vise den. `finalUrl` er, hvor svaret
+faktisk kom fra, og `offHostRedirect` er sand præcis når det ikke er den
+adresserede vært (`:80`/`:443`-varianter af samme vært er ikke cross-host). Begge
+felter findes i hver payload, også når de er `false`/`null`, så modtageren aldrig
+skal gætte. Låsen følger den *svarende vært* og ikke URL'en, så et domæne der
+bliver liggende parkeret sender **én** besked og ikke én pr. pass.
 
 **Tider.** `timestamp` er, som altid, hvornår denne POST blev bygget — ikke hvornår
 sitet blev målt. Det er den eneste tid feltet havde indtil 26/9, og en kanal der
@@ -89,7 +109,7 @@ DeskUptime faktisk så skiftet: det forudgående pass er til stede og nyere end
 staleness-vinduet. `unobserved` betyder, at hændelsen er en sammenligning med en
 måling, der mangler, er ulæselig eller er ældre end vinduet — typisk fordi
 overvågningsloopet har været dødt. `none` er alt, der ikke er en tilstandsovergang
-(`ssl_warning`, `ssl_expired`, `content_changed`, `baseline`).
+(`ssl_warning`, `ssl_expired`, `content_changed`, `redirect`, `baseline`).
 
 Målt 26/9, før dette blev skrevet: en state-fil med et pass fra 41 dage siden —
 loopet var dødt, og sitet var aldrig nede — gav

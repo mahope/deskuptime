@@ -305,8 +305,31 @@ export async function runPass(state, opts = {}) {
   return opts.returnResults ? pass : events;
 }
 
+// One owner of the event vocabulary. Measured 26/9 with the real CLI and a real
+// receiver: a paid channel receives down, up, redirect, ssl_warning, ssl_expired
+// and content_changed — and docs/pro-alerts.md §2, the contract a Slack/Discord
+// adapter is written against, named five of them. The icon table was a second,
+// hand-kept copy of the same list, and `eventIcon`'s `|| '•'` fallback made a
+// sixth type render as an ordinary bullet instead of failing. The spec and the
+// sender are now locked to this list by test/webhook.test.js.
+const EVENT_ICONS = {
+  down: '🚨',
+  up: '✅',
+  baseline: '•',
+  redirect: '🔀',
+  ssl_warning: '⚠️ ',
+  ssl_expired: '🔴 ',
+  content_changed: '🔄',
+};
+
+export const EVENT_TYPES = Object.freeze(Object.keys(EVENT_ICONS));
+
+// `baseline` is a first observation, not a change: the loop never POSTs it, and
+// the spec says so. Everything else is delivered exactly as the loop raises it.
+export const WEBHOOK_EVENT_TYPES = Object.freeze(EVENT_TYPES.filter(type => type !== 'baseline'));
+
 function eventIcon(type) {
-  return { down: '🚨', up: '✅', baseline: '•', redirect: '🔀', ssl_warning: '⚠️ ', ssl_expired: '🔴 ', content_changed: '🔄' }[type] || '•';
+  return EVENT_ICONS[type] || '•';
 }
 
 export function printPass(pass, { alertUnchangedDown = true } = {}) {
