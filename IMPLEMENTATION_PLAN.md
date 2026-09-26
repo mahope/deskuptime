@@ -1,3 +1,66 @@
+## Status fra denne iteration (63, P1-47 — en side med et CSRF-token alarmerede 2 880 gange om dagen)
+
+**Hvorfor denne flade:** ❓ 1–3 er stadig ubesvarede, så iterationen tog den
+første målte kandidat på den **betalte** alarmkanal, der ikke var målt før:
+P1-50 målte payloaden, P1-41 genprøvningen, P1-42 udboxen — ingen målte hvor
+ofte en hændelse overhovedet rejses.
+
+**Målt først, nul kode ændret.** Rigtig CLI, temp-HOME og en rigtig lokal side
+der serverer et token pr. forespørgsel i markup'en — det en CSRF-nonce, en
+cache-buster, et "sidst opdateret"-tidspunkt eller en live-tæller er:
+
+```
+pass 1  • baseline recorded: UP (200)
+pass 2  🔄 content changed — same size (132 bytes): the page's bytes differ
+pass 3  🔄 content changed — same size (132 bytes): the page's bytes differ
+```
+
+Hver af dem er en POST til den betalte kanal og en desktop-notifikation. Ved det
+korteste Pro-interval er det 2 880 om dagen pr. side, så længe loopen kører. Og
+en kanal og et notifikationscenter der gruer ulv hele dagen bliver dæmpet — det
+er dæmpningen, der så skjuler den rigtige `is DOWN`. Det er den skade, der gør
+det til en P1 og ikke til en støj-indstilling.
+
+**Efter, samme måling:** 5 pass over den samme side → **én** alarm
+(`contentAlertedAt` + `contentChangesHeld: 3` i state-filen). Den første
+ændring efter en stille time sendes stadig som før, så en defaceret eller
+redesignet side meldes; det der holdes tilbage **tælles, ikke kasseres**, og den
+næste sendte alarm siger `3 earlier changes since the last alert, not sent`.
+
+**Én ejer, `readContentChangeAlert()` i `src/status.js`**, så terminal,
+notification og webhook ikke kan nå hver sin konklusion — samme mønster som
+P1-40s `readEntry()` og P1-46s `urlIdentity()`. Vinduet er `60 min`, og et ur
+der gik baglæs undertrykker intet: en negativ spændvidde er et urproblem, ikke et
+udsagn om siden. `down`, `up`, `ssl_*` og `redirect` er aldrig tynget — det er
+pr. site, så en bureaukunde med 12 sider hører stadig om dem alle.
+
+**Målt og grønt:** 431/431 (421 + 10 nye i `test/contentflood.test.js`, lagt i
+`npm test` — samme fælde som P1-10), audit 0/0, `node --check` alle JS-filer,
+`matrix --check` og `git diff --check` på **Node 26.7.0**. Én eksisterende test
+blev opdateret, fordi den låste den gamle adfærd: `watch content transitions are
+latched to the saved hash` i `test/status.test.js` fik et femte pass **efter en
+time** med den samme ændring igen, så dens eget formål — at hashen og ikke et ur
+bestemmer, om noget er en ændring — er nu Bevist *stærkere* end før.
+
+**To fejl i mine egne tests fundet undervejs, begge rettet i testen.** 1) Stubben
+sendte `changed: true` på *første* pass, så baseline-passet så ud som en ændring;
+den følger nu motorens egen regel (`contentHash ? true : null`). 2)
+`url => changingCheck()(url)` tabte `contentHash`-argumentet, så testen
+"tætheden er pr. site" passerede med **0 events i stedet for 1** — altså af den
+forkerte grund. Det er den fælde planen har advaret om fire gange, og den ramte
+igen, fordi jeg skrev en ny testfil. **Ingen mutationstest denne gang** — jeg var
+forbi tidsbudgeten på dette tidspunkt, så dækkingen af selve porten er kun
+argumenteret, ikke målt.
+
+**Ændret i den betalte påstand, fordi den ellers blev falsk:** matrix-rækken sagde
+`Webhook alerts on every event`; den siger nu `content changes at most 1/hour per
+site` (genereret i README og docs/pro-alerts.md §1 fra `src/features.js`), og §2
+— kontrakten en adapter skrives imod — fortæller reglen, at ingenting kasseres
+tættere end det tælles, og hvad et ur der gik baglæs gør. Intet nyt
+webhook-felt, ingen exit-kode, ingen ny hændelsestype.
+
+**Næste:** ❓ 1–3, ellers en målt opgave.
+
 ## Status fra denne iteration (59, P1-43 — `unwatch` sagde stop, loopen sagde "stadig med")
 
 **Hvorfor denne flade:** ❓ 1–3 er stadig ubesvarede, så iterationen tog den anden
@@ -3061,6 +3124,8 @@ for selv. Ingen gemt nøgle er omskrevet, ingen eksisterende adgangsd tilstand
 `git diff --check` grønne på Node 26.7.0. `8531c27` på
 `ceo/one-site-one-slot`, fast-forward-merget til `main` og pushet 2026-09-26.
 
+- **Release-note P1-47:** `deskuptime` sendte **en content-alarm pr. pass, for evigt**, på enhver side der renderer en værdi pr. forespørgsel. Før blev et CSRF-token, en cache-buster, et "sidst opdateret"-tidspunkt eller en live-tæller til **én alarm pr. 30 sekunder** — 2 880 om dagen pr. side — fordi et content-ændringsvarsel er bygget på en hash af sidens bytes. Du fik en POST i din kanal og en notification på din Mac om noget, der ikke var ændret. Det er ikke larmet i sig selv, der gør ondt: en kanal og et notifikationscenter, der gruer ulv hele dagen, bliver **dæmpet**, og dæmpningen er netop det, der så skjuler den rigtige `is DOWN`. Nu sendes **højst én content-alarm pr. time pr. side**: den første ændring efter en stille time kommer stadig med det samme, så en defaceret eller redesignet side stadig meldes, og **intet kasseres** — de ændringer der holdes tilbage tælles, og den næste alarm siger hvor mange den står for (`3 earlier changes since the last alert, not sent`). **Et nedbrud, en SSL-advarsel og en omdirigering er aldrig tynget** — det er pr. site, så en bureaukunde med 12 sider hører stadig om alle 12. **`up`/`down`/`ssl_*`-hændelser, exit-koder og alle webhook-felter er uændrede**, så en eksisterende adapter er uberørt; kun matrix-claimet og `docs/pro-alerts.md` §2 er opdateret, så den betalte kanal ikke lover mere end den sender.
+
 ## ❓ Til Mads
 
 - **Release-note P1-46:** Det samme site kunne tage **to af de tre gratis-pladser**, hvis du skrev det i to former. Før blev `https://kunde.dk` og `https://kunde.dk/` gemt som to nøgler — og skråstregen er ikke en tastefejl, den er **den form din browser viser i adresselinjen**, altså den du kopierer ind. Følgerne: en kunde med to sites fik `Free tier monitors 3 URLs` for sin tredje, samme site blev kaldt to gange på hvert pass, og din kundenrapport fik **to rækker om ét site med hver sit tal** under `2 site(s) · 2 up`. Værst var vejen tilbage: `deskuptime unwatch https://kunde.dk/` svarede `not monitored`, så det eneste, der virkede, var at redigere `state.json` med licensnøglen i. Nu siger den `Already monitoring this site as https://kunde.dk — https://kunde.dk/ not added.`, `unwatch` finder nøglen i begge former, og **en adresse, der kun er skrevet en gang, tæller én gang**. `/a` og `/a/` er stadig to sider, en query og en port er stadig en del af adressen, og en nøgle uden adresse er stadig sig selv. **Ingen af dine gemte adresser er ændret**, og de gamle rækker i en rapport, der indeholder begge former, forsvinder først når du `unwatch`er den ene.
@@ -3125,6 +3190,8 @@ for selv. Ingen gemt nøgle er omskrevet, ingen eksisterende adgangsd tilstand
 - **Iteration 56 (P1-40, målt + fix — besvarer ❓ 13):** ❓ 1–3 stadig ubesvarede, så iterationen besvarede ❓ 13 — det eneste målte fund i køen med et åbent valg — med planens egen anbefaling (c) + (b). Målt først med rigtig CLI, rigtig state-fil, to lokale fixtures (200/500) og temp-HOME, nul kode ændret: `TypeError: Invalid URL: kunde.dk` fra `assertValidHttpUrls` i `runPass` **før første request**, exit 1, nul sites tjekket, på cron-vejen. Efter: exit 2, 1 hændelse for det nedede site, 0 for nøglen, advarslen på stderr hvert pass, loopen starter. **Målingen fandt to fejl, den alene kunne finde:** `[].every()` er sand, så et pass over kun ubrugelige nøgler rapporterede sig grønt (exit 0 for en pass der målte ingenting); og en nøgle med `wasUp: true` stod som `✅ up` i begge lister og som `UP` i kundenrapporten — en påstand i et kundedokument bygget på et tal ingen kan måle. Rettet i `readEntry`, den ene ejer: ukendt med grunden, og rapporten tæller den uden for sites. `partitionUsableUrls()` i `src/status.js` er den ene ejer af "hvad kan tjekkes" (præcis `invalidHttpUrls()` i modsat retning, så intet kan være dødeligt her og gyldigt der); `unusableUrlNote()` ejer sætningen med kort og lang form; `assertValidHttpUrls()` står kun, hvor *calleren* har skylden og kan fortales det (`check`, argv på `watch`/`unwatch`). **To følger, også produktrettelser:** `monitoredCount()` — en ubrugelig nøgle tog en af de tre gratis-pladser, så vejen til den igen var at håndredigere `state.json` med licensnøglen i; og `unwatch` afviste sin egen henstilling (`Invalid URL` på `kunde.dk`), så kommandoen afviser nu kun en skrivefejl der ikke står i filen. **To låse udvidet, ikke slækket** (ottende gang): `report.test.js`'e "duplicated verdict owner" søgte på `verdict: verdictFor(value.wasUp)` → kræver nu værtern *og* delegeringen; `display.test.js`'e "cannot repaint the URL list" tællede linjer med en NEL-nøgle → det den egentlig vogtede (intet linjeskift fra filen) hævdes nu direkte. **Én fejl i min egen måling:** jeg målte `unwatch 'kunde.dk'` efter to state-skrivninger, der havde skrevet nøglen væk, så kommandoen svarede korrekt `Invalid URL` — målingen var forkert, ikke koden. 9 nye tests i `test/uncheckable.test.js` (lagt til i `npm test`) + 5 målte mutationer (4/1/1/1/2 fejl) → **374/374** (365 + 9); audit 0/0; `node --check`, `matrix --check`, `git diff --check` grønne på Node 26.7.0. Ingen exit-kode for gyldige nøgler ændret (målt med og uden), ingen matrix-række, ingen ny claim, ingen deploy-note nødvendig. **Næste:** ❓ 1–3 hvis besvaret, ellers en ny målt opgave.
 
 - **Iteration 57 (P1-41, målt + fix):** ❓ 1–3 ubesvarede, så målingen gik på den **betalte** kanals spørgsmål — hvad der sker, når *leveringen* ikke virker. P1-50 målte hvilken payload der kommer ud, P1-39 målte en disk der ikke kan skrives; ingen målte det imellem. Målt først med rigtig `watch`-loop, rigtig state-fil, et lokalt site der svarer 500, Pro fra `passthrough`-stubben (aldrig et kald til mahope.tools) og en rigtig modtager der svarer 500 på det første POST: `is DOWN — HTTP 500` i terminalen, `Webhook responded 500`, og **intet** i kanalen — heller ikke 30 s senere, fordi næste pass ikke rejser nogen begivenhed, når `entry.wasUp` er skrevet. En betalt kunde hørte altså intet om et nedbrud og fik så en `is UP` for en genopretning den aldrig blev fortalt om. **Fix:** samme regel som licensklienten (P2-1 del B) — `WEBHOOK_ATTEMPTS = 3`, 500 ms pause, `webhookRetryable()` som den ene ejer (kun `5xx`/`429`; et `4xx` er modtagerens *svar* og spørges aldrig igen), kroppen bygget én gang så en genprøvning sender samme alert, og **alle forsøg deler ét 10-s-budget** (tre 10-s-forsøg ville holde loopet længere end det korteste Pro-interval). Dobbeltleverings-prisen er dokumenteret i `docs/pro-alerts.md` §2. Målt efter: blip → `delivered type=down is DOWN — HTTP 500`, ingen advarsel. 8 nye tests (den målte kunderejse med to rigtige passer: én blip giver præcis én besked, og den anden pass rejser ingen begivenhed) → **382/382** (374 + 8); audit 0/0; `node --check`, `matrix --check`, `sh -n`/`bash -n`, `git diff --check` grønne på Node 26.7.0. **Seks mutationer målt, alle døde** (5/1/1/2/1/1 fejl) — men først efter at målingen blev rettet: min mutationskørsel brugte `git checkout` som gendannelse, fem mutationer ændrede slet ikke filen og kom ud som "0 fejl" (vished, ikke dækning — fjerde gang i mit arbejde), og samme kørsel ødelagde det ucommittede `src/watch.js`, som blev skrevet igen. Den sjette mutation overlevede det korrekt og afslørede en manglende test (hvert forsøg med sit eget budget), som blev skrevet. **Maskinfakt der gør gaten rød uden grund:** standard-`node` på denne maskine er v22.23.2, så 20 tests (install.sh ×7, Action ×13) fejler med `::error::Node.js 24+ is required` — også på ren `main`; rigtig kørsel er `PATH="/opt/homebrew/bin:$PATH" npm test` (v26.7.0). Ingen kode ændret for det. **Ikke bygget:** en outbox til næste pass — kræver spec først, noteret som næste målte opgave.
+
+- **Iteration 63 (P1-47, målt + fix):** ❓ 1–3 ubesvarede, så målingen gik på den betalte kanals *hyppighed* — den eneste del af alarmeringen ingen måling dækkede. Rigtig CLI, temp-HOME, rigtig lokal side med et token pr. forespørgsel: 3 pass → 3 `content changed`-alarmer, ingen af dem handlingsværdige; hver er en POST + en notifikation, så 2 880/dag ved 30 s. **Fix:** `readContentChangeAlert()` i `src/status.js` (1 time, pr. site, ur-baglæns undertrykker intet, intet kasseres) + brug i `runPass`; matrix-claim og §2 opdateret, så påstanden matcher leveringen. 10 nye tests → **431/431**; audit 0/0; `node --check`, `matrix --check`, `git diff --check` grønne på Node 26.7.0. Én ældre test opdateret (lagt krav på den gamle adfærd) og femte pass efter en time tilføjet, så dens eget formål er stærkere. To fejl i mine egne tests fundet (stub sendte `changed` på baseline; tabt `contentHash`-argument gjorde én test grøn af forkert grund). **Ingen mutationstest** — over tidsbudgeten. `ceo/content-alert-flood`, `54e8f54`.
 
 ## Iterationslog
 
