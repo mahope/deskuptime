@@ -26,6 +26,25 @@ import { FREE, PRO, PRODUCT } from './features.js';
 const LICENSE_RECHECK_MS = 24 * 60 * 60 * 1000;
 const STATE_LOCK_MAX_AGE_MS = 5 * 60 * 1000;
 const WEBHOOK_TIMEOUT_MS = 10_000;
+// How many times one alert may be POSTed, and how long to wait between the
+// attempts. Measured 2026-09-26: one 5xx from the receiver lost the alert for
+// good, because the pass had already latched the change. Every attempt shares
+// WEBHOOK_TIMEOUT_MS, so these bounds cannot make the loop slower than it was.
+export const WEBHOOK_ATTEMPTS = 3;
+export const WEBHOOK_RETRY_DELAY_MS = 500;
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Whether a receiver's own answer is worth asking again.
+ *
+ * 5xx is the receiver failing at its own end, 429 is it asking for time. Every
+ * other non-2xx is a verdict — a dead token, a URL that no longer exists, a
+ * payload it refuses — and asking a second time cannot change the answer, so a
+ * misconfigured webhook fails in milliseconds instead of three times.
+ */
+function webhookRetryable(status) {
+  return status === 429 || status >= 500;
+}
 // The limits and the buy link live in src/features.js, so the free/Pro claims in
 // README, --help and docs/pro-alerts.md cannot drift from what is enforced here.
 export const PRO_BUY_URL = PRODUCT.buyUrl;
@@ -727,7 +746,7 @@ async function notify(title, message) {
 
 /**
  * POST an event to a user-supplied webhook URL (Pro only).
- * Best-effort, no retry, no queue — see docs/pro-alerts.md §2.
+ * Best-effort, bounded, retried on a temporary failure — see docs/pro-alerts.md §2.
  * Bounded by a hard timeout so a hanging endpoint cannot stall the watch loop.
  *
  * The payload used to carry exactly one time — the moment this body was built,
@@ -743,8 +762,28 @@ async function notify(title, message) {
  *
  * `timestamp` keeps its old meaning (when this POST was built) so no existing
  * receiver breaks; the new fields are additive.
+ *
+ * Measured 2026-09-26 with the real loop and a real receiver: one 5xx and the
+ * alert was gone for good. The pass had already latched the change, so the next
+ * pass produced no event and nothing was sent again — the customer's channel
+ * stayed silent through the whole outage and then received `✅ is UP` for a
+ * recovery it was never told about. A receiver that answers one request wrong
+ * out of thousands (a restarting proxy, a rate limiter, a dropped connection) is
+ * ordinary, not exceptional, so a temporary answer is now asked again — the same
+ * rule the license client has used since P2-1 del B, and a 4xx is still a
+ * verdict that is never re-asked.
+ *
+ * **All attempts share the one timeout budget.** The first answer gets it, a
+ * retry only what is left of it. Three 10 s attempts would hold the watch loop
+ * for 30 s — longer than the shortest interval a Pro loop may use — so a hanging
+ * endpoint costs what it has always cost and a blip costs one extra round trip.
  */
-export async function sendWebhook(webhookUrl, event, { timeoutMs = WEBHOOK_TIMEOUT_MS } = {}) {
+export async function sendWebhook(webhookUrl, event, {
+  timeoutMs = WEBHOOK_TIMEOUT_MS,
+  attempts = WEBHOOK_ATTEMPTS,
+  retryDelayMs = WEBHOOK_RETRY_DELAY_MS,
+  wait = sleep,
+} = {}) {
   const reading = readEvent(event);
   // The same two additive fields `check --json` publishes, asked of the same
   // owner, so one name for the fact holds across every surface. A Pro channel
@@ -754,38 +793,68 @@ export async function sendWebhook(webhookUrl, event, { timeoutMs = WEBHOOK_TIMEO
   // separately. `type`, `message` and `timestamp` keep their old meaning, and in
   // the ordinary case (no cross-host answer) both new fields are `null`/`false`.
   const redirect = readRedirectTarget({ url: event.url, finalUrl: event.finalUrl });
-  try {
-    const res = await fetch(webhookUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        product: 'deskuptime',
-        type: event.type,
-        url: event.url,
-        message: event.message,
-        timestamp: new Date().toISOString(),
-        // When the site was actually measured — the pass's own time, the same
-        // one written to the state file and shown by `deskuptime status`.
-        measuredAt: typeof event.measuredAt === 'string' ? event.measuredAt : null,
-        // The reading a transition is compared against, and whether DeskUptime
-        // watched the change or merely found it already so.
-        previousChecked: typeof event.previousChecked === 'string' ? event.previousChecked : null,
-        transition: reading.transition,
-        // Where the response came from. A cross-host answer is not DOWN, so the
-        // channel cannot learn it from the event type; without these two fields
-        // a customer's parked or hijacked domain reached Slack as a green "up".
-        finalUrl: redirect.finalUrl,
-        offHostRedirect: redirect.offHost,
-      }),
-      signal: AbortSignal.timeout(timeoutMs),
-    });
-    if (!res.ok) console.error(`⚠️  Webhook responded ${res.status}`);
-    return res.ok;
-  } catch (err) {
-    const timedOut = err.name === 'TimeoutError' || err.name === 'AbortError';
-    console.error(`⚠️  Webhook delivery failed: ${timedOut ? `no response within ${timeoutMs}ms` : err.message}`);
-    return false;
+  // Built once: a retry must deliver the same body, so the `timestamp` still
+  // says when this alert was raised and not when the last attempt was made.
+  const body = JSON.stringify({
+    product: 'deskuptime',
+    type: event.type,
+    url: event.url,
+    message: event.message,
+    timestamp: new Date().toISOString(),
+    // When the site was actually measured — the pass's own time, the same
+    // one written to the state file and shown by `deskuptime status`.
+    measuredAt: typeof event.measuredAt === 'string' ? event.measuredAt : null,
+    // The reading a transition is compared against, and whether DeskUptime
+    // watched the change or merely found it already so.
+    previousChecked: typeof event.previousChecked === 'string' ? event.previousChecked : null,
+    transition: reading.transition,
+    // Where the response came from. A cross-host answer is not DOWN, so the
+    // channel cannot learn it from the event type; without these two fields
+    // a customer's parked or hijacked domain reached Slack as a green "up".
+    finalUrl: redirect.finalUrl,
+    offHostRedirect: redirect.offHost,
+  });
+
+  const deadline = Date.now() + timeoutMs;
+  let attempt = 0;
+  let reason = 'no attempt was made';
+  for (;;) {
+    const left = deadline - Date.now();
+    if (attempt > 0 && left <= retryDelayMs) break;
+    attempt += 1;
+    let retryable = false;
+    try {
+      const res = await fetch(webhookUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body,
+        signal: AbortSignal.timeout(Math.max(left, 1)),
+      });
+      if (res.ok) return true;
+      // The receiver answered and the answer was "no". 4xx is a verdict — a dead
+      // token, a wrong URL, a payload the receiver refuses — and asking again
+      // cannot change it. 429 is the exception: it asks for time, not for a
+      // different request.
+      retryable = webhookRetryable(res.status);
+      reason = `the receiver responded ${res.status}`;
+    } catch (err) {
+      // No verdict at all, so nothing is known about the request: a timeout, a
+      // refused connection or a DNS failure is worth one more try.
+      retryable = true;
+      const timedOut = err?.name === 'TimeoutError' || err?.name === 'AbortError';
+      reason = timedOut ? `no response within the ${timeoutMs}ms budget` : err.message;
+    }
+    if (!retryable || attempt >= attempts) break;
+    await wait(retryDelayMs);
   }
+
+  // One warning, and it has to say the truth about the consequence: the pass
+  // already recorded this change, so nothing resends it. The terminal keeps
+  // reporting the site, but a channel that was set up *because* nobody sits at
+  // the terminal has now missed the alert.
+  console.error(`⚠️  Webhook alert not delivered — ${reason} (${attempt} attempt${attempt === 1 ? '' : 's'}).`);
+  console.error('    Nothing resends it: this pass already recorded the change. Check this terminal for what was missed.');
+  return false;
 }
 
 /**

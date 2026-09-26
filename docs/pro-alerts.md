@@ -53,9 +53,23 @@ Kommando: `deskuptime watch <url> --webhook <url>`.
   gik ned, for det kan den ikke vide. Passet skriver `wasUp` tilbage fra målingen, så
   det er én alarm og ikke én pr. pass.
 - **Metode:** `POST`, `Content-Type: application/json`.
-- **Timeout:** 10 s. Et hangende endpoint kan ikke låse overvågningsloopet.
-- **Retry:** ingen. Levering er best-effort; næste hændelse sender igen. Ingen outbox,
-  ingen afspilning, ingen dødbrev.
+- **Timeout:** 10 s **til sammen for alle forsøg**. Et hangende endpoint kan ikke låse
+  overvågningsloopet, og en genprøvning kan heller ikke gøre den langsommere: det
+  første forsøg får budgettet, og en genprøvning får kun det, der er tilbage.
+- **Genprøvning:** op til 3 forsøg pr. alarm, 500 ms pause imellem. **Kun** en
+  midlertidig fejl genprøves: netværksfejl, timeout, `5xx` og `429`. Et `4xx` er
+  modtagerens *svar* — død token, forkert URL, et payload den afviser — og spørges
+  aldrig igen. Målt 26/9 med den rigtige loop og en rigtig modtager: ét `5xx` kostede
+  alarmen for altid, fordi passet allerede havde noteret ændringen, så næste pass
+  ikke rejste nogen begivenhed. Ét forkert svar ud af tusinde er almindeligt, ikke
+  sjældent.
+- **Kø og afspilning:** ingen outbox, ingen afspilning, intet dødbrev. En modtager
+  der er nede gennem hele budgettet mister **den** alarm — og det siger advarslen
+  lige på linjen, fordi der intet sender den igen. Næste hændelse sender igen.
+- **Dobbeltlevering:** en genprøvning efter en `5xx` kan give dobbeltlevering, hvis
+  modtageren behandlede den første og så svarede forkert. Det er den normale pris
+  for at genprøve, og den er valgt bevidst: en tabt alarm om et nedbrud er værre
+  end to af samme alarm.
 - **Auth/signering:** brugeren kan selv lægge en token i webhook-URL'en (Slack, Discord m.fl.
   bruger den model). DeskUptime sender ingen egen signatur — modtageren skal derfor
   validere afsender selv (netværkskilde, IP, eller en uigennemsigtig URL).
@@ -143,7 +157,8 @@ Ingen licensnøgle, device-id eller brugerdata sendes i payloaden. Se §5.
 |---|---|
 | Licensserver nede, timeout, 429/408/5xx eller ulæseligt svar | Pro fortsætter med cachet status i 7 dage, ingen låsning ude |
 | Licensnøgle afslået (400/403/404/409) | Pro slår fra med det samme; nøglen bevares til diagnose |
-| Webhook-endpoint nede eller timeout | Advarsel på stderr, overvågningen fortsætter, ingen retry |
+| Webhook-endpoint nede eller timeout | Op til 3 forsøg pr. alarm i ét 10-s-budget, kun på `5xx`/`429`/netværksfejl; advarsel på stderr, overvågningen fortsætter. En alarm der ikke kom af sted, siger det og sendes ikke igen |
+| Webhook-endpoint svarer `4xx` | Ét forsøg, ingen genprøvning: det er modtagerens svar, ikke en fejl i os |
 | Overvåget site nede | Gentages `is DOWN`-linje hvert pass; kun `down`-begivenheden går i webhook |
 | `watch` kørt to gange samtidig | Anden proces afvises med exit 1, ingen state-skrivning |
 

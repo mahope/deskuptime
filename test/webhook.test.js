@@ -1,6 +1,7 @@
 /**
- * Webhook delivery — timeout, fejl og payload.
- * Se docs/pro-alerts.md §2: best-effort, 10s timeout, ingen retry, ingen kø.
+ * Webhook delivery — timeout, fejl, genprøvning og payload.
+ * Se docs/pro-alerts.md §2: best-effort, ét 10-s-budget for alle forsøg, 2
+ * genprøvninger på en midlertidig fejl, ingen kø, ingen afspilning.
  */
 
 import { test } from 'node:test';
@@ -10,7 +11,7 @@ import { mkdtempSync, readFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
-import { EVENT_TYPES, WEBHOOK_EVENT_TYPES, runPass, sendWebhook } from '../src/watch.js';
+import { EVENT_TYPES, WEBHOOK_ATTEMPTS, WEBHOOK_EVENT_TYPES, runPass, sendWebhook } from '../src/watch.js';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const spec = readFileSync(join(root, 'docs', 'pro-alerts.md'), 'utf-8');
@@ -189,6 +190,184 @@ test('en fejlende endpoint giver en advarsel, men kaster ikke', async () => {
 test('en utilgængelig endpoint kaster ikke', async () => {
   const sent = await withStderr(() => sendWebhook('http://127.0.0.1:1/hook', { type: 'up', url: 'https://yoursite.com', message: 'is up' }, { timeoutMs: 500 }));
   assert.equal(sent, false);
+});
+
+/**
+ * P1-41. Measured 2026-09-26 with the real `watch` loop, a real site that
+ * answered 500 and a real receiver: one 5xx and the alert was gone for good.
+ * The pass had already written `wasUp: false`, so every later pass produced no
+ * event and nothing was sent again — the channel that was bought to hear about
+ * the outage stayed silent through all of it, and then got `✅ is UP` for a
+ * recovery it was never told about. One wrong answer out of thousands is
+ * ordinary, so a temporary answer is asked again.
+ */
+test('en 5xx fra modtageren genprøves, så ét blip ikke mister alarmen', async () => {
+  const received = [];
+  let attempts = 0;
+  const server = await serve((req, res) => {
+    let body = '';
+    req.on('data', chunk => { body += chunk; });
+    req.on('end', () => {
+      attempts += 1;
+      received.push(JSON.parse(body));
+      // The first POST is answered wrong — a restarting proxy, a rate limiter —
+      // and every later one is accepted, exactly as in the measurement.
+      if (attempts === 1) return res.writeHead(500).end('try later');
+      res.writeHead(200).end('ok');
+    });
+  });
+
+  const sent = await withStderr(() => sendWebhook(server.url, {
+    type: 'down',
+    url: 'https://kunde.dk/',
+    message: 'is DOWN — HTTP 500',
+    measuredAt: '2026-09-26T20:28:17.000Z',
+  }, { retryDelayMs: 0 }));
+  await server.close();
+
+  assert.equal(sent, true, 'genprøvningen skal redde alarmen');
+  assert.equal(attempts, 2, 'præcis ét genprøvningsforsøg — ikke en storm mod en kasse der er nede');
+  // The same body, twice. A retry that reworded or re-timestamped the alert
+  // would make a channel show two different stories about one outage.
+  assert.deepEqual(received[1], received[0]);
+  assert.equal(received[0].type, 'down');
+});
+
+test('et svar der ikke er en midlertidig fejl spørges aldrig igen', async () => {
+  for (const status of [400, 401, 403, 404, 410, 422]) {
+    let attempts = 0;
+    const server = await serve((req, res) => { attempts += 1; res.writeHead(status).end('nope'); });
+    const sent = await withStderr(() => sendWebhook(server.url, { type: 'up', url: 'https://yoursite.com', message: 'is up' }, { retryDelayMs: 0 }));
+    await server.close();
+
+    assert.equal(sent, false);
+    assert.equal(attempts, 1, `en ${status} er et svar fra modtageren, ikke en fejl i os — den skal ikke genprøves`);
+  }
+});
+
+test('en 429 er modtageren der beder om tid, så den genprøves', async () => {
+  let attempts = 0;
+  const server = await serve((req, res) => {
+    attempts += 1;
+    if (attempts === 1) return res.writeHead(429).end('slow down');
+    res.writeHead(200).end('ok');
+  });
+  const sent = await withStderr(() => sendWebhook(server.url, { type: 'up', url: 'https://yoursite.com', message: 'is up' }, { retryDelayMs: 0 }));
+  await server.close();
+
+  assert.equal(sent, true);
+  assert.equal(attempts, 2);
+});
+
+test('en modtager der nægter svar stopper efter WEBHOOK_ATTEMPTS, aldrig flere', async () => {
+  let attempts = 0;
+  const server = await serve((req, res) => { attempts += 1; res.writeHead(503).end('nope'); });
+  const sent = await withStderr(() => sendWebhook(server.url, { type: 'up', url: 'https://yoursite.com', message: 'is up' }, { retryDelayMs: 0 }));
+  await server.close();
+
+  assert.equal(sent, false);
+  assert.equal(attempts, WEBHOOK_ATTEMPTS, 'grænsen skal være en egen konstant, ikke et tilfældigt tal');
+});
+
+/**
+ * The bound that keeps the fix from becoming a new bug: every attempt shares the
+ * one timeout, so three attempts can never hold the watch loop for three times
+ * as long. A Pro loop's shortest interval is 30 s.
+ */
+test('alle forsøg deler ét timeout-budget, så loopet ikke bliver langsomt', async () => {
+  const sockets = [];
+  let attempts = 0;
+  const server = await serve((req) => { attempts += 1; sockets.push(req.socket); });
+  const started = Date.now();
+  const sent = await withStderr(() => sendWebhook(server.url, { type: 'up', url: 'https://yoursite.com', message: 'is up' }, { timeoutMs: 200 }));
+  const elapsed = Date.now() - started;
+  for (const socket of sockets) socket.destroy();
+  await server.close();
+
+  assert.equal(sent, false);
+  assert.equal(attempts, 1, 'en pause der spiser hele budgetet giver intet at genprøve med');
+  assert.ok(elapsed < 1500, `et hangende endpoint må ikke holde loopet længere end sit eget budget (${elapsed}ms)`);
+});
+
+/**
+ * The same budget, from the other side: the first attempt gives up *early*, so
+ * there is time left in the budget — and that is exactly when a per-attempt
+ * timeout that ignored the remainder would hand the retry a second full budget.
+ * One slow answer would then cost the loop two budgets instead of one.
+ */
+test('en genprøvning efter et tidligt svar får kun resten af budgettet', async () => {
+  const sockets = [];
+  let attempts = 0;
+  const server = await serve((req, res) => {
+    attempts += 1;
+    if (attempts === 1) return setTimeout(() => res.writeHead(500).end('nope'), 300);
+    sockets.push(req.socket);
+  });
+  const started = Date.now();
+  const sent = await withStderr(() => sendWebhook(server.url, { type: 'up', url: 'https://yoursite.com', message: 'is up' }, { timeoutMs: 1000, retryDelayMs: 0 }));
+  const elapsed = Date.now() - started;
+  for (const socket of sockets) socket.destroy();
+  await server.close();
+
+  assert.equal(sent, false);
+  assert.equal(attempts, 2, 'budgetet er brugt op efter den anden, så der skal ikke være en tredje');
+  assert.ok(elapsed < 1200, `to forsøg må ikke få to budgetter (${elapsed}ms for et budget på 1000ms)`);
+});
+
+test('en advarsel om en tabt levering siger at beskeden ikke sendes igen', async () => {
+  const server = await serve((req, res) => res.writeHead(500).end('nope'));
+  const lines = [];
+  const original = console.error;
+  console.error = (...args) => lines.push(args.join(' '));
+  try {
+    await sendWebhook(server.url, { type: 'down', url: 'https://kunde.dk/', message: 'is DOWN' }, { retryDelayMs: 0 });
+  } finally {
+    console.error = original;
+    await server.close();
+  }
+
+  const warning = lines.join('\n');
+  assert.match(warning, /not delivered/, 'en tabt levering skal hedde tabt, ikke lyde som om intet skete');
+  assert.match(warning, /500/, 'grunden skal stå i advarslen');
+  assert.match(warning, new RegExp(`${WEBHOOK_ATTEMPTS} attempts`), 'antal forsøg skal stå i advarslen');
+  assert.match(warning, /resends|Nothing resends it/, 'kunden skal vide at ingen sender beskeden igen — det er den fælde målingen fandt');
+});
+
+/**
+ * The measured journey, end to end through the real loop: two passes, a site
+ * that is down in both, and a receiver that answers the first POST wrong. The
+ * second pass is where the alert used to die — it raises no event of its own, so
+ * the delivery belongs to the first one.
+ */
+test('to pass med ét blip: den anden pass skal ikke sende, den første skal', async () => {
+  const state = { urls: { 'http://kunde.dk/': { wasUp: true, lastChecked: '2026-09-26T20:00:00.000Z', lastStatus: 200 } } };
+  const delivered = [];
+  let attempts = 0;
+  const server = await serve((req, res) => {
+    let body = '';
+    req.on('data', chunk => { body += chunk; });
+    req.on('end', () => {
+      attempts += 1;
+      if (attempts === 1) return res.writeHead(500).end('try later');
+      delivered.push(JSON.parse(body));
+      res.writeHead(200).end('ok');
+    });
+  });
+
+  const down = { timestamp: '2026-09-26T20:28:17.000Z', statusCode: 500, responseTimeMs: 4, healthy: false, error: 'HTTP 500' };
+  const pass1 = await runPass(state, { check: async () => down });
+  for (const event of pass1.filter(e => e.type !== 'baseline')) {
+    await withStderr(() => sendWebhook(server.url, event, { retryDelayMs: 0 }));
+  }
+  const pass2 = await runPass(state, { check: async () => down });
+  for (const event of pass2.filter(e => e.type !== 'baseline')) {
+    await withStderr(() => sendWebhook(server.url, event, { retryDelayMs: 0 }));
+  }
+  await server.close();
+
+  assert.equal(delivered.length, 1, 'ét nedbrud skal give præcis én besked i kanalen, ikke to og ikke nul');
+  assert.equal(delivered[0].type, 'down');
+  assert.deepEqual(pass2, [], 'den anden pass skal ikke rejse en ny begivenhed for et nedbrud der allerede er meldt');
 });
 
 /**

@@ -89,14 +89,127 @@ giver exit 2, så et cron-job kan ikke overse det. Den grænse til den anden sid
 er dokumenteret ovenfor: nøglen bliver liggende i `state.json`, indtil en
 menneske retter eller fjerner den.
 
+## Status fra denne iteration (57, P1-41 — ét blip i modtageren kostede alarmen)
+
+**Hvorfor denne flade:** ❓ 1–3 er stadig ubesvarede, så iterationen målte den
+**betalte** kanal — den eneste flad, der endnu ikke var målt på spørgsmålet
+"hvad sker der, når leveringen ikke virker". P1-50 målte *hvilken* payload der
+kommer ud, P1-39 målte en disk der ikke kan skrives. Ingen målte den fejl, der
+ligger imellem: en modtager der **svarer en enkelt gang forkert**.
+
+**Målt først, nul kode ændret.** Rigtig `watch`-loop (`node src/cli.js watch …`)
+mod et lokalt site der svarer 500, rigtig state-fil med sitet op i går (så passet
+rejser `down`), Pro fra `passthrough`-stubben (aldrig et kald til mahope.tools) og
+en rigtig modtager, der svarer **500 på det første POST** og 200 bagefter:
+
+```
+[20:28] 🚨 http://127.0.0.1:59980/ is DOWN — HTTP 500
+⚠️  Webhook responded 500
+[20:28] · http://127.0.0.1:59980/ remains DOWN — HTTP 500      ← 30 s senere
+
+Hvad kundens kanal fik:   blipped 500  type=down      … og ingenting mere
+```
+
+**Fundet.** Ét `5xx` og alarmen var væk for altid. Passet skriver
+`entry.wasUp = false`, så næste pass **rejser ingen begivenhed**, og
+`sendWebhook` fyrer kun fra begivenheder — intet i loopen sender den igen. En
+betalt kunde sad altså med en kanal, der var sat op *fordi* ingen sidder ved
+terminalen, og den hørte om nedbruddet **intet**; da sitet kom op igen fik den
+`✅ is UP` `transition: observed` for en genopretning den aldrig blev fortalt om.
+Terminalen gentager `remains DOWN` hvert pass, så den med en terminal ser det —
+det er præcis dem `--webhook` er til for, der ikke gør.
+
+**Rettelsen er samme regel som licensklienten allerede bruger (P2-1 del B):**
+`sendWebhook` er delt i ét forsøg ad gangen i en løkke over
+`WEBHOOK_ATTEMPTS = 3` med `WEBHOOK_RETRY_DELAY_MS = 500` pause imellem.
+`webhookRetryable()` er den ene ejer af "er det værd at spørge igen": `5xx` og
+`429` er modtagerens egen forbigående fejl, **alle andre ikke-2xx er et svar** —
+død token, forkert URL, et payload den afviser — og spørges aldrig igen, så en
+miskonfigureret webhook fejler i millisekunder i stedet for tre gange. Kroppen
+bygges én gang, så en genprøvning sender **samme** alert: `timestamp` siger stadig
+hvornår beskeden blev rejst, ikke hvornår det sidste forsøg kørte.
+
+**Prisen, og hvorfor den er betalt.** Alle forsøg deler **ét** timeout-budget
+(10 s), som det første forsøg får og en genprøvning kun får resten af. Tre 10-s-forsøg
+ville holde loopet i 30 s — længere end det korteste interval en Pro-loop må bruge
+(30 s) — så et hangende endpoint koster præcis, hvad det altid har kostet, og et
+blip koster én ekstra tur. Modvægten: en genprøvning efter en `5xx` kan give
+**dobbeltlevering**, hvis modtageren behandlede den første og så svarede forkert.
+Det er den normale pris for at genprøve, og den er valgt bevidst: en tabt alarm om
+et nedbrud er værre end to af samme alarm. Den står i `docs/pro-alerts.md` §2, så
+den er en del af kontrakten en adapter skrives imod, ikke en skjult egenskab.
+
+**Advarslen siger også, hvad der sker nu.** En alarm der *ikke* kom af sted efter
+tre forsøg skriver `⚠️  Webhook alert not delivered — the receiver responded 500
+(3 attempts).` + `Nothing resends it: this pass already recorded the change. Check
+this terminal for what was missed.` — altså den lyder ikke som om intet skete, og
+den siger at intet sender den igen. Det er den halvdel af fejlen, der ikke kan
+rettes med en genprøvning.
+
+**Målt efter, samme kørsels opsætning, nul ændringer i målingen:**
+
+```
+[20:33] 🚨 http://127.0.0.1:62864/ is DOWN — HTTP 500          ← ingen advarsel
+[20:33] · http://127.0.0.1:62864/ remains DOWN — HTTP 500
+
+Hvad kundens kanal fik:   blipped 500  type=down
+                          delivered    type=down  is DOWN — HTTP 500
+```
+
+**Otte nye tests i `test/webhook.test.js`**, bl.a. den målte kunderejse (to rigtige
+passer gennem `runPass`, ét blip ⇒ præcis **én** besked i kanalen, og den anden
+pass rejser *ingen* ny begivenhed — den fald, målingen lå), de seks `4xx`-koder
+der hverken må genprøves, `429` der må, `WEBHOOK_ATTEMPTS` som grænse, og **to**
+tests på det delte budget. **Seks mutationer målt, alle døde:** intet
+genprøvningsforsøg (5 fejl), `4xx` genprøvet (1), genprøvning uden tid tilbage
+(1), ubestemt antal forsøg (2), advarslen uden konsekvensen (1), hvert forsøg med
+sit eget budget (1) → **382/382** (374 + 8); audit 0/0; `node --check` alle
+JS-filer, `matrix --check`, `sh -n`/`bash -n` og `git diff --check` grønne på
+Node 26.7.0. Ingen payload-felt tilføjet eller fjernet, ingen matrix-række, ingen
+ny claim, ingen exit-kode ændret, ingen deploy-note nødvendig. Diffen er ~280
+linjer; ingen review-agent over tidgrænsen.
+
+**To ting fra målingen, der skal med videre.**
+
+1. **En fejl i min egen måling, noteret (fjerde gang):** jeg kørte
+   mutationerne med `git checkout src/watch.js` som gendannelse. Første
+   mutation anvendte ikke det mønster jeg søgte på, så filen var *uændret* —
+   og alle fem mutationer kom ud som "0 fejl". De døde altså ikke, de var
+   vished. Samme fælde som P1-19 og P1-38: en grøn mutationstest kan være
+   vished, ikke dækning. Rettet ved at tage en kopi af den gode fil og
+   **verificere at mutationen faktisk ændrede filen** (`diff -q`) før testen
+   kørte; først da døde de. Den sjette mutation (M6) overlevede det og afslørede
+   en *manglende test* — at hvert forsøg fik hele budgettet i stedet for resten —
+   som så blev skrevet. Samme kørsel ødelagde desuden det ucommittede
+   `src/watch.js` (gendannelsen skrev den rene fil), som blev skrevet igen fra
+   målingen og de to bevidste diffs.
+2. **Gatens grønhed afhænger af hvilken `node` der ligger først i PATH.** Denne
+   maskines `node` er **v22.23.2** (`/opt/homebrew/opt/node@22/bin/node`), mens
+   `engines` kræver `>=24` og `.nvmrc` siger 24. Kører man `npm test` med
+   standard-PATH bliver **20 tests røde** (`install.sh` ×7 og Action-scriptet
+   ×13) med `::error::Node.js 24+ is required` — de fejler på *miljøet*, ikke på
+   koden, og de fejlede også på en ren `main`. Den rigtige kørsel er
+   `PATH="/opt/homebrew/bin:$PATH" npm test` (`/opt/homebrew/bin/node` er
+   **v26.7.0**). **Ingen kode er ændret for det** — det er en maskinfakt, Mads
+   bør rette PATH på denne maskine, og hvis den betyder noget for
+   byggeserveren, bør `.nvmrc` og `engines` revurderes sammen.
+
+**Det der ikke er bygget, og bør være næste opgave hvis den prioriteres:** en
+modtager der er nede gennem hele budgettet mister stadig den alarm, fordi der
+intet sender den igen. Den fælde er en **outbox**: et gemt, afgrænset antal
+udleveringsforsøg der overlever til næste pass, med alder, dedupe og en
+redaktionsregel for den gemte besked. Det er en reel funktion med en spec først
+(kapacitet, hvornår en alarm opgives, hvad kunden ser mens den venter) — ikke en
+linje i `sendWebhook` — og den er bevidst *ikke* bygget i denne iteration, fordi
+den krævede mere tid end den havde, og fordi den rører den betalte kontrakt.
+
 STATUS: I GANG
-Iteration: 56 — 2026-09-26
-Arbejdsgrene: `ceo/skip-unusable-urls` (P1-40, målt + fix — besvarer ❓ 13)
-Næste handling: **P1-40 er færdig.** ❓ 13 er besvaret i kode med planens egen
-anbefaling, (c) + (b); hvis Mads vil have (a) — at passet *fejler* — er det en
-linje i `runPass` plus exit-koden, og målingen til den ligger ovenfor. Næste
-opgave: ❓ 1–3 hvis besvaret, ellers en ny målt opgave på en flad der endnu ikke
-er målt på de samme tal-spørgsmål.
+Iteration: 57 — 2026-09-26
+Arbejdsgrene: `ceo/webhook-retry` (P1-41, målt + fix)
+Næste handling: **P1-41 er færdig.** Næste opgave: outbox til betalte
+webhook-alarmer (spec først — se afsnittet ovenfor), ellers ❓ 1–3 hvis besvaret,
+ellers en ny målt opgave på en flad der endnu ikke er målt på de samme
+tal-spørgsmål.
 
 ## Status fra denne iteration (55, P1-39)
 
@@ -2359,9 +2472,43 @@ nævnt i output hver pass; 3) `watch --status` og `report` har en linje om den;
 for en kørsel hvor alle nøgler er gyldige; 6) mutationer målt.
 
 
+### P1-41 — FÆRDIG 2026-09-26 (`ceo/webhook-retry`) — Ét blip i modtageren kostede alarmen
+
+**Hvad:** `sendWebhook` POSTede hver begivenhed én gang. Ét `5xx` fra kundens
+Slack/Discord og alarmen var væk for altid, fordi passet allerede havde skrevet
+`wasUp: false` — næste pass rejser ingen begivenhed, og intet i loopen sender den
+igen. Målt med den rigtige loop, et rigtigt nedet site og en rigtig modtager.
+
+**Rettelse:** op til 3 forsøg pr. alarm i **ét** delt 10-s-budget, kun på
+`5xx`/`429`/netværksfejl; et `4xx` er modtagerens svar og spørges aldrig igen.
+Kroppen bygges én gang, så en genprøvning sender samme alert. En tabt levering
+siger nu at intet sender den igen. `docs/pro-alerts.md` §2 er skrevet om,
+dobbeltleverings-prisen er dokumenteret.
+
+**Acceptkriterier, alle målte:**
+1. Ét blip ⇒ kunden får `down` præcis én gang. ✅ målt før (0) og efter (1)
+2. `4xx` (6 koder) giver præcis ét forsøg. ✅
+3. `429` genprøves. ✅
+4. Ét budget: et hangende endpoint koster 200 ms med `timeoutMs: 200`, og to forsøg
+   efter et tidligt svar får ét budget, ikke to. ✅
+5. Advarslen siger "not delivered", grunden, antal forsøg og at intet sender den
+   igen. ✅
+6. Payload uændret: ingen felt tilføjet eller fjernet, `timestamp` uændret
+   betydning. ✅ den eksisterende kontrakt-test mod specen passerer uhændlet
+7. 8 nye tests + 6 målte mutationer (5/1/1/2/1/1 fejl) dør alle på den muterede
+   kode. ✅
+
+**Ikke byggt, bevidst:** en outbox, der overlever til næste pass, så en modtager
+der er nede gennem hele budgettet heller ikke mister alarmen. Kræver en spec
+først (kapacitet, alder, dedupe, hvad kunden ser mens den venter) — den næste
+målte opgave i køen, ikke en linje i `sendWebhook`.
+
+
 ## ❓ Til Mads
 
 13. ~~Hvad skal et site, vi ikke kan tjekke, gøre ved et pass?~~ **Besvaret i kode 2026-09-26 (P1-40, `ceo/skip-unusable-urls`):** (c) + (b), planens egen anbefaling. En nøgle i `state.json` uden scheme springes over, de øvrige sites fortsætter, nøglen nævnes på hvert pass og på `watch --status`, `status` og i rapporten, og exit 2 beholdes **kun** når intet kunne tjekkes. Målt først: ét `kunde.dk` blandt 25 nøgler dræbte passet med exit 1 og nul tjek. **Valget er ikke gratis, og en nøgle uden adresse er aldrig et nedet site** — den grænse til det andet svar ((a): passet fejler) er én linje i `runPass` plus exit-koden, hvis Mads vil have den. Målingen og koden ligger i afsnittet øverst.
+
+- **Release-note P1-41:** Ét forkert svar fra din Slack-kanal kunne **tage en alarm om et nedbrud for altid**. Før blev hver hændelse sendt én gang, så et `5xx` — en genstartende proxy, en ratelimiter, en tabt forbindelse — var nok til at miste den: passet havde allerede noteret ændringen, så næste pass rejste ingen ny begivenhed, og intet i loopen sender den igen. Din kanal så intet om nedbruddet, og da sitet kom op fik den en `is UP`-besked for en genopretning den aldrig blev fortalt om. Nu prøves op til 3 gange, på **midlertidige** fejl (5xx, 429, netværksfejl) — men kun inden for det **samme 10-sekunders budget**, så overvågningen aldrig bliver langsommere, og et `4xx` (død token, forkert URL) spørges aldrig igen. **Prisen er åben:** en genprøvning efter et `5xx` kan give dobbeltlevering, hvis modtageren behandlede den første og så svarede forkert. En tabt alarm er værre end to af samme alarm, så valget er bevidst. Kan en alarm stadig gå tabt: ja — hvis modtageren er nede gennem hele budgettet, siger advarslen nu det og at intet sender den igen. **Ingen payload-felt er ændret**, så en eksisterende adapter er uberørt.
 
 - **Release-note P1-39:** En fuld disk, en skrivebeskyttet mappe eller en kvote kunne **slå overvågningen ihjel og tage alarmerne med**. Målt med rigtig CLI, rigtig webhook-modtager og et `~/.deskuptime` der ikke kan skrives: overvågningen døde med en rå Node-stacktrace, exit 1, og modtageren fik **nul beskeder** selv om et overvåget site svarede 500 — og det skete *før* nogen site blev tjekket, fordi licensen skrives, når loopen starter. Samme måling efter rettelsen: loopt kører videre, du får `🚨 … is DOWN — HTTP 500` i terminalen og beskeden i din Slack/Discord/Teams-kanal, og du får én advarsel der navngiver filen og grunden: `Could not write the monitoring state — ENOSPC — ~/.deskuptime/state.json. Nothing is remembered while this lasts: check free disk space and that the file and its folder are writable.` **Overvågning og alarmer er altså ikke længere afhængige af, at vi kan gemme noget** — det er kun de tal, der går tabt: passets uptime-tællere og dets dag i rapporten, indtil filen igen kan skrives. Og `deskuptime watch --once`, kommandoen cron kører, siger nu det samme i stedet for en stacktrace der peger på en låsefil. **Mærk:** kan vi ikke gemme et gemt verdict, ved loopen ikke at et nedet site allerede er meldt, så efter en genstart kan det meldes én gang til. Vi vælger dobbelt melding over stilhed om et nedbrud. Exit-koder for en sund kørsel, matrix-rækker og al JSON er uændrede.
 
@@ -2413,6 +2560,8 @@ for en kørsel hvor alle nøgler er gyldige; 6) mutationer målt.
 - Merge til `main` deployer ikke; npm, GitHub Releases og Homebrew må kun publiceres af Mads via de eksisterende tag-workflows.
 
 - **Iteration 56 (P1-40, målt + fix — besvarer ❓ 13):** ❓ 1–3 stadig ubesvarede, så iterationen besvarede ❓ 13 — det eneste målte fund i køen med et åbent valg — med planens egen anbefaling (c) + (b). Målt først med rigtig CLI, rigtig state-fil, to lokale fixtures (200/500) og temp-HOME, nul kode ændret: `TypeError: Invalid URL: kunde.dk` fra `assertValidHttpUrls` i `runPass` **før første request**, exit 1, nul sites tjekket, på cron-vejen. Efter: exit 2, 1 hændelse for det nedede site, 0 for nøglen, advarslen på stderr hvert pass, loopen starter. **Målingen fandt to fejl, den alene kunne finde:** `[].every()` er sand, så et pass over kun ubrugelige nøgler rapporterede sig grønt (exit 0 for en pass der målte ingenting); og en nøgle med `wasUp: true` stod som `✅ up` i begge lister og som `UP` i kundenrapporten — en påstand i et kundedokument bygget på et tal ingen kan måle. Rettet i `readEntry`, den ene ejer: ukendt med grunden, og rapporten tæller den uden for sites. `partitionUsableUrls()` i `src/status.js` er den ene ejer af "hvad kan tjekkes" (præcis `invalidHttpUrls()` i modsat retning, så intet kan være dødeligt her og gyldigt der); `unusableUrlNote()` ejer sætningen med kort og lang form; `assertValidHttpUrls()` står kun, hvor *calleren* har skylden og kan fortales det (`check`, argv på `watch`/`unwatch`). **To følger, også produktrettelser:** `monitoredCount()` — en ubrugelig nøgle tog en af de tre gratis-pladser, så vejen til den igen var at håndredigere `state.json` med licensnøglen i; og `unwatch` afviste sin egen henstilling (`Invalid URL` på `kunde.dk`), så kommandoen afviser nu kun en skrivefejl der ikke står i filen. **To låse udvidet, ikke slækket** (ottende gang): `report.test.js`'e "duplicated verdict owner" søgte på `verdict: verdictFor(value.wasUp)` → kræver nu værtern *og* delegeringen; `display.test.js`'e "cannot repaint the URL list" tællede linjer med en NEL-nøgle → det den egentlig vogtede (intet linjeskift fra filen) hævdes nu direkte. **Én fejl i min egen måling:** jeg målte `unwatch 'kunde.dk'` efter to state-skrivninger, der havde skrevet nøglen væk, så kommandoen svarede korrekt `Invalid URL` — målingen var forkert, ikke koden. 9 nye tests i `test/uncheckable.test.js` (lagt til i `npm test`) + 5 målte mutationer (4/1/1/1/2 fejl) → **374/374** (365 + 9); audit 0/0; `node --check`, `matrix --check`, `git diff --check` grønne på Node 26.7.0. Ingen exit-kode for gyldige nøgler ændret (målt med og uden), ingen matrix-række, ingen ny claim, ingen deploy-note nødvendig. **Næste:** ❓ 1–3 hvis besvaret, ellers en ny målt opgave.
+
+- **Iteration 57 (P1-41, målt + fix):** ❓ 1–3 ubesvarede, så målingen gik på den **betalte** kanals spørgsmål — hvad der sker, når *leveringen* ikke virker. P1-50 målte hvilken payload der kommer ud, P1-39 målte en disk der ikke kan skrives; ingen målte det imellem. Målt først med rigtig `watch`-loop, rigtig state-fil, et lokalt site der svarer 500, Pro fra `passthrough`-stubben (aldrig et kald til mahope.tools) og en rigtig modtager der svarer 500 på det første POST: `is DOWN — HTTP 500` i terminalen, `Webhook responded 500`, og **intet** i kanalen — heller ikke 30 s senere, fordi næste pass ikke rejser nogen begivenhed, når `entry.wasUp` er skrevet. En betalt kunde hørte altså intet om et nedbrud og fik så en `is UP` for en genopretning den aldrig blev fortalt om. **Fix:** samme regel som licensklienten (P2-1 del B) — `WEBHOOK_ATTEMPTS = 3`, 500 ms pause, `webhookRetryable()` som den ene ejer (kun `5xx`/`429`; et `4xx` er modtagerens *svar* og spørges aldrig igen), kroppen bygget én gang så en genprøvning sender samme alert, og **alle forsøg deler ét 10-s-budget** (tre 10-s-forsøg ville holde loopet længere end det korteste Pro-interval). Dobbeltleverings-prisen er dokumenteret i `docs/pro-alerts.md` §2. Målt efter: blip → `delivered type=down is DOWN — HTTP 500`, ingen advarsel. 8 nye tests (den målte kunderejse med to rigtige passer: én blip giver præcis én besked, og den anden pass rejser ingen begivenhed) → **382/382** (374 + 8); audit 0/0; `node --check`, `matrix --check`, `sh -n`/`bash -n`, `git diff --check` grønne på Node 26.7.0. **Seks mutationer målt, alle døde** (5/1/1/2/1/1 fejl) — men først efter at målingen blev rettet: min mutationskørsel brugte `git checkout` som gendannelse, fem mutationer ændrede slet ikke filen og kom ud som "0 fejl" (vished, ikke dækning — fjerde gang i mit arbejde), og samme kørsel ødelagde det ucommittede `src/watch.js`, som blev skrevet igen. Den sjette mutation overlevede det korrekt og afslørede en manglende test (hvert forsøg med sit eget budget), som blev skrevet. **Maskinfakt der gør gaten rød uden grund:** standard-`node` på denne maskine er v22.23.2, så 20 tests (install.sh ×7, Action ×13) fejler med `::error::Node.js 24+ is required` — også på ren `main`; rigtig kørsel er `PATH="/opt/homebrew/bin:$PATH" npm test` (v26.7.0). Ingen kode ændret for det. **Ikke bygget:** en outbox til næste pass — kræver spec først, noteret som næste målte opgave.
 
 ## Iterationslog
 
