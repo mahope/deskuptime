@@ -179,7 +179,12 @@ test('a real receiver that was down gets the alert when it answers, with the pas
   const errors = [];
   const realError = console.error;
   console.error = (...args) => errors.push(args.join(' '));
-  const delivered = await sendWebhook(hook, DOWN_EVENT, { timeoutMs: 900, retryDelayMs: 20, kept: true });
+  // A budget the three fast local attempts always fit inside. The assertion
+  // below is about the *attempts*, not about wall-clock: with a 900 ms budget
+  // this test failed on a loaded machine (`2 !== 3`) because the third attempt
+  // fell outside the budget — correct behaviour, wrong question. The budget
+  // stays the budget, so the other tests still hold it to that.
+  const delivered = await sendWebhook(hook, DOWN_EVENT, { timeoutMs: 5000, retryDelayMs: 20, kept: true });
   console.error = realError;
   assert.equal(delivered, false);
   assert.equal(received.length, 3, 'the three attempts inside the budget');

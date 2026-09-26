@@ -2946,7 +2946,124 @@ begge lister viser nøglen renset.
 `git diff --check` grønne på Node 26.7.0. `00a00d1` på `ceo/credential-url`,
 fast-forward-merget til `main` og pushet 2026-09-26.
 
+## Status fra denne iteration (62, P1-46 — ét site, to nøgler, to rækker i kundedokumentet)
+
+**Hvorfor denne flade:** ❓ 1–3 er stadig ubesvarede, så iterationen tog den
+femte valgfri kandidat fra rækken: **de to former den samme adresse kan skrives
+i.** P1-40 målte nøgler uden adresse, P1-45 nøgler med adgangskode i; ingen
+målte den stille, helt almindelige dobbelt.
+
+**Målt først, nul kode ændret.** Rigtig CLI, temp-HOME, lokalt site der svarer
+200 og en rigtig Pro-licens i staten (for at få den rigtige kundenrapport):
+
+```
+watch http://127.0.0.1:49371    →  • … baseline recorded: UP (200)
+watch http://127.0.0.1:49371/   →  • … baseline recorded: UP (200)   ← samme site
+state.json                      →  [ …49371, …49371/ ]
+status                          →  Monitored URLs (2)
+report                          →  | http://127.0.0.1:49371  | UP (200) | 100% (2 checks) |
+                                   | http://127.0.0.1:49371/ | UP (200) | 100% (1 checks) |
+                                   **2 site(s) · 2 up · 0 down · 3 checks · 0 failed**
+unwatch http://127.0.0.1:49371/ →  ❌ Error: not monitored
+```
+
+Fire skader, én årsag: der var ingen beslutning om, hvornår to nøgler er det
+samme site. Skråstregen er ikke en vilje, den er **den form adresselinjen
+viser** — altså den form brugeren kopierer ind — så dobbelten er ikke en
+typo, den er den normale vej. Den tog en af de tre gratis-pladser, så en kunde
+med to sites ikke kunne få sin tredje; den blev kaldt igen på hvert pass; den
+fik sin egen række med sine egne tal i det dokument et bureau sender videre,
+under en opsummering der tæller ét site to gange; og den eneste dokumenterede
+vej til at fjerne den svarede "not monitored", hvilket sendte brugeren ud i
+håndredigering af filen med licensnøglen i — P1-40's og P1-45's døde ve.
+
+**Efter, samme måling:** `⚠️  Already monitoring this site as
+http://127.0.0.1:49371 — http://127.0.0.1:49371/ not added.`, én nøgle, ét
+`Monitored URLs (1)`, og `unwatch http://127.0.0.1:49371/` svarer
+`✅ No longer monitoring: http://127.0.0.1:49371`.
+
+**Én ny ejer, tre brugere.** `urlIdentity()` i `src/status.js` er den ene
+form to adresser sammenlignes i, bygget på `new URL()` — parseren
+`isHttpUrl()` allerede bruger, så den kan ikke være uenig med valideringen.
+`sameUrl()` er spørgsmålet, `findUrlKey()` er svaret med eksakt-match først.
+`addMonitoredUrls()` lægger ikke den samme site ind to gange,
+`monitoredCount()` tæller den én gang, `unwatchUrls()` finder den nøgle
+brugeren mener. **Ingen gemte nøgler er rørt:** filen beholder præcis den tekst
+brugeren skrev, så et kunden-dokuments Site-kolonne og en eksisterende
+historiknøgle er uændrede.
+
+**To grænser målt, ikke antaget.** 1) `/a` og `/a/` er **ikke** det samme —
+skråstregen fylder kun en *tom* sti ud, så to rigtige sider kan ikke blive
+slået sammen; målt med tre nøgler (`/a`, `/a/`, `/a?x=1`) der alle overlever.
+2) En nøgle der ikke er en adresse (`kunde.dk`) er stadig sig selv, så
+P1-40s klasse er urørt — to ubrugelige nøgler er to nøgler, fordi ingen af dem
+kan måles og begge skal kunne fjernes ved navn.
+
+**Åbent og bevidst:** en fil der *allerede* indeholder begge former (skrevet
+før denne rettelse, eller håndredigeret) viser begge rækker i rapporten, for
+det er filen der er sandheden, og en stille omskrivning af brugerens egen liste
+ville være en værre løgn end at lade den ligge. Den er nu **reparabel uden hånd
+på filen**: `findUrlKey()` giver et eksakt nøgle-match prioritet, så én
+`unwatch` fjerner én halvdel og den anden står som den eneste tilbage, og så
+er den væk med den næste. Målt begge veje.
+
+**10 nye tests i `test/onesite.test.js`** (registreret i `npm test` — samme
+fælde som P1-10) → **421/421** (411 + 10); audit 0/0; `node --check` alle
+JS-filer, `matrix --check` og `git diff --check` grønne på Node 26.7.0.
+Hver CLI-test kører den rigtige binær mod et rigtigt lokalt site. **Fem
+mutationer målt, alle døde** (5/1/1/2/1 fejl): `urlIdentity` uden
+normalisering, `findUrlKey` uden eksakt-match først, `monitoredCount` uden
+tælling pr. identitet, `addMonitoredUrls` uden duplikattjek, `unwatchUrls` med
+eksakt nøgle. **Ingen exit-kode ændret for en eksisterende kommando** (den
+præcis samme streng er stadig stille, som før), intet nyt JSON-felt, ingen
+matrix-række, ingen claim, ingen deploy-note nødvendig. `ceo/one-site-one-slot`,
+`8531c27`, fast-forward-merget til `main` og pushet 2026-09-26. Ingen
+review-agent — over 30-minutters grænse.
+
+**Næste:** ❓ 1–3, ellers en målt opgave.
+
+### P1-46 — FÆRDIG 2026-09-26 (`ceo/one-site-one-slot`) — Ét site skal ikke tage to af de tre gratis-pladser
+
+**Begrundelse (målt, ikke formodet):** `watch https://kunde.dk` og
+`watch https://kunde.dk/` blev gemt som to nøgler. Samme site, to rækker med
+hver sit tal i kundenrapporten, to af de tre gratis-pladser brugt på ét
+kundesite, to requests pr. pass, og `unwatch` med den form adresselinjen
+viser svarede "not monitored".
+
+**Root cause:** ingen beslutning om, hvornår to gemte nøgler er det samme
+site. `addMonitoredUrls()` testede `state.urls[url]` med streng lighed,
+`monitoredCount()` talte nøgler, `unwatchUrls()` slettede kun den præcise
+nøgle — tre steder med tre forskellige svar på det samme spørgsmål.
+
+**Fix:** `urlIdentity()` / `sameUrl()` / `findUrlKey()` i `src/status.js` er
+den ene beslutning, bygget på `new URL()`. De tre brugere spørger den i stedet
+for selv. Ingen gemt nøgle er omskrevet, ingen eksisterende adgangsd tilstand
+ændret.
+
+**Acceptkriterier:**
+
+1. `watch <url>` og `watch <url>/` giver én nøgle, én række i begge lister.
+   ✅ målt før (2 nøgler, `Monitored URLs (2)`) og efter
+2. Duplikatet siger det og navngiver den nøgle, det ligger under, så brugeren
+   ved hvilken form `unwatch` vil kræve. ✅ målt
+3. En kunde med to sites kan stadig få sin tredje, og den fjerde er stadig
+   den der afvises på gratisniveauet. ✅ målt med rigtig CLI
+4. `unwatch` med adresselinjens form fjerner nøglen. ✅ målt før
+   (`not monitored`) og efter
+5. `/a`, `/a/` og `/a?x=1` er tre sites, ikke én. ✅ målt — en sti, en query
+   og en port er en del af adressen
+6. P1-40s klasse urørt: `kunde.dk` er sig selv, og to ubrugelige nøgler er
+   to nøgler. ✅ låst i test
+7. En fil med begge former er reparabel med to `unwatch` og uden håndredigering.
+   ✅ målt
+
+**Målt:** 421/421 (411 + 10), audit 0/0, `node --check`, `matrix --check`,
+`git diff --check` grønne på Node 26.7.0. `8531c27` på
+`ceo/one-site-one-slot`, fast-forward-merget til `main` og pushet 2026-09-26.
+
 ## ❓ Til Mads
+
+- **Release-note P1-46:** Det samme site kunne tage **to af de tre gratis-pladser**, hvis du skrev det i to former. Før blev `https://kunde.dk` og `https://kunde.dk/` gemt som to nøgler — og skråstregen er ikke en tastefejl, den er **den form din browser viser i adresselinjen**, altså den du kopierer ind. Følgerne: en kunde med to sites fik `Free tier monitors 3 URLs` for sin tredje, samme site blev kaldt to gange på hvert pass, og din kundenrapport fik **to rækker om ét site med hver sit tal** under `2 site(s) · 2 up`. Værst var vejen tilbage: `deskuptime unwatch https://kunde.dk/` svarede `not monitored`, så det eneste, der virkede, var at redigere `state.json` med licensnøglen i. Nu siger den `Already monitoring this site as https://kunde.dk — https://kunde.dk/ not added.`, `unwatch` finder nøglen i begge former, og **en adresse, der kun er skrevet en gang, tæller én gang**. `/a` og `/a/` er stadig to sider, en query og en port er stadig en del af adressen, og en nøgle uden adresse er stadig sig selv. **Ingen af dine gemte adresser er ændret**, og de gamle rækker i en rapport, der indeholder begge former, forsvinder først når du `unwatch`er den ene.
 
 13. ~~Hvad skal et site, vi ikke kan tjekke, gøre ved et pass?~~ **Besvaret i kode 2026-09-26 (P1-40, `ceo/skip-unusable-urls`):** (c) + (b), planens egen anbefaling. En nøgle i `state.json` uden scheme springes over, de øvrige sites fortsætter, nøglen nævnes på hvert pass og på `watch --status`, `status` og i rapporten, og exit 2 beholdes **kun** når intet kunne tjekkes. Målt først: ét `kunde.dk` blandt 25 nøgler dræbte passet med exit 1 og nul tjek. **Valget er ikke gratis, og en nøgle uden adresse er aldrig et nedet site** — den grænse til det andet svar ((a): passet fejler) er én linje i `runPass` plus exit-koden, hvis Mads vil have den. Målingen og koden ligger i afsnittet øverst.
 
@@ -3010,6 +3127,21 @@ fast-forward-merget til `main` og pushet 2026-09-26.
 - **Iteration 57 (P1-41, målt + fix):** ❓ 1–3 ubesvarede, så målingen gik på den **betalte** kanals spørgsmål — hvad der sker, når *leveringen* ikke virker. P1-50 målte hvilken payload der kommer ud, P1-39 målte en disk der ikke kan skrives; ingen målte det imellem. Målt først med rigtig `watch`-loop, rigtig state-fil, et lokalt site der svarer 500, Pro fra `passthrough`-stubben (aldrig et kald til mahope.tools) og en rigtig modtager der svarer 500 på det første POST: `is DOWN — HTTP 500` i terminalen, `Webhook responded 500`, og **intet** i kanalen — heller ikke 30 s senere, fordi næste pass ikke rejser nogen begivenhed, når `entry.wasUp` er skrevet. En betalt kunde hørte altså intet om et nedbrud og fik så en `is UP` for en genopretning den aldrig blev fortalt om. **Fix:** samme regel som licensklienten (P2-1 del B) — `WEBHOOK_ATTEMPTS = 3`, 500 ms pause, `webhookRetryable()` som den ene ejer (kun `5xx`/`429`; et `4xx` er modtagerens *svar* og spørges aldrig igen), kroppen bygget én gang så en genprøvning sender samme alert, og **alle forsøg deler ét 10-s-budget** (tre 10-s-forsøg ville holde loopet længere end det korteste Pro-interval). Dobbeltleverings-prisen er dokumenteret i `docs/pro-alerts.md` §2. Målt efter: blip → `delivered type=down is DOWN — HTTP 500`, ingen advarsel. 8 nye tests (den målte kunderejse med to rigtige passer: én blip giver præcis én besked, og den anden pass rejser ingen begivenhed) → **382/382** (374 + 8); audit 0/0; `node --check`, `matrix --check`, `sh -n`/`bash -n`, `git diff --check` grønne på Node 26.7.0. **Seks mutationer målt, alle døde** (5/1/1/2/1/1 fejl) — men først efter at målingen blev rettet: min mutationskørsel brugte `git checkout` som gendannelse, fem mutationer ændrede slet ikke filen og kom ud som "0 fejl" (vished, ikke dækning — fjerde gang i mit arbejde), og samme kørsel ødelagde det ucommittede `src/watch.js`, som blev skrevet igen. Den sjette mutation overlevede det korrekt og afslørede en manglende test (hvert forsøg med sit eget budget), som blev skrevet. **Maskinfakt der gør gaten rød uden grund:** standard-`node` på denne maskine er v22.23.2, så 20 tests (install.sh ×7, Action ×13) fejler med `::error::Node.js 24+ is required` — også på ren `main`; rigtig kørsel er `PATH="/opt/homebrew/bin:$PATH" npm test` (v26.7.0). Ingen kode ændret for det. **Ikke bygget:** en outbox til næste pass — kræver spec først, noteret som næste målte opgave.
 
 ## Iterationslog
+
+- **Iteration 62 (P1-46, målt + fix):** ❓ 1–3 ubesvarede, så målingen gik på de to former den samme adresse kan skrives i — den femte valgfri kandidat efter P1-42/43/44/45. Rigtig CLI, temp-HOME, lokalt site der svarer 200, Pro i staten for at få den rigtige kundenrapport. Før: `watch http://…:PORT` + `watch http://…:PORT/` → to nøgler, `Monitored URLs (2)`, to rækker i rapporten med hver sit tal under `**2 site(s) · 2 up · 0 down · 3 checks**`, og `unwatch http://…:PORT/` → `❌ Error: not monitored`. **Fix:** `urlIdentity()`/`sameUrl()`/`findUrlKey()` i `src/status.js` som den ene beslutning, bygget på `new URL()` — parseren `isHttpUrl()` allerede bruger; `addMonitoredUrls()` lægger ikke samme site ind to gange (og siger hvilken nøgle den ligger under), `monitoredCount()` tæller pr. identitet, `unwatchUrls()` sletter den nøgle brugeren mener med eksakt-match prioritet. **Ingen gemt nøgle omskrevet** — brugerens egen tekst er filens sandhed, og Site-kolonnen i et kundedokument er uændret. **To grænser målt:** `/a` vs `/a/` vs `/a?x=1` er tre sites (skråstregen fylder kun en *tom* sti ud), og P1-40s `kunde.dk`-klasse er urørt, fordi en nøgle uden adresse er sig selv. 10 nye tests i ny fil `test/onesite.test.js` (lagt til i `npm test` — samme fælde som P1-10) → **421/421** (411 + 10); audit 0/0; `node --check` alle JS-filer, `matrix --check`, `git diff --check` grønne på Node 26.7.0. **Fem mutationer målt, alle døde** (5/1/1/2/1 fejl) — `urlIdentity` uden normalisering, `findUrlKey` uden eksakt-match først, `monitoredCount` uden tælling pr. identitet, `addMonitoredUrls` uden duplikattjek, `unwatchUrls` med eksakt nøgle. **Ingen exit-kode ændret for en eksisterende kommando** (den præcis samme streng er stadig stille som før), intet nyt JSON-felt, ingen matrix-række, ingen claim, ingen deploy-note nødvendig. `ceo/one-site-one-slot`, `8531c27`, fast-forward-merget til `main` og pushet 2026-09-26. **Åbent og bevidst:** en fil med begge former fra før rettelsen viser begge rækker i rapporten, men er nu reparabel med to `unwatch` og uden håndredigering. Ingen review-agent — over 30-minutters grænse.
+
+**En måling, der viste sig at være et måleproblem — rettet i testen, ikke i
+koden.** Et `npm test`-kørsel efter mutationerne gav `2 !== 3` i
+`test/outbox.test.js` — den fejl P1-45 havde noteret som "ikke genskabt". Den er
+her fundet: testen bad om **tre** forsøg inden for et budget på **900 ms**, så
+på en belastet maskine faldt det tredje forsøg uden for budgettet. Det er
+korrekt adfærd — budgettet er budgettet, og den anden test (`budgetet er brugt
+op efter den anden, så der skal ikke være en tredje`) holder den stadig fast —
+men påstanden var om uret, ikke om adfærden. Budgettet er hævet til 5 s, så de
+tre lokale forsøg altid passerer ind, og **alle tre assertions er uændrede**.
+To efterfølgende fulde kørsler: 421/421.
+
+**Næste:** ❓ 1–3, ellers en målt opgave.
 
 - **Iteration 61 (P1-45, målt + fix):** ❓ 1–3 ubesvarede, så målingen gik på den adresse-klasse ingen måling havde rørt: **en URL der er gyldig, men umulig at sende en request til** — `http://demo:pass@…`. Rigtig CLI, temp-HOME, lokalt site der svarer 200, Pro fra `passthrough`-stubben (aldrig et kald til mahope.tools). Før: loopen startede og svarede `DOWN` på hvert pass for et site der svarede 200, fordi Node's `fetch` ikke bygger en request til sådan en URL; nøglen blev skrevet til `state.json`; `report` skrev den i kundenrapportens Site-kolonne under en linje der lover intet hemmeligt i dokumentet; `check` skrev den på stdout og i `--json` med exit 2 og `DOWN`. **Fix:** `isCheckableUrl()` som den ene beslutning i `src/status.js`, så P1-40's lås (passets `unusable` == `invalidHttpUrls()` modsat) også gælder denne klasse; `urlCredentials()`/`hasUrlCredentials()` ejer grunden, `withoutCredentials()` den rensede streng, `invalidUrlMessage()` + `unusableUrlNote()` er de to sætninger og ingen af dem kan skrive en kode; kommandolinjen afviser før skrivning, et håndredigeret nøgle med kode i springes over af passet og tælles uden for sites, rapporten og begge lister viser nøglen renset mens historikken læses med den rigtige. **To fund undervejs rettet i koden:** `Monitored URLs` i `status` havde hver sin tegnplads (fandet af min egen måling, rettet ved række-ejeren), og den korte sætning låste P1-40 på `"not a full address"`, som er en løgn for `http://demo:pass@…` — nu siger den den rigtige grund for hver klasse, og alle otte gamle P1-40-tests er uændrede grønne. 8 nye tests i ny fil `test/credentials.test.js` (lagt til i `npm test` — samme fælde som P1-10) → **411/411** (403 + 8); audit 0/0; `node --check` alle JS-filer, `matrix --check`, `git diff --check` grønne på Node 26.7.0. **Ingen exit-kode ændret for en eksisterende kommando** (sådan en URL døde som DOWN før), intet nyt JSON-felt, ingen matrix-række, ingen claim, ingen deploy-note nødvendig. `ceo/credential-url`, `00a00d1`, fast-forward-merget til `main` og pushet 2026-09-26. **Noteret, ikke forskjult:** ét `npm test`-kørsel viste én fejl (`2 !== 3`) der ikke genskabtes i to efterfølgende kørsler (411/411 i to efterfølgende kørsler); ingen review-agent, over 30-minutters grænse. **Åbent:** en nøgle med kode i der kommer fra en håndredigering eller restore er renset i visningen, men filens bytes renses ikke — kun `unwatch` fjerner den.
 
