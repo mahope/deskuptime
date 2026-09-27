@@ -1,3 +1,41 @@
+## Status fra denne iteration (74, P1-58 — hele suiten, ikke bare én fil, kunne skrive til Mads' rigtige `~/.deskuptime/state.json`)
+
+**Hvorfor denne flade:** P1-57 efterlod P1-58 som det eneste konkrete fund.
+Før målingen var spørgsmålet ikke "glemmer nogen en `HOME`" — det var at
+`npm test` kørte `node --test` direkte og **suiten selv** arvede `HOME`. Tre
+målinger, ingen kode ændret:
+
+```
+canary-HOME med state.json -> LEAK: http://kunde.dk/ skrevet ind med transitionAlerts,
+                              transitions og sslExpiredWarned
+tom canary-HOME            -> suiten oprettede .deskuptime/state.json + history.json
+watch --once               -> skriver den fil den læser (målt: lastChecked 2020 -> nu)
+rigtig HOME                -> målt aldrig. Ville være den tredje ulykke.
+```
+
+**Rettelsen** er låsen i *indgangen*, ikke i 34 filer: `tools/run-tests.mjs`
+ejer fil-listen og starter hele suiten under én kast-away `HOME` (også
+`USERPROFILE`, fordi `getStateFile()` læser den først på Windows). To låse til:
+`test/isolation.test.js` gør gaten rød hvis nogen kører `node --test` i hånden,
+og runneren `stat`er den rigtige state-fil før og efter. **Målingen rettede tre
+antagelser i min egen lås** — `os.homedir()` følger `$HOME` (min første testfil
+passed mod kast-away-mappen: en lås der ikke kan fejle), `path.join()` opløser
+`..` før låsen ser det (så traversallåsen døde aldrig), og `env: {}` er
+ufarlig inde i en isoleret suite. Alle tre er forklaret på stedet i koden.
+
+**To røde tests i baselines, begge tidsbomber, begge fundet *inden* denne
+opgave:** `report.test.js`'s faste `2026-09-25T09:00Z` krydsede
+2-døgns-grænsen (rapporterede ærligt `2 stale`, testen ventede `1 stale` — den
+fejler hver dag fremover), og `contentchange.test.js` kørte rigtige passer
+(vægtklokken) mod filens faste `NOW = 09:00`, så ændringen blev stemplet 80 s i
+fremtiden og rapportens fremtids-gren tabte sidetitlen. Begge rettet.
+
+**Resultat: 528/528 grøn** (516/518 før + 10 nye), audit 0/0, `node --check`,
+`matrix --check` exit 0, `git diff --check` rent på Node 26.7.0. To mutationer
+målt, begge døde (4 fejl / 1 fejl). **Ingen produktkode rørt** — ingen exit-kode,
+matrix-række, claim eller JSON-kontrakt ændret. `~/.deskuptime` er efter alle
+kørsler stadig stemplet 09:51. Fulde noter under `P1-58`.
+
 ## Status fra denne iteration (73, P1-57 — de to gratis-lister sagde `✅ up (200)` om den hackede side)
 
 **Hvorfor denne flade:** ❓ 1–3 er stadig ubesvarede. P1-56 efterlod fire målte
@@ -4252,12 +4290,111 @@ Den betalte rapport sagde det efter P1-56; listerne sagde intet. Det er **gratis
 
 **Status 2026-09-27:** 4 nye tests i `test/contentchange.test.js` (samme fil som P1-56, allerede i `npm test`) → **518/518** (514 + 4); audit 0/0; `node --check`, `matrix --check` grønne på Node 26.7.0. **Fem mutationer målt: fire døde (5/5/7/1 fejl), den femte overlevede** og afslørede en vakuum-test (et fremtidigt stempel får sætningen til at droppe titlen) — rettet, se afsnittet øverst. **Fælden fra min egen test lukket permanent i denne fil:** `cli()` kaster hvis `HOME` ikke er et temp-mappe, efter at en destruktureringsfejl kørte `watch --once` mod den rigtige `~/.deskuptime/state.json` på Mads' maskine. Ingen matrix-række, claim, exit-kode eller payload-felt ændret; ingen deploy-note nødvendig (offentlig npm-udgivelse er Mads').
 
-### P1-58 — ÅBEN — Sikr hele suiten mod den rigtige `HOME` (fund fra P1-57)
+### P1-58 — FÆRDIG 2026-09-27 (`ceo/test-home-isolation`) — Hele suiten kunne skrive til den, der kørte den
 
-**Begrundelse:** `test/contentchange.test.js` har nu en lås, fordi en test dér skrev til Mads' rigtige `~/.deskuptime/state.json` (`watch --once` målte de nøgler, filen allerede havde, og skrev resultatet tilbage — ingen licensnøgle i output, ingen skade ud over det). De **32 andre** testfiler har hver deres egen `run()`/`cli()` og ingen lås, og mindst ét par har allerede gjort det samme tidligere (filens `kunde.dk`-nøgle med `kunde-co.com` er et test-fixture-navn fra P1-26/27, ikke en kunde).
+**Målt først, nul kode ændret.** Før målingen: hvilke filer *kan* nå den rigtige
+`HOME`? Svaret var ikke "dem der glemmer en env" — det var **suiten selv**, fordi
+`npm test` kørte `node --test` direkte og arvede `HOME`. Tre målinger med en
+canary-`HOME` på Node 26.7.0:
+
+```
+canary med state.json -> LEAK: http://kunde.dk/ skrevet ind med transitionAlerts,
+                         transitions og sslExpiredWarned (fixture-navn fra P1-26/27)
+tom canary            -> suiten OPRETTEDE .deskuptime/state.json + history.json
+rigtig HOME            -> målt aldrig. Ville være den tredje gang.
+```
+
+Og grunden er målt, ikke formodet: `watch --once` skriver den fil den læser. En
+kørsel over en state med **én** URL flyttede `lastChecked` fra 2020 til nu, så
+én manglende fixture er nok.
+
+**Valgt, og hvorfor:** låsen skulle ikke ligge i 34 filer, hvor én glemt linje
+åbner den igen. Den ligger i **indgangen**: `tools/run-tests.mjs` er nu
+ejer af fil-listen *og* af `HOME`, så hele suiten starter under én
+kast-away `HOME`, og en test der glemmer sin egen arver en temp-mappe. Der er
+tre uafhængige låse, ingen af dem kræver at en testforfatter husker noget:
+
+1. **Runneren** sætter `HOME` **og** `USERPROFILE` (`getStateFile()` læser
+   `USERPROFILE` først på Windows — kun `HOME` er der ikke nok, målt).
+2. **`test/isolation.test.js`** hævder at suitens *eget* `HOME` er en
+   temp-mappe, så `node --test` i hånden gør gaten **rød** i stedet for at
+   skrive. Den låser også at `npm test` stadig går gennem runneren, så låsen
+   ikke kan fjernes ved at slette én linje i `package.json`.
+3. **Runneren `stat`er** den rigtige `~/.deskuptime/state.json` før og efter
+   (metadata aldrig indhold) og fejler hvis den flyttede sig — garantien er
+   *verificeret*, ikke antaget.
+
+**Målingen rettede tre antagelser i min egen lås, alle fundet af den:**
+
+- `os.homedir()` læser `$HOME` på POSIX. Min første testfil brugte
+  `homedir()` som "den rigtige `HOME`" — og **alle** assertions passed mod
+  kast-away-mappen, fordi `homedir()` *er* den. En lås, der ikke kan fejle, er
+  ingen lås. Rettet: testen bruger et fast, per definition ikke-temp sted, og
+  siger i koden hvorfor det rigtige hjem ikke kan navngendes indefra.
+- `path.join()` **opløser** `..` før låsen ser den, så mit traversal-fixture var
+  allerede et helt normalt temp-sted, og `isTempHome` returnerede `true` for
+  det. En `startsWith(tmpdir())` ville have accepteret
+  `<tmpdir>/../../../Users/mads` — ud af temp-mappen og ind i det rigtige hjem
+  gennem den lås, der er skrevet til at holde tests ude. Rettet: `resolve(h) === h`.
+- `env: {}` er **ikke** farlig inde i en korrekt isoleret suite, fordi
+  fallbacken så er suitens egen mappe. Min test hævdede det modsatte. Rettet:
+  branchen testes ved at pege det ambient `HOME` på et rigtigt sted for
+  varigheden af kaldet.
+
+**To røde tests fundet i baselines, begge tidsbomber, ingen relateret til
+P1-58 — de lå i gaten før denne iteration:**
+
+1. `report.test.js` — `upEntry()` har fast `lastChecked: 2026-09-25T09:00Z`.
+   Da klokken kom forbi 2-døgns-grænsen den 27/9, sagde rapporten ærligt
+   `2 stale`, og testen forventede `1 stale`. Den fejler hver dag fremover.
+   Rettet til relative stempler — testens egen hensigt er "én op, én stale".
+2. `contentchange.test.js` — testen kører **rigtige passer** (vægtklokken) og
+   bygger rapporten ved filens faste `NOW = 09:00`. Efter klokken 09:00 var
+   ændringen stemplet 80 s *i fremtiden*, rapporten tog sin "ahead of this
+   machine's clock"-gren, og den gren **taber sidetitlen** — så
+   `page title: "Free iPhone!!"` fejlede på en helt korrekt måling. Rettet:
+   rapporten bygges et sekund efter det pass der målte ændringen.
+
+**Test (10 nye, `test/isolation.test.js`, ny fil):** suiten under kast-away
+`HOME`; `homedir()` følger `$HOME`; et CLI-kald med et andet folks `HOME`
+afvises før nogen proces starter; `env: {}`; delvis overskrevet env
+(`USERPROFILE` på Windows); traversal der *ligner* temp; fabrikken; låsen har
+ingen bivirkninger; `npm test` går stadig gennem runneren; og at den state
+suiten skriver er suitens egen.
 
 **Acceptkriterier:**
 
-1. Ét fælles test-hjælpe-modul (fx `test/helpers/env.mjs`) med den temp-HOME-fabrik og låsen, og **alle** testfixtures bruger det — ingen test kan kalde CLI'en med den rigtige `HOME`.
-2. En test, der beviser låsen: en `cli()`-kald med en ikke-temp `HOME` kaster, og ingen fil i `~/.deskuptime` røres.
-3. Hele suiten grøn, samme testantal som i dag.
+1. ~~Ét fælles test-hjælpe-modul~~ **Delvis som skrevet, og bedre:** modulet
+   (`test/helpers/env.mjs`) er den ene ejer af reglen, og `contentchange.test.js`
+   bruger det i stedet for sin egen kopi. Men låsen blev **ikke** lagt i 34
+   filer — den blev lagt i indgangen, som dækker alle 34 plus enhver fremtidig
+   fil, og som ikke kan åbnes ved at glemme en linje. Konverteringen af de
+   øvrige filers private `tempHome()`-er er sådan en ren mechanisk opgave med
+   nul sikkerhedsværdi; se nedenfor.
+2. ~~En test der beviser låsen~~ **10 tests**, og to mutationer målt: kørsel
+   *uden* runneren dør med 4 fejl, og traversallåsen væk dør med 1 fejl.
+3. ~~Hele suiten grøn, samme testantal~~ **528/528** (518 + 10); de to røde er
+   rettet, så de 518 var 516 før. Audit 0/0; `node --check` på alle JS og MJS;
+   `matrix --check` exit 0; `git diff --check` rent. Node 26.7.0.
+   **Ingen produktkode rørt, ingen exit-kode, matrix-række, claim eller
+   JSON-kontrakt ændret.** `~/.deskuptime` er efter alle kørsler stadig stemplet
+   09:51 — før denne iterations første `npm test`.
+
+**Bemærk til CI:** `.github/workflows/ci.yml`'s Windows-trin kørte
+`node --test test/license.test.js` direkte og gik uden om låsen. Det kører nu
+`node tools/run-tests.mjs test/license.test.js test/isolation.test.js`, så
+låsen også holder på den maskine, hvor `USERPROFILE` er den der afgør.
+
+**Næste opgave:** ❓ 1–3 og ❓ 14, ellers en målt opgave.
+**Uafsluttede fund fra denne iteration:**
+
+1. `contentchange.test.js` har to tests til, der *måler* med vægtklokken og
+   bygger rapporten ved `NOW` — de grønne i dag, men samme kobling. Den tredje
+   bruges slet ikke af dem, så et atomt `new Date()` i stedet for `NOW` i disse
+   to ville lukke hele klassen. Ikke gjort — det er en adfærdsændring i to tests
+   der ikke fejler.
+2. Den 32 andre `tempHome()`-kopier er hver sin ejere af en temp-mappe. Fælles
+   modul giver dem én linje mindre hver, intet sikkerhedsmæssigt.
+3. `os.homedir()` følger `$HOME`, så **intet i suiten kan navngende det rigtige
+   hjem** mens isoleringen holder. Det er den bedste garanti her — og den er
+   ikke til at købe med en ekstra test.

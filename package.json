@@ -8,7 +8,8 @@
   },
   "type": "module",
   "scripts": {
-    "test": "node --test test/test.js test/ssltruth.test.js test/sslissuer.test.js test/ssltls.test.js test/certcoverage.test.js test/certondown.test.js test/contentchange.test.js test/license.test.js test/status.test.js test/webhook.test.js test/claims.test.js test/matrix.test.js test/report.test.js test/history.test.js test/tarball.test.js test/install.test.js test/display.test.js test/budget.test.js test/statusline.test.js test/unwatch.test.js test/watchalert.test.js test/seat.test.js test/passstate.test.js test/uncheckable.test.js test/outbox.test.js test/watchlist.test.js test/stateunreadable.test.js test/credentials.test.js test/onesite.test.js test/contentflood.test.js test/historyunreadable.test.js test/flap.test.js test/intervalfloor.test.js test/grammar.test.js",
+    "test": "node tools/run-tests.mjs",
+    "test:isolation": "node tools/run-tests.mjs test/isolation.test.js",
     "audit": "npm audit",
     "check": "node src/cli.js check https://example.com",
     "release": "node tools/release.mjs",

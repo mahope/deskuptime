@@ -587,10 +587,15 @@ test('a fresh report is unchanged, and a site that was never checked is not stal
 
 test('the CLI marks a stopped watch loop stale, from a real state file', async (t) => {
   const home = tempHome(t);
-  const daysAgo = n => new Date(Date.now() - n * 24 * 60 * 60 * 1000).toISOString();
+  // Both stamps are relative to now, and that is the point of the test: "up"
+  // and "stale" are decided against the clock, so an absolute date turns the
+  // assertion into a countdown. Measured 2026-09-27, when `upEntry()`'s fixed
+  // `2026-09-25T09:00:00.000Z` aged past the 2-day threshold and the report
+  // honestly counted two stale sites where the test expected one.
+  const hoursAgo = n => new Date(Date.now() - n * 60 * 60 * 1000).toISOString();
   writeState(home, proState({
-    'https://acme.dk/': upEntry({ lastChecked: daysAgo(42) }),
-    'https://shop.dk/': upEntry(),
+    'https://acme.dk/': upEntry({ lastChecked: hoursAgo(42 * 24) }),
+    'https://shop.dk/': upEntry({ lastChecked: hoursAgo(3) }),
   }));
 
   const { stdout } = await run(process.execPath, [CLI, 'report'], { env: { ...process.env, HOME: home, USERPROFILE: home } });

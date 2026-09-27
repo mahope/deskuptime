@@ -54,4 +54,6 @@ jobs:
         with:
           node-version: 24
       - run: npm ci --ignore-scripts
-      - run: node --test test/license.test.js
+      # Through the runner, not `node --test` directly: it owns the throwaway
+      # HOME, and test/isolation.test.js fails if a suite ever runs without it.
+      - run: node tools/run-tests.mjs test/license.test.js test/isolation.test.js

@@ -55,6 +55,7 @@ import { fileURLToPath } from 'node:url';
 
 import { readContentChangeState, readEntry } from '../src/status.js';
 import { buildReport, renderReportMarkdown } from '../src/report.js';
+import { assertTempHome } from './helpers/env.mjs';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const CLI = join(ROOT, 'src', 'cli.js');
@@ -122,14 +123,13 @@ function tempHome(t, urls) {
 }
 
 function cli(args, options) {
-  // A test that forgets its temp HOME would otherwise measure — and write to —
-  // the state file of whoever runs the suite. Measured 2026-09-27, where one
-  // destructuring slip in a new test here did exactly that: `watch --once` ran
-  // against the real `~/.deskuptime/state.json` and stored its result there.
-  assert.ok(
-    typeof options?.HOME === 'string' && options.HOME.startsWith(tmpdir()),
-    `the CLI must never run with the real HOME (got ${JSON.stringify(options?.HOME)})`,
-  );
+  // The rule is the suite's, not this file's: `assertTempHome` is the one owner
+  // (test/helpers/env.mjs) and refuses the env *before* a process is started.
+  // It was written here first, after a destructuring slip in a new test made
+  // `watch --once` run against the real `~/.deskuptime/state.json` on Mads'
+  // machine — see P1-58, which kept the lock and moved it where all 34 files
+  // can reach it.
+  assertTempHome(options, 'a content-change test');
   return run(process.execPath, [CLI, ...args], { env: { ...process.env, ...options } });
 }
 
@@ -228,7 +228,14 @@ test('the report names a changed page instead of printing 100 % and moving on', 
   assert.equal(typeof entry.lastContentChangedAt, 'string', 'a measured change is stamped, alert or no alert');
   assert.equal(entry.lastTitle, 'Free iPhone!!', 'the title is the part a customer recognises');
 
-  const report = buildReport({ urls: { [site.url]: entry } }, { now: NOW });
+  // The report is generated a second after the pass that measured the change.
+  // It used to be pinned to the file's fixed `NOW`, which put the real clock
+  // ahead of the report: measured 2026-09-27, the change was stamped 80 s in
+  // the future, the report took its "ahead of this machine's clock" branch, and
+  // that branch drops the page title — so the test failed every hour after
+  // 09:00, on a measurement that was correct. A test that measures with the
+  // wall clock has to read the wall clock.
+  const report = buildReport({ urls: { [site.url]: entry } }, { now: new Date(Date.parse(entry.lastChecked) + 1000) });
   const markdown = renderReportMarkdown(report);
   const site1 = report.sites[0];
 
