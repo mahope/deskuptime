@@ -575,6 +575,20 @@ export async function runPass(state, opts = {}) {
     recordHistoryPass(history, url, result, { now });
     if (result.content?.hash) entry.lastHash = result.content.hash;
     if (Number.isFinite(result.content?.contentLength)) entry.lastContentLength = result.content.contentLength;
+    // When the page was last *read*, separate from when it last *changed*. The
+    // two are different facts and the report needs both: `content.js` skips a
+    // page over 2 MiB, so a byte count can survive a pass that never looked at
+    // the body, and a report that printed it as a measurement of this check was
+    // quoting a pass it could not name. Stamped only where a hash was actually
+    // written, so it can never be newer than the hash it belongs to.
+    if (result.content?.hash) entry.lastContentReadAt = measuredAt;
+    // When the page last changed, whether or not the alert was sent. The
+    // throttle above decides what a *customer hears*; this is what *happened*,
+    // and a throttled change was still a change — measured 2026-09-27, where a
+    // page rewritten while the hour-long gap was open left no trace anywhere the
+    // client report could read, so the document a bureau forwards said `UP (200) |
+    // 100%` about a page that had been replaced.
+    if (result.content?.changed === true) entry.lastContentChangedAt = measuredAt;
     // The title, so the next pass can say *what* changed and not only that the
     // bytes differ. `content.js` has always measured it; this is the first
     // surface to keep it. Only overwritten when the page still offers one, so a

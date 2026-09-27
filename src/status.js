@@ -298,6 +298,102 @@ export function readContentChangeAlert({ change, previousAlertedAt = null, count
 }
 
 /**
+ * The *content* of a monitored site, as one report reads it — and the one place
+ * that decides what a surface may say about a change.
+ *
+ * The feature matrix promises "content-change detection" in both tiers, and the
+ * detector has worked since P0-3: `content.js` hashes every page on every pass,
+ * `runPass` raises `content_changed`, the terminal prints it and the webhook
+ * POSTs it to the paid channel. What no surface could do was *report* it. The
+ * client report — the document a bureau forwards to the customer it monitors —
+ * had no content column, no content line and no content count. Measured 2026-09-27
+ * with the real CLI, a real Pro record and a real page swapped for
+ * `<title>Free iPhone!!</title>`:
+ *
+ *   pass    →  🔄 http://kunde.dk/ content changed (70 → 91 bytes)
+ *   report  →  | http://kunde.dk/ | UP (200) | 100% (7 checks) | … | 51 ms | — | … |
+ *              **1 site(s) · 1 up · 0 down · 7 checks · 0 failed**
+ *
+ * One document said the page changed, the other said nothing — and the second is
+ * the one the customer receives. A defaced homepage, a hacked site and a
+ * redirect-in-disguise all read as `UP (200) | 100%` to the recipient, which is
+ * the same failure the report already fixed twice for certificates: a fact that
+ * is measured, kept in `state.json` (`lastHash`, `lastContentLength`,
+ * `lastTitle`) and then thrown away before the paid surface.
+ *
+ * So the reading is made here, once, and the report asks for it. Two facts, kept
+ * apart on purpose:
+ *
+ * - `changed` is the *last measured* change and `changedAt` when it happened. A
+ *   change is a fact about the past, not about now, so it ages: a site whose page
+ *   changed 40 days ago and has been quiet since is not "changed" in the sense
+ *   the reader would take it. `ageDays` is what the report prints next to it, and
+ *   it is asked of `passAge` — the one owner of a recorded time — so this cannot
+ *   become a second, disagreeing clock.
+ * - `bytes` is the size the last pass read, and it is `null` unless a pass
+ *   actually read the body. `content.js` skips a page over 2 MiB and leaves
+ *   `lastContentLength` untouched, so without this the report would print the size
+ *   from an *earlier* pass as if it described the page now. Measured: a pass that
+ *   skipped a 3 MiB page still published `contentBytes: 70` from the pass before
+ *   it, with nothing on the surface saying the reading was not from this check.
+ *
+ * `titleChanged`/`title` are what `readContentChange` above already extracted and
+ * no surface could print: the page's own `<title>`, which is the part a customer
+ * recognises in a screenshot.
+ *
+ * @param {object} entry — one `state.urls[...]` entry.
+ * @param {object} [options] — `{ now }`, so a test can place the reading.
+ */
+export function readContentChangeState(entry, { now = new Date() } = {}) {
+  const value = entry && typeof entry === 'object' ? entry : {};
+  // A site whose page was never hashed has no content claim at all. `null`, not
+  // `false`: `false` would be a statement about a page nobody read.
+  const changed = typeof value.lastContentChangedAt === 'string' && value.lastContentChangedAt !== '';
+  // Asked of the one owner, so a hand-edited time ahead of this clock cannot be
+  // aged into "changed today" here and something else there (P1-31's rule).
+  const reading = passAge(changed ? value.lastContentChangedAt : null, now);
+  // A change in the future is a clock problem, not a fact about the page, so it
+  // is never printed as one: no age, and the caller's own clock note says why.
+  const ageDays = reading.state === PASS_AGE.AGED ? reading.ageDays : null;
+  return {
+    changed,
+    changedAt: changed ? value.lastContentChangedAt : null,
+    ageDays,
+    aheadMs: reading.aheadMs,
+    // The size of the page as the *last reading that measured it* saw it, and
+    // when that reading was taken — so a surface can tell a fresh size from one
+    // that has outlived the check that produced it.
+    bytes: byteCount(value.lastContentLength),
+    bytesReadAt: typeof value.lastContentReadAt === 'string' && value.lastContentReadAt !== '' ? value.lastContentReadAt : null,
+    title: titleText(value.lastTitle),
+    // The sentence, built here from exactly the fields just decided, so a
+    // caller cannot assemble it from a different set. Measured: the first
+    // version had the report hand a *site* object to a function that read the
+    // *reader's* field names, and the named line rendered as
+    // `https://kunde.dk/ ()` — the sentence and the column had stopped being
+    // the same decision.
+    note: contentChangeNote({ changed, ageDays, aheadMs: reading.aheadMs, title: value.lastTitle }),
+  };
+}
+
+/**
+ * What a surface says about a site's content, in one sentence.
+ *
+ * A changed page is named with its age, because "the page changed" without a
+ * date reads as "the page changed this morning" — and a report is read once,
+ * often days after the pass that produced it. An unchanged page says nothing
+ * rather than "no change": that would be the false all-clear P1-21 removed from
+ * `check --json`, and a page nobody has read deserves no sentence at all.
+ */
+export function contentChangeNote({ changed = false, ageDays = null, aheadMs = 0, title = null } = {}) {
+  if (changed !== true) return '';
+  if (Number.isFinite(aheadMs) && aheadMs > 0) return `🔄 content changed — last change ${clockAheadNote(aheadMs)}`;
+  const when = ageDays === null ? 'at an unreadable time' : ageDays === 0 ? 'today' : `${ageDays} d ago`;
+  const named = titleText(title) === null ? '' : ` — page title: "${titleText(title)}"`;
+  return `🔄 content changed ${when}${named}`;
+}
+
+/**
  * How long one site waits between two *sent* alerts of the same kind, once it
  * is flapping. Fifteen minutes — see {@link readTransitionAlert} for why this
  * window is a quarter of the content-change one.

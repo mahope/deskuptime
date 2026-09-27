@@ -200,7 +200,9 @@ test('a hostile URL cannot break the table or turn into markup', () => {
   const table = rows(markdown);
   assert.equal(table.length, 1, `a URL with pipes and newlines produced ${table.length} rows`);
   // Seven columns means six unescaped pipes; every pipe from the URL is escaped.
-  assert.equal(table[0].split(/(?<!\\)\|/).length, 9);
+  // Eight columns since P1-56 added Content: the table grew a column, not a
+  // different number of separators per column.
+  assert.equal(table[0].split(/(?<!\\)\|/).length, 10);
   assert.ok(!markdown.includes('<script>'), 'the URL was not escaped and can become markup');
   assert.ok(markdown.includes('&lt;script&gt;'));
   // No response time or SSL day is invented for a pass that never ran.

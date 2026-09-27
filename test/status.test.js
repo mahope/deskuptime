@@ -1534,8 +1534,8 @@ test('content_changed: sætningen er besluttet ét sted, og titlen bevares', asy
     .replace(/\/\*[\s\S]*?\*\//g, '')
     .replace(/^\s*\/\/.*$/gm, '');
   assert.equal(
-    (status.match(/content changed —/g) || []).length, 2,
-    'only the owner may write the sentence, and it writes it once per form',
+    (status.match(/content changed —/g) || []).length, 3,
+    'only the owner may write the sentence, and it writes it once per form (two in readContentChange, one in contentChangeNote)',
   );
 
   // Titlen skal overleve i state-filen, ellers er næste skift igen navnløst.

@@ -33,13 +33,16 @@ Uptime er **kun** `checksUp / checks`, defineret ét sted (`uptimePercent()`), s
 skriver og læser aldrig kan blive uvede. Uden en gennemført pass er værdien
 `null` og vises som `—`; den må aldrig vise 100 % fordi ingen data er samlet.
 
-`wasUp`, `lastStatus`, `sslValidDays`, `lastContentLength`, `lastChecked` og
-`addedAt` læses fra den eksisterende state, som `watch` allerede skriver.
+`wasUp`, `lastStatus`, `sslValidDays`, `lastContentLength`, `lastContentReadAt`,
+`lastContentChangedAt`, `lastTitle`, `lastChecked` og `addedAt` læses fra den
+eksisterende state, som `watch` allerede skriver.
 
 Rapporten dækker pr. site: `url`, `status` (`up`/`down`/`unknown`),
 `statusCode`, `uptimePercent`, `window`, `checks`, `failures`, `responseMs`,
-`sslDaysRemaining`, `contentBytes`, `lastChecked`, `monitoringSince`, og en
-`summary` med antal sites/checks/failures.
+`sslDaysRemaining`, `contentBytes`, `contentReadAt`, `contentChanged`,
+`contentChangedAt`, `contentChangedAgeDays`, `contentTitle`, `contentNote`,
+`lastChecked`, `monitoringSince`, og en `summary` med antal
+sites/checks/failures.
 
 ### 2b. Historik pr. døgn (del C)
 
@@ -95,9 +98,38 @@ Det er her bureauet bliver solgt, og derfor er reglerne hårde:
 `deskuptime report [--title "Client name"] [--days N] [--json]`
 
 - Standard: Markdown med titel, genereringstidspunkt, én tabel
-  (Site / Status / Uptime (all) / Uptime (window) / Response / SSL / Last check)
-  og en resumelinje. DOWN-sites står først, så en kunde ser det vigtigste uden
-  at lede.
+  (Site / Status / Uptime (all) / Uptime (window) / Response / SSL / Content /
+  Last check) og en resumelinje. DOWN-sites står først, så en kunde ser det
+  vigtigste uden at lede.
+- **Content-kolonnen er ikke et uptime-tal, og det er derfor den er der.** En
+  side, der er skjult eller hacket, svarer 200: alle uptime-kolonner står på
+  100 %, og det ser sundt ud. Målt 2026-09-27 med rigtig CLI, rigtig Pro-record
+  og en rigtig side, der blev skrevet om til `<title>Free iPhone!!</title>`:
+
+  ```
+  pass    ->  🔄 http://kunde.dk/ content changed (70 → 91 bytes)
+  før     ->  | http://kunde.dk/ | UP (200) | 100% (7 checks) | … | 51 ms | — | … |
+               **1 site(s) · 1 up · 0 down · 7 checks · 0 failed**
+  ```
+
+  Den betalte kanal sagde det, dokumentet kunden modtager sagde intet, og
+  `state.json` holdt hele tiden på `lastHash`, `lastContentLength` og
+  `lastTitle`. Nu skriver kolonnen `🔄 changed`, resumelinjen tæller
+  (`· 1 content changed`), og en **egen linje under tabellen** navngiver
+  siden med alderen og titlen: `🔄 content changed 3 d ago — page title:
+  "Free iPhone!!"`. Alderen er der, fordi en rapport læses én gang og ofte
+  dage efter passet — "siden ændret" uden dato læses som "i morges". En side
+  der er læst og uændret skriver `stable · 91 bytes`; en side der **aldrig er
+  læst** skriver `—`, aldrig "ingen ændring", for det er en påstand om en side
+  vi ikke har set. **Verdiktet flyttes ikke:** en side med HTTP 200 er stadig
+  `UP (200)`, stadig 100 %, stadig exit 0 — en defacement er ikke et
+  uptime-problem. Ejeren er `readContentChangeState` i `src/status.js`.
+- **Et byte-tal er en måling, eller det er ingenting.** `content.js` springer en
+  side over 2 MiB over og lader det gamle `lastContentLength` ligge, så et pass
+  der ikke læste kroppen stadig skrev størrelsen fra et tidligere pass som om
+  den beskrev siden nu. Målt: et pass der sprang en 3 MiB-side over skrev
+  `contentBytes: 70` fra passet før. `contentReadAt` siger nu hvornår den
+  læsning, tallet stammer fra, så et gammelt tal kan læses som et gammelt tal.
 - **SSL-kolonnen er et advarselssignal, ikke et tal.** Et certifikat med ≤ 14
   dage til udløb skrives som `⚠️ 9 d — renew soon`, tælles i resumelinjen
   ("1 SSL expiring soon") og **navnes på en egen linje** med de URL'er der skal

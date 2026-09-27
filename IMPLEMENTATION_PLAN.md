@@ -1,3 +1,112 @@
+## Status fra denne iteration (72, P1-56 — en side, der blev skjult, stod som `UP (200) | 100 %` i det dokument kunden modtager)
+
+**Hvorfor denne flade:** ❓ 1–3 er stadig ubesvarede. P1-55 lod fire målte
+kandidater ligge, og punkt 3 var den eneste, der endnu ikke var undersøgt:
+matrixens næste linje på `watch`-fladen, `content-ændringsdetektion`. Den viste
+sig at ramme **kundenrapporten**, ikke `watch`.
+
+**Målt først, nul kode ændret.** Rigtig CLI, rigtig Pro-record (aldrig et kald til
+mahope.tools), rigtig state-fil, rigtig `history.json` og en rigtig lokal side,
+hvis markup blev skrevet om til `<title>Free iPhone!!</title>` — det den
+klassiske defacement/hijacking, et bureau overvåger en kundes site for:
+
+```
+pass            ->  🔄 http://kunde.dk/ content changed (70 → 91 bytes)
+watch --status  ->  ✅ up  http://kunde.dk/ (200) @ 2026-09-27T06:49:02.803Z
+status          ->  ✅ http://kunde.dk/ (200)
+report          ->  | http://kunde.dk/ | UP (200) | 100% (7 checks) | … | 51 ms | — | … |
+                    **1 site(s) · 1 up · 0 down · 7 checks · 0 failed**
+report --json   ->  {"contentBytes": 91}          ← det hele
+```
+
+**Fundet er den tredje slags i denne række, ikke den anden.** P1-55 fandt en
+*kasseret* måling, P1-52–54 fandt målinger, ingen flade læste. Her var målingen
+intakt hele vejen: `content.js` hasher hver side hvert pass siden P0-3,
+`runPass` rejste `content_changed`, terminalen skrev den, **webhook'en POSTede
+den til den betalte kanal** — og `state.json` holdt `lastHash`,
+`lastContentLength` og `lastTitle`. Alt var målt, gemt og brugt. Det eneste
+stadium, der manglede, var det betalte: **det dokument kunden modtager.** En
+kunde, hvis site var hacket, fik et dokument der sagde `UP (200) | 100%` og
+nævnte intet, fordi en defacement ikke er et uptime-problem — alle
+uptime-kolonnerne står perfekt, og det er præcis derfor de så sunde ud.
+
+Matrixen lovede "content-ændringsdetektion" i **begge** tiers, så claimen var
+sand på de to flader, der ikke er kundens.
+
+**Den anden halvdel af målingen var en gammel måling i en ny kolonne:**
+`contentBytes` kom fra `lastContentLength`, og `content.js` springer en side over
+2 MiB over og lader det gamle tal ligge. Målt: et pass der **sprang en 3 MiB-side
+over** skrev stadig `contentBytes: 70` fra passet før, uden ét ord om at
+tallet ikke var fra dette tjek. Samme fejltype som P1-36's `sslValidDays` og
+P1-21's `contentChecked` — en måling uden sin alder.
+
+**Én port, én ejer.** `readContentChangeState(entry, { now })` i `src/status.js`
+— samme form som `readSslState`, og den spørger `passAge` om tiden, så en
+håndskrevet `lastContentChangedAt` 18 dage i fremtiden aldrig bliver "ændret
+i dag" her og noget andet der (P1-31's regel). Den returnerer både sætningen
+**og** felterne, så rapporten ikke kan bygge sin egen; det gjorde den i mit
+første udkast, og den navngiven linje rendte som `https://kunde.dk/ ()`.
+`contentChangeNote()` er den samme ejer, delt.
+
+**Rettelsen:** to additive felter i state (`lastContentReadAt` stemples kun hvor
+et hash faktisk skrives, så det aldrig kan være nyere end hashen det hører til;
+`lastContentChangedAt` stemples på **hver målt** ændring, uanset om alarmen
+blev dæmpet af time-trafiken — det er, hvad der skete, ikke hvad kunden hørte),
+`Content`-kolonne, tæller i resumelinjen, navngiven linje med alder og titel, og
+seks additive JSON-felter. **Verdikt, exit-kode, uptime-tal og alle eksisterende
+felter uændrede** — en side med HTTP 200 er `UP (200)`, også når indholdet er
+nogens. En ulæst side skriver `—`, aldrig "ingen ændring".
+
+**Test (7 nye, `test/contentchange.test.js`, lagt i `npm test` — samme fælde som
+P1-10):** ejeren på alle fire PASS_AGE-tilstande plus en ulæselig tidsstempel,
+byte-tallet klemt (0 gælder, `-1`/`"91"`/`NaN`/`undefined` er `null`), den fulde
+kunderejse gennem **den rigtige CLI** mod en rigtig side der skriver sig om, den
+uændrede side som `stable · N bytes`, den **springne** 3 MiB-side der ikke må
+lade et gammelt tal se nyt ud, JSON-og-Markdown som én læsning plus at
+license-nøgle, device-id og content-hash stadig ikke kan nå dokumentet, og
+flertalformen for to sider.
+
+**Fem mutationer målt, alle døde:** sidestemplingen væk → 3 fejl, ejeren siger
+aldrig "changed" → 4, bytes læst uklemmet → 3, den navngiven linje væk → 3,
+alderen ignoreret (altid 0) → 1. To **målefejl i min egen måling**, begge
+rettet og nævnt i koden: (1) `execFileSync` i samme proces som HTTP-fixturen
+blokerede event loopet, så sitet svarede `Request timed out` — sjette gang i
+mit arbejde, samme fælde som P2-1 del C; (2) den navngiven linje rendte tom,
+fordi rapporten rakte *site*-objektet ind i en funktion, der læste *ejerens*
+feltnavne.
+
+**To eksisterende tests læste rigtigt og blev rettet, ikke slækket:**
+`report.test.js` tæller kolonner i en markør-tabel (7 → 8) og `status.test.js`
+tæller ejerskab ved at tælle sætninger i `status.js` (2 → 3, fordi den nye
+note er en tredje form). Begge fejl var sande.
+
+**Næste:** ❓ 1–3 og ❓ 14, ellers en målt opgave. Uafsluttede fund fra denne
+måling: (1) **`watch --status` og `status` læser heller ikke `lastTitle`** — de
+to lister sagde `✅ up (200)` om den hackete side, og de er gratis-fladerne, så
+den betalte rapport er ikke det eneste sted, hvor en kunde kan møde et tavst
+svar; (2) de to lister viser heller ikke **størrelsen** på siden, kun
+certifikatet; (3) `check` skriver `— Content: 91 bytes` uden at sige hvornår
+læsningen skete, hvilket `contentReadAt` nu kan svare på; (4) matrix-rækken
+`terminal-alerts` siger "content change" — terminalen har den, de to lister
+har ikke.
+
+- **Release-note P1-56:** Hvis din kundes hjemmeside blev skjult, hacket eller
+  erstattet med en falsk formular, vidste værktøjet det hele tiden — og
+  kundenapporten sagde det ikke. Før skrev overvågningen `🔄 content changed
+  (70 → 91 bytes)` i din terminal og sendte beskeden til din Slack/Discord/Teams-
+  kanal, mens `deskuptime report` skrev `UP (200) | 100%` i det dokument bureauet
+  videresender til kunden. Det er ikke en fejl i tallene: en hacket side svarer
+  200, så alle uptime-kolonner står perfekt, og det er netop derfor de så sunde
+  ud. Nu har rapporten en **Content-kolonne**, tælleren `· 1 content changed` i
+  resumelinjen og en navngiven linje under tabellen: `🔄 content changed 3 d ago
+  — page title: "Free iPhone!!"`. Alderen er med, fordi en rapport læses én gang
+  og ofte dage efter målingen. En side der er læst og uændret skriver `stable ·
+  91 bytes`; en side over indholdstjekets grænse, som vi ikke læser, skriver
+  `—` — aldrig "ingen ændring", for det er en påstand om en side vi ikke har
+  set. **Exit-kode, uptime-tal, status og alle øvrige felter er uændrede**: en
+  side med HTTP 200 er stadig UP, og en defacement er stadig en note om
+  indholdet, aldrig en dom om sitet.
+
 ## Status fra denne iteration (71, P1-55 — et udløbet certifikat blev læst, målt og kasseret, så ingen betalt flade kunne sige hvorfor sitet var nede)
 
 **Hvorfor denne flade:** ❓ 1–3 er stadig ubesvarede. Kandidaten var P1-54's
@@ -3986,3 +4095,30 @@ To efterfølgende fulde kørsler: 421/421.
 - **Iteration 58 (P1-42, målt + spec + fix):** ❓ 1–3 ubesvarede, så iterationen tog den opgave P1-41 lod ligge: modtageren nede **gennem hele budgettet**. Målt først med rigtig loop, rigtig state-fil, lokalt site på 500 og rigtig modtager på 503: 3 POST, og 36 s senere igen ingenting (`state.json`: `urls, license` — ingen kø), fordi passet latched `wasUp: false`. Spec **først** i `docs/pro-alerts.md` §2 (kapacitet 20 ældste-først, alder 30 min, 3 forsøg i alt, dedupe pr. `(url, type)` med den ældre tilbage, og røde regel for hvad der aldrig gemmes: webhook-URL, modtagerens svartekst; `message` → 500 tegn). **Fix:** `outbox` i state, flush ved passets start **før** nye hændelser, tre grænser der låser, opgivelsen sagt i ordene, `sendWebhook(…, { kept })` så advarslen ikke kan lyve, `webhookBody()` som den ene bygger af payloaden (ingen felt ændret), og `deskuptime status` viser det kanalen er skyldt. **To fejl fundet undervejs, rettet i koden:** `flushOutbox` gemte ikke et mislykket forsøg (tællede længde, ikke indhold — femte gang i mit arbejde at en måle-/låsfejl så ud som dækning), og loopen sagde `Nothing resends it` mens den gemte alarmen. **Én lås udvidet, ikke slækket** (niende gang): `checkAgeMs`-læseren 2 → 3 i `status.js` fordi `queuedAgeMs` er der, **og** en ny lås på at den klipper fortegnet væk; invarianten urørt. 9 nye tests i `test/outbox.test.js` (lagt til i `npm test`) inkl. den målte kunderejse med rigtig modtager (503 hele budgettet → gemt → 200 → leveret med `measuredAt`) → **391/391** (382 + 9); audit 0/0; `node --check`, `matrix --check`, `git diff --check` grønne på Node 26.7.0. Ingen payload-felt, exit-kode, matrix-række eller claim ændret; ingen deploy-note nødvendig. **Næste:** ❓ 1–3, ellers en målt opgave — kandidater uden valg: en restart midt i et nedbrud, og `watch --once` på cron-vejen med en webhook i loopet.
 
 - **Iteration 59 (P1-43, målt + fix):** ❓ 1–3 ubesvarede, så den anden valgfri kandidat fra P1-42 blev målt: `unwatch` under en kørende betalt loop. Før: kommandoen sagde `✅ No longer monitoring`, filen var enig, og ét pass senere lå URL'en i filen igen, blev målt igen, og `status` sagde 2 URL'er — på gratisniveauet kostede det den frigjorte plads. **Root cause:** `mergePersistedState()` føjede filens poster ind i loopens kopi og slettede aldrig en, så loopens hukommelse overlevede og passets skrivning lagde den tilbage. **Fix:** filens mtime mod loopens egen sidste skrivning, kun for de URL'er loopen selv har skrevet (`lastWrite`), så P1-39's mislykkede skrivning (intet registreret → ældre fil fjerner intet) og en URL fra kommandolinjen (aldrig i sættet) begge er beskyttet — begge som mutationer, ikke som antagelser. Løbende loop siger `🛑 No longer monitoring: <url> — removed from the saved list by another command.` **Den anden kandidat var ikke en fejl:** en `SIGKILL` midt i et nedbrud med en ventende alarm overlever — den nye proces leverede `is DOWN` med sin egen `measuredAt` (20:05:10 leveret 20:05:22) og *så* `is UP`, i den rækkefølge de skete i. 5 nye tests i `test/watchlist.test.js` → **396/396** (391 + 5); audit 0/0; `node --check`, `matrix --check`, `git diff --check` grønne på Node 26.7.0. Tre mutationer døde (1/1/2 fejl); **min første mutation af `lastWrite.urls`-gaten var vished** (anden gang i mit arbejde — den flyttede kun en betingelse) og blev skrevet om til den rigtige, som dør med 1 fejl. **Næste:** ❓ 1–3, ellers en målt opgave.
+
+### P1-56 — FÆRDIG 2026-09-27 (`ceo/watch-content-truth`) — En ændret side må ikke se ud som et sundt site i kundenrapporten
+
+**Begrundelse (målt, ikke formodet):** Matrixen lovede "content-ændringsdetektion" i begge tiers, og det virkede — på terminalen og i den betalte webhook-kanal. Kundenapporten, dokumentet bureauet videresender, havde ingen content-kolonne, ingen linje og ingen tæller. Målt med rigtig CLI, rigtig Pro-record og en rigtig side skrevet om til `<title>Free iPhone!!</title>`:
+
+```
+pass    ->  🔄 http://kunde.dk/ content changed (70 → 91 bytes)
+report  ->  | http://kunde.dk/ | UP (200) | 100% (7 checks) | … | 51 ms | — | … |
+            **1 site(s) · 1 up · 0 down · 7 checks · 0 failed**
+```
+
+En hacket kundes side læste som `UP (200) | 100 %` for modtageren, fordi en defacement ikke er et uptime-problem. Den anden halvdel: `contentBytes` skrev stadig størrelsen fra et tidligere pass, når et pass sprang siden over 2 MiB over.
+
+**Acceptkriterier:**
+
+1. Rapporten kan sige, at en sides indhold ændrede sig, med alder og titel — kolonne, resumetæller og navngiven linje.
+2. `runPass` stempler `lastContentChangedAt` på **hver målt** ændring, også en alarmen ikke blev sendt for; `lastContentReadAt` følger hashen.
+3. `contentBytes` er enten en måling af en læsning, hvis tid `contentReadAt` oplyser, eller `null`. Aldrig "stable" for en ulæst side.
+4. Ét navn ejer læsningen (`readContentChangeState`), og rapporten bygger ingen sætning selv.
+5. **Verdikt, exit-kode, uptime-tal og eksisterende JSON-felter uændrede.** En side med HTTP 200 er `UP (200)`, også når indholdet er nogens.
+6. License-nøgle, device-id og content-hash kan stadig ikke nå rapporten.
+
+**Status 2026-09-27:** 7 nye tests i `test/contentchange.test.js` (lagt i `npm test`) → **514/514** (507 + 7); audit 0/0; `node --check` alle JS-filer, `matrix --check` og `git diff --check` grønne på Node 26.7.0. **Fem mutationer målt, alle døde** (3/4/3/3/1 fejl). **To eksisterende tests læste rigtigt** — en kolonnetæller og en ejerskabstæller — og blev opdateret, ikke slækket. To målefejl i min egen måling, begge rettet (se afsnittet øverst). `docs/agency-report.md` §2 og §4 beskriver modellen og formatet. Ingen matrix-række, claim, exit-kode eller payload-felt ændret; ingen deploy-note nødvendig (den offentlige repo-udgivelse er npm, og det gør Mads).
+
+**Næste:** ❓ 1–3 og ❓ 14, ellers en målt opgave. De fire uafsluttede fund fra målingen står øverst i afsnittet; den stærkeste er, at **`watch --status` og `status` heller ikke kan se en ændret side** — de er gratisfladerne, så det er ikke kun den betalte rapport, der kan møde et tavst svar.
+
+- **Iteration 72 (P1-56, målt + fix):** ❓ 1–3 stadig ubesvarede, så iterationen tog den eneste af P1-55's fire målte kandidater, der endnu var uundersøgt: matrixens `content-ændringsdetektion`. Den ramte **kundenrapporten**. Målt med rigtig CLI, rigtig Pro-record og en rigtig side skrevet om til `<title>Free iPhone!!</title>`: passen skrev `🔄 content changed (70 → 91 bytes)`, terminalen og den betalte webhook-kanal sagde det, og `report` skrev `UP (200) | 100%` i det dokument kunden modtager — fordi en defacement ikke er et uptime-problem, så alle uptime-kolonnerne står perfekt og netop derfor så sunde ud. Målingen var intakt hele vejen: `content.js` hasher siden P0-3, `state.json` holdt `lastHash`, `lastContentLength` og `lastTitle`. Det eneste stadium der manglede, var det betalte. Anden halvdel: `contentBytes` skrev stadig størrelsen fra et tidligere pass, når et pass sprang siden over 2 MiB over (målt). Rettelsen er `readContentChangeState` i `src/status.js` som den ene ejer (samme form som `readSslState`, spørger `passAge` om tiden), to additive state-felter hvor `lastContentChangedAt` stemples på **hver målt** ændring uanset om alarmen blev sendt, `Content`-kolonne, resumetæller, navngiven linje med alder og titel, seks additive JSON-felter. **Verdikt, exit-kode og uptime-tal uændrede.** 7 nye tests i `test/contentchange.test.js` → **514/514** (507 + 7); audit 0/0; `node --check`, `matrix --check`, `git diff --check` grønne på Node 26.7.0. **Fem mutationer målt, alle døde** (3/4/3/3/1 fejl). **To eksisterende tests læste rigtigt** (kolonnetæller 7→8, ejerskabstæller 2→3) og blev opdateret, ikke slækket. **To målefejl i min egen måling**, begge rettet: `execFileSync` i samme proces som HTTP-fixturen blokerede event loopet (sitte svarede `Request timed out` — sjette gang i mit arbejde), og den navngiven linje rendte som `https://kunde.dk/ ()` fordi rapporten rakte et *site*-objekt ind i en funktion der læste *ejerens* feltnavne. Næste: ❓ 1–3/❓ 14, ellers en målt opgave — stærkeste fund er, at `watch --status` og `status` heller ikke kan se en ændret side.
