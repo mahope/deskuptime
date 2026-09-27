@@ -29,6 +29,18 @@
  * perfectly while being somebody else's. The report gains a column, a named
  * line, a count and additive JSON fields, and every one of them is read from one
  * owner (`readContentChangeState` in src/status.js).
+ *
+ * P1-57 measured the rest of the surfaces and found the same silence one level
+ * down. The pass knew, the report knew, and the two lists every free user runs
+ * said `✅ up (200)` about the same file:
+ *
+ *   pass            ->  🔄 http://kunde.dk/ content changed (92 → 77 bytes)
+ *   watch --status  ->  ✅ up  http://kunde.dk/ (200) @ 2026-09-27T07:43:09.796Z
+ *   status          ->  ✅ http://kunde.dk/ (200)
+ *
+ * The last block of tests is P1-57: the two lists ask the same owner, and a size
+ * that has outlived the pass that read it carries its age instead of pretending
+ * to describe the page now.
  */
 
 import { test } from 'node:test';
@@ -41,7 +53,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { readContentChangeState } from '../src/status.js';
+import { readContentChangeState, readEntry } from '../src/status.js';
 import { buildReport, renderReportMarkdown } from '../src/report.js';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
@@ -110,6 +122,14 @@ function tempHome(t, urls) {
 }
 
 function cli(args, options) {
+  // A test that forgets its temp HOME would otherwise measure — and write to —
+  // the state file of whoever runs the suite. Measured 2026-09-27, where one
+  // destructuring slip in a new test here did exactly that: `watch --once` ran
+  // against the real `~/.deskuptime/state.json` and stored its result there.
+  assert.ok(
+    typeof options?.HOME === 'string' && options.HOME.startsWith(tmpdir()),
+    `the CLI must never run with the real HOME (got ${JSON.stringify(options?.HOME)})`,
+  );
   return run(process.execPath, [CLI, ...args], { env: { ...process.env, ...options } });
 }
 
@@ -308,4 +328,175 @@ test('two changed sites are counted and named in the plural', async (t) => {
   assert.match(stdout, /2 sites have had its page content change/, stdout);
   assert.match(stdout, /2 content changed/);
   assert.equal(readState(join(options.HOME, '.deskuptime', 'state.json')).urls[first.url].lastHash.length, 64, 'the fixture really was monitored');
+});
+
+// ── P1-57: the two lists every free user runs ──
+
+const char = code => String.fromCharCode(code);
+const ESC = char(0x1b);
+
+/** Nothing a page may have written in its own title can drive the terminal. */
+function assertInert(output, label) {
+  const pattern = new RegExp(`[${char(0x00)}-${char(0x09)}${char(0x0b)}-${char(0x1f)}${char(0x7f)}-${char(0x9f)}${char(0x202a)}-${char(0x202e)}]`, 'g');
+  const smuggled = output.match(pattern);
+  assert.equal(smuggled, null, `${label}: output still contains ${smuggled ? JSON.stringify([...new Set(smuggled)]) : ''}`);
+}
+
+/** A free machine: no license, so every list here is a surface a free user sees. */
+function freeHome(t, urls) {
+  const home = mkdtempSync(join(tmpdir(), 'deskuptime-contentlist-'));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  mkdirSync(join(home, '.deskuptime'), { recursive: true });
+  const stateFile = join(home, '.deskuptime', 'state.json');
+  writeFileSync(stateFile, JSON.stringify({ urls }));
+  return { stateFile, options: { HOME: home, USERPROFILE: home } };
+}
+
+/** The first row mentioning `host` — the stale block below the list names some twice. */
+function rowFor(stdout, host) {
+  const found = stdout.split('\n').filter(row => row.includes(host));
+  assert.ok(found.length > 0, `no row for ${host} in ${JSON.stringify(stdout)}`);
+  return found[0];
+}
+
+test('a row says what the page did, and nothing about a page nobody read', () => {
+  // The owner both lists ask, on the four states a page can be in. A changed page
+  // gets the sentence and no size: a size read before a change is not the size of
+  // what changed, which is why the report's cell prints one or the other too.
+  const changed = readEntry({
+    ...PASS,
+    lastContentChangedAt: '2026-09-27T06:00:00.000Z',
+    lastContentReadAt: '2026-09-27T06:00:00.000Z',
+    lastContentLength: 91,
+    lastTitle: 'Free iPhone!!',
+  }, { now: NOW });
+  assert.equal(changed.contentNote, '🔄 content changed today — page title: "Free iPhone!!"');
+  assert.equal(changed.contentSize, '', 'a change is not described by a size');
+
+  // Read today, unchanged: the size, with no words, because that is the ordinary
+  // case and a row is not a table.
+  const read = readEntry({ ...PASS, lastContentReadAt: '2026-09-27T08:30:00.000Z', lastContentLength: 92 }, { now: NOW });
+  assert.equal(read.contentNote, '', 'an unchanged page gets no sentence');
+  assert.equal(read.contentSize, '92 bytes');
+
+  // Read two days ago — the state `content.js` leaves behind when a page grows
+  // past the limit and the pass stops reading it. Measured: the byte count
+  // survives, so a bare number here would be a quote from a pass the row cannot
+  // name, which is the defect P1-21 and P1-36 removed elsewhere.
+  const old = readEntry({ ...PASS, lastContentReadAt: new Date(NOW.getTime() - 2 * DAY).toISOString(), lastContentLength: 92 }, { now: NOW });
+  assert.equal(old.contentSize, '92 bytes, read 2 d ago');
+
+  // A size with no readable time, and a size read by a clock that is wrong. Both
+  // say so; neither becomes "today" — the same rule `passAge` keeps for a pass.
+  assert.equal(readEntry({ ...PASS, lastContentLength: 92 }, { now: NOW }).contentSize, '92 bytes, read at an unknown time');
+  assert.equal(readEntry({ ...PASS, lastContentLength: 92, lastContentReadAt: 'ikke-en-dato' }, { now: NOW }).contentSize, '92 bytes, read at an unknown time');
+  assert.match(readEntry({ ...PASS, lastContentLength: 92, lastContentReadAt: '2026-10-15T00:00:00.000Z' }, { now: NOW }).contentSize, /92 bytes, read 18 d ahead of this machine's clock/);
+
+  // A page nobody has read has no size and no sentence. Not 0, and not "no
+  // change" — that all-clear is what P1-21 removed from `check --json`.
+  const never = readEntry({ ...PASS }, { now: NOW });
+  assert.equal(never.contentNote, '');
+  assert.equal(never.contentSize, '');
+
+  // The size is the report's number, not a second measurement: both surfaces read
+  // `readContentChangeState`, so they cannot disagree about what the page was.
+  const reportState = readContentChangeState({ lastContentLength: 92, lastContentReadAt: '2026-09-27T08:30:00.000Z' }, { now: NOW });
+  assert.equal(reportState.bytes, 92);
+  assert.equal(read.content.bytes, reportState.bytes);
+});
+
+test('the two lists name a defaced page instead of a healthy 200', async (t) => {
+  const site = await pageFixture(t);
+  site.serve('side');
+  const { options } = freeHome(t, { [site.url]: { ...PASS } });
+
+  // Two real passes through the real CLI on a free machine: the first reads the
+  // page, the second sees it rewritten. No Pro record, no stub checker.
+  await cli(['watch', '--once'], options);
+  site.serve('defaced');
+  await cli(['watch', '--once'], options);
+
+  const [list, watch] = await Promise.all([cli(['status'], options), cli(['watch', '--status'], options)]);
+  // The free tier is this pair's audience, and the lists still do their own job:
+  // the license line on `status`, the header and the pass time on `watch --status`.
+  assert.match(list.stdout, /Free tier/, 'the free tier line is still `status`\'s first job');
+  assert.match(watch.stdout, /📋 1 monitored URL\(s\)/);
+  for (const [stdout, label] of [[list.stdout, 'status'], [watch.stdout, 'watch --status']]) {
+    const row = rowFor(stdout, site.url);
+    assert.match(row, /🔄 content changed/, `${label}: the row is silent about a page that was rewritten`);
+    assert.match(row, /page title: "Free iPhone!!"/, `${label}: the title is the part a customer recognises`);
+    // The verdict does not move. A page served with 200 is up, whatever it says.
+    assert.match(row, /\(200\)/, `${label}: the status code is still the site's`);
+  }
+
+  // And the two lists are the same reading of the same file, not two sentences.
+  const a = readEntry(readState(join(options.HOME, '.deskuptime', 'state.json')).urls[site.url]).contentNote;
+  assert.ok(rowFor(list.stdout, site.url).includes(a));
+  assert.ok(rowFor(watch.stdout, site.url).includes(a));
+});
+
+test('a page read today is named by its size, and one that stopped being read by its age', async (t) => {
+  const site = await pageFixture(t);
+  site.serve('side');
+  const { stateFile, options } = freeHome(t, { [site.url]: { ...PASS } });
+  await cli(['watch', '--once'], options);
+
+  const measured = readState(stateFile).urls[site.url];
+  const size = measured.lastContentLength;
+  const [list, watch] = await Promise.all([cli(['status'], options), cli(['watch', '--status'], options)]);
+  for (const stdout of [list.stdout, watch.stdout]) {
+    const row = rowFor(stdout, site.url);
+    assert.match(row, new RegExp(`· ${size} bytes`), `expected the size on ${JSON.stringify(row)}`);
+    assert.doesNotMatch(row, /content changed/, 'a page nobody changed is not named as changed');
+  }
+
+  // Now the measured half of the age: a page that grew past the content-check
+  // limit. The byte count on disk is the one from the pass that *did* read it and
+  // the pass itself has moved on, so the number describes a page we have not
+  // looked at since. A test cannot wait two days for that age, so the reading is
+  // placed where a real one would sit — and the row has to say how old it is.
+  site.serve('big');
+  await cli(['watch', '--once'], options);
+  const skipped = readState(stateFile).urls[site.url];
+  assert.equal(skipped.lastContentReadAt, measured.lastContentReadAt, 'a skipped pass stamps no new reading');
+  assert.equal(skipped.lastContentLength, size, 'and no new size');
+  assert.ok(Date.parse(skipped.lastChecked) > Date.parse(skipped.lastContentReadAt), 'the pass itself did move on');
+
+  const aged = readState(stateFile);
+  aged.urls[site.url].lastContentReadAt = new Date(Date.now() - 2 * DAY).toISOString();
+  writeFileSync(stateFile, JSON.stringify(aged));
+
+  const [later, laterWatch] = await Promise.all([cli(['status'], options), cli(['watch', '--status'], options)]);
+  for (const [stdout, label] of [[later.stdout, 'status'], [laterWatch.stdout, 'watch --status']]) {
+    const row = rowFor(stdout, site.url);
+    assert.match(row, new RegExp(`· ${size} bytes, read 2 d ago`), `${label}: ${JSON.stringify(row)}`);
+    assert.doesNotMatch(row, new RegExp(`· ${size} bytes$`), `${label}: a bare size would read as this pass's measurement`);
+  }
+});
+
+test('a page title chosen by the site cannot drive the terminal', async (t) => {
+  // The title is text the monitored site chose — a `<title>` can hold anything,
+  // and a hostile one can hold an escape sequence. It reaches a terminal row for
+  // the first time here, so it goes through `safeText` like the URL beside it.
+  //
+  // The stamp is an hour *old*, and that matters: a change dated ahead of this
+  // machine's clock takes the clock branch of the sentence, which names the skew
+  // and drops the title. The first version of this test did that by accident and
+  // passed against a build that printed the escape sequence verbatim — the
+  // measured proof is `page title: "^[[2JOWNED"` on a mutated `status`.
+  const past = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+  const options = freeHome(t, {
+    'https://ond.dk/': { ...PASS, lastChecked: past, lastContentChangedAt: past, lastTitle: `${ESC}[2J${ESC}[5mOWNED-BY-PAGE${ESC}[0m` },
+  }).options;
+  const [list, watch] = await Promise.all([cli(['status'], options), cli(['watch', '--status'], options)]);
+  for (const [stdout, label] of [[list.stdout, 'status'], [watch.stdout, 'watch --status']]) {
+    const row = rowFor(stdout, 'ond.dk');
+    assertInert(stdout, label);
+    assert.match(row, /🔄 content changed/, `${label}: the change is still named`);
+    // The words survive; only the control bytes are gone. Asserting the text as
+    // well as its absence is what keeps this test from passing on a row that
+    // simply never named the title.
+    assert.ok(row.includes('OWNED-BY-PAGE'), `${label}: the title was dropped instead of flattened: ${JSON.stringify(row)}`);
+    assert.equal(stdout.includes(`${ESC}[2J`), false, `${label}: the escape sequence was printed`);
+  }
 });

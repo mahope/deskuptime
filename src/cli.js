@@ -741,10 +741,19 @@ if (command === 'status') {
     // was silent about a wrong clock while `watch --status` and the client
     // report showed the impossible date. The verdict is untouched.
     const ahead = e.clockAhead ? ` ⚠️ ${e.clockAhead}` : '';
+    // The page, read by the same owner the client report asks. Without it a
+    // defaced or replaced homepage printed as a plain `✅` here while every
+    // uptime number on the row stayed perfect — and this is the free surface,
+    // so the paid report was not the only place a customer could meet a silent
+    // answer. The title comes from the site itself, so the sentence goes through
+    // safeText like every other value on this line.
+    const content = e.contentNote
+      ? ` ${safeText(e.contentNote, { max: 0 })}`
+      : e.contentSize ? ` · ${e.contentSize}` : '';
     // A key we never could check is shown without its credentials, like every
     // other surface: a password in a hand-edited or restored key must not be
     // printed on the list a user reads to see whether monitoring works (P1-45).
-    console.log(`  ${up} ${safeText(withoutCredentials(u), { max: 0 })}${code}${ssl}${unknown}${stale}${redirect}${ahead}`);
+    console.log(`  ${up} ${safeText(withoutCredentials(u), { max: 0 })}${code}${ssl}${unknown}${stale}${redirect}${ahead}${content}`);
   }
   // A key that is not an address prints above like any other row — as a site
   // whose verdict is merely unknown — although it was never measured and never

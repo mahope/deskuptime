@@ -1061,6 +1061,37 @@ function byteCount(value) {
 }
 
 /**
+ * How a terminal list row names the size of a page, and how old that size is.
+ *
+ * The size is a measurement of one reading, and a reading ages. `content.js`
+ * skips a body over the 2 MiB limit and leaves `lastContentLength` alone, so a
+ * pass can advance `lastChecked` while the byte count on the row is left over
+ * from an earlier pass — measured 2026-09-27, where a page read once and then
+ * served at 3 MiB kept publishing the size of the version we read. A row that
+ * printed that number bare would be quoting a pass it cannot name, which is the
+ * same defect P1-21 removed from `check --json` and P1-36 removed from the
+ * report's SSL column. A list row carries no room for a second timestamp, so the
+ * size carries its own age instead, asked of the one owner of a recorded time.
+ *
+ * A reading from today needs no words: that is the ordinary case and the row
+ * should stay short. Everything else says how old the number is, and a time that
+ * cannot be placed says so rather than being rounded into "today".
+ *
+ * @param {unknown} bytes — the state's `lastContentLength`
+ * @param {unknown} readAt — the state's `lastContentReadAt`
+ * @param {Date} now
+ * @returns {string} the fragment, or `''` when the size was never measured
+ */
+function byteCountNote(bytes, readAt, now) {
+  const size = `${byteCount(bytes)} bytes`;
+  const reading = passAge(readAt, now);
+  if (reading.state === PASS_AGE.AGED && reading.ageDays === 0) return size;
+  if (reading.state === PASS_AGE.AGED) return `${size}, read ${reading.ageDays} d ago`;
+  if (reading.state === PASS_AGE.AHEAD) return `${size}, read ${clockAheadNote(reading.aheadMs)}`;
+  return `${size}, read at an unknown time`;
+}
+
+/**
  * One reading of the content check, shared by every surface that prints one.
  *
  * The content check is not always a measurement. P2-1 del B capped the body at
@@ -1503,6 +1534,14 @@ export function readEntry(entry, { now = new Date(), url = '' } = {}) {
   const pass = passAge(value.lastChecked, now);
   const ageDays = pass.ageDays;
   const neverChecked = !value.lastChecked;
+  // The same reading the client report prints, asked of the same owner, so these
+  // two lists cannot say something about a page the report has already called
+  // silent — or the other way round. Measured 2026-09-27: a page rewritten to
+  // `<title>Free iPhone!!</title>` produced `🔄 … content changed` in the pass
+  // and `🔄 content changed … — page title: …` in the report, while both lists
+  // below printed `✅ up (200)` about the same file, and these two are the free
+  // surfaces a user actually runs.
+  const content = readContentChangeState(value, { now });
   // A key that is not an address has no verdict to report. Its stored `wasUp`
   // is whatever a hand-edited file, a botched restore or an old script left
   // behind, and a monitoring pass skips the key entirely (P1-40) — so printing
@@ -1559,6 +1598,18 @@ export function readEntry(entry, { now = new Date(), url = '' } = {}) {
     // neither compares hosts itself. The `label` is empty unless the answer came
     // from a different host, so an ordinary `www → apex` redirect stays silent.
     redirect: readRedirectTarget({ url, finalUrl: typeof value.lastFinalUrl === 'string' ? value.lastFinalUrl : null }),
+    // The page itself, in the two shapes a row needs. The sentence carries its
+    // own `🔄`, so a list places it as it is instead of stacking a second marker
+    // on top, and the size is a separate fact with its own age — see
+    // `byteCountNote` for why a bare number would be a quote from a pass the row
+    // cannot name. A changed page gets the sentence alone, for the same reason
+    // the report's Content cell prints `🔄 changed` or `stable · N bytes` and
+    // never both: a size read before a change is not the size of what changed.
+    // A page nobody has read gets nothing — `—` is for cells, and a row is not
+    // a table.
+    content,
+    contentNote: content.note,
+    contentSize: content.changed || content.bytes === null ? '' : byteCountNote(content.bytes, content.bytesReadAt, now),
   };
 }
 

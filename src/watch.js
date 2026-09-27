@@ -721,7 +721,15 @@ export function printStatus(options = {}) {
     // through readEntry: a site whose last answer came from another host is
     // named here too, and an ordinary redirect on its own host says nothing.
     const redirect = row.redirect.label ? ` ⚠️ ${row.redirect.label}` : '';
-    console.log(`  ${VERDICT_ICON[row.verdict]}  ${safeText(row.url, { max: 0 })} (${code}${ssl})${checked}${ahead}${unknown}${stale}${redirect}`);
+    // The page, from the same owner the client report asks, so the list cannot
+    // print a defaced site as a healthy `✅ up (200)` — this is the command a
+    // user runs to find out whether their monitoring works, and until P1-57 a
+    // homepage replaced with a fake form passed it. The title is text the
+    // monitored site chose, so the sentence is flattened like the URL above it.
+    const content = row.contentNote
+      ? ` ${safeText(row.contentNote, { max: 0 })}`
+      : row.contentSize ? ` · ${row.contentSize}` : '';
+    console.log(`  ${VERDICT_ICON[row.verdict]}  ${safeText(row.url, { max: 0 })} (${code}${ssl})${checked}${ahead}${unknown}${stale}${redirect}${content}`);
   }
 
   // A stale site is the reader's most consequential line and a per-row marker
