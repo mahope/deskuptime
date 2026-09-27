@@ -1109,6 +1109,56 @@ export function certRotationStateNote({ rotated = false, ageDays = null, aheadMs
 }
 
 /**
+ * How long one site waits between two *sent* certificate-rotation alerts. One
+ * hour — the same window as the content-change throttle, for the same reason.
+ */
+export const CERT_ALERT_MIN_GAP_MS = 60 * 60 * 1000;
+
+/**
+ * One certificate-rotation alert per site per hour — the throttle, and the
+ * sentence that accounts for what it held back. `null` means "measured, but not
+ * sent".
+ *
+ * `cert_rotated` is raised from a comparison with the *previous* pass, so a name
+ * that answers with one certificate on one server and another on the next — two
+ * regions behind one load balancer, a CDN mid-rollout, a canary deploy — is a
+ * rotation on every pass, and every rotation used to become an alert: a POST to
+ * the paid channel and a desktop notification, 30 s apart, for as long as the
+ * loop ran. Measured 2026-09-27 with the real loop over such a site: five
+ * `cert_rotated` alerts out of six passes, 2 880 a day per site — the same harm
+ * as the content flood one class over, and the same mute that then hides the
+ * real `is DOWN`.
+ *
+ * So the comparison still runs and the rotation is still written on every pass:
+ * this decides what is *sent*, not what is true. That is the difference from a
+ * throttled `down` (P1-49), and it is what keeps the cost of this rule at zero —
+ * `lastCertRotatedAt` is the only surviving record of a rotation, and P1-61
+ * exists because the pass overwrites the fingerprint, so a fact dropped here
+ * would be gone from the client report as well as from the channel. The first
+ * rotation after a quiet hour is sent as before, which is what a domain handed
+ * to a new owner needs, and what a certificate reissued after 90 days gets for
+ * free. What the throttle holds back is counted, never dropped, and the next
+ * sent alert says how many rotations it stands for.
+ *
+ * A clock that jumped backwards does not suppress anything: this reads elapsed
+ * time, and a negative span is the same clock problem the pass already names
+ * (`clockAhead`), not evidence about a certificate.
+ */
+export function readCertRotationAlert({ rotation, previousAlertedAt = null, counted = 0, now = new Date(), minGapMs = CERT_ALERT_MIN_GAP_MS } = {}) {
+  const last = typeof previousAlertedAt === 'string' ? Date.parse(previousAlertedAt) : Number.NaN;
+  const elapsed = now.getTime() - last;
+  if (Number.isFinite(elapsed) && elapsed >= 0 && elapsed < minGapMs) return null;
+  const held = Number.isInteger(counted) && counted > 0 ? counted : 0;
+  // The sentence is the rotation's own, so this cannot announce a rotation with
+  // another rotation's wording.
+  const said = typeof rotation?.note === 'string' && rotation.note !== '' ? rotation.note : 'certificate replaced';
+  return {
+    message: `SSL certificate replaced — ${said}${held > 0 ? ` (${held} earlier rotation${held === 1 ? '' : 's'} since the last alert, not sent)` : ''}`,
+    held,
+  };
+}
+
+/**
  * The fixed wording for a certificate whose reading is too old to renew against.
  *
  * One sentence for every surface, and it carries the two numbers a reader needs

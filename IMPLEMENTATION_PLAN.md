@@ -1,3 +1,74 @@
+## Status fra denne iteration (79, P1-63 — et certifikat der flapper mellem to servere alarmerede 2 880 gange om dagen)
+
+**Hvorfor denne flade:** ❓ 1–3 er stadig ubesvarede, så iterationen tog fund (2) fra
+P1-60, som P1-61 og P1-62 lod ligge: rotationens **tæthed**. Det er samme klasse som
+`content_changed` fik sin tæthed for i P1-47, og den var umålt.
+
+**Målt først, nul kode ændret.** Rigtig `runPass`, rigtig state-fil, temp-HOME. Et navn
+der svarer med ét certifikat på den ene server og et andet på den næste — to regioner
+bag én load balancer, et CDN midt i en udrulning, en canary — er en rotation på
+*hvert* pass, fordi sammenligningen er mod **forrige** pass. seks pass 30 s fra
+hinanden:
+
+```
+pass 1  • baseline recorded: UP (200)
+pass 2  🔑 SSL certificate replaced — certificate rotated since …
+pass 3  🔑 SSL certificate replaced — certificate rotated since …
+pass 4  🔑 SSL certificate replaced — certificate rotated since …
+pass 5  🔑 SSL certificate replaced — certificate rotated since …
+pass 6  🔑 SSL certificate replaced — certificate rotated since …
+```
+
+**Fem af seks pass.** Hver eneste er en POST til den betalte kanal og en
+desktop-notification: 2 880 pr. døgn pr. site. Skaden er ikke larmet i sig selv, men
+det kanalen og notifikationscentret bliver **dæmpet** af — og dæmpningen er netop det
+der skjuler den rigtige `is DOWN`. Samme måling på et certifikat der bliver liggende
+efter én rotation gav 1 alarm i 6 pass, og den var uændret før og efter.
+
+**Ejeren er ny, og den er samme slags som de to den følger:** `readCertRotationAlert()`
+i `src/status.js` med `CERT_ALERT_MIN_GAP_MS` (én time, samme vindue som content).
+Efter de samme seks pass: **én** alarm. Den bygger sin sætning af rotationens *egen*
+sætning, så den ikke kan melde én rotation med en andens ord, og den tæller det den
+holdt tilbage og siger det i næste sendte besked
+(`3 earlier rotations since the last alert, not sent`).
+
+**Kendsgerningen skrives stadig på hvert pass**, også der hvor alarmen holdes tilbage.
+Det er **forskellen** på en tynget `down` (P1-49) og den er hele pointen: der kan en
+kunde have købt sig det øjeblik et site går ned, så dækningen må ikke bruges derpå.
+Et certifikat er en *kendsgerning om fortiden* — det ændrer sig ikke mens man venter
+på at få at vide det — så `lastCertRotatedAt`, det eneste spor der overlever passet
+fordi passet overskriver `lastCertFingerprint` (P1-61), skrives uændret. Kundenapporten
+og de to lister siger derfor stadig `🔑 certificate replaced i dag` på en flapper, og
+det er sandt. **Ingen status, exit-kode, uptime-tal eller SSL-celle flytter sig**;
+verdiktet er UP i hvert af de seks pass før og efter.
+
+**Test (11 nye i `test/certrotationflood.test.js`, auto i `npm test`):** seks pass over
+en flapper giver én alarm og fire holdte rotationer talt; kendsgerningen skrives på
+hvert pass og læses stadig med alder to dage senere; den næste sendte alarm efter en
+time siger hvad den står for og bruger tælleren; et certifikat der bliver liggende
+efter én rotation giver én alarm og så ingen; et site der ikke roterer får ingen;
+tætheden er pr. site (den anden side i samme pass alarmerer stadig); et nedbrud er
+aldrig tynget; et ur der gik baglæs undertrykker intet; en håndskrevet tæller kan ikke
+slå dækken fra; en beskadiget sidste alarmtid tæller ikke som en alarm; og sætningen
+findes kun hos ejeren, med timegrænsen målt i begge retninger.
+
+**Resultat: 574/574 grøn** (563 + 11), audit 0/0, `node --check` på alle JS og MJS,
+`matrix --check` exit 0, `git diff --check` rent. Node 26.7.0. Matrix-påstanden for
+webhook-rækken var falsk efter rettelsen — den sagde "en flappende site holdes på
+1/time pr. art **efter 4 skift i timen**", hvilket er transition-reglen (P1-49), ikke
+rotations-reglen, der gælder fra den første — og siger nu begge dele.
+`docs/cert-rotation.md` og `docs/pro-alerts.md` §2 er opdateret, fordi de er
+kontrakten en adapter skrives imod. **Ingen mutationstest** — over tidsbudgeten (42
+min), samme ærlige notering som P1-47/49/50/51/52/61/62.
+
+**Næste:** ❓ 1–3 og ❓ 14, ellers en målt opgave. Uafsluttede fund fra P1-60: (3)
+`serialNumber` er gemt siden P0-3 (`lastCertSerial`) og læses af ingen. Fund fra denne
+iteration: (1) rotationen tælles nu pr. time men ikke pr. *antal* — en flapper der
+sender 2 880 gange i timen er stadig 2 880 i state-filen, kun den sendte besked er
+tyndet; en tælling af rotationer i timen ville kunne sige "flappede 4 gange" i
+rapporten, men er ikke bygget. (2) `certRotationsHeld` optælles aldrig hvis webhooks er
+slået fra — det er samme mønster som `contentChangesHeld`, altså ikke en fejl.
+
 ## Status fra denne iteration (78, P1-62 — de to gratis-lister var tavse om et byttet certifikat, mens den betalte rapport navngavnede det)
 
 **Hvorfor denne flade:** ❓ 1–3 er stadig ubesvarede, så iterationen tog det
@@ -4411,6 +4482,8 @@ for selv. Ingen gemt nøgle er omskrevet, ingen eksisterende adgangsd tilstand
 
 ## Iterationslog
 
+- **Iteration 79 (P1-63, målt + fix):** P1-60-fund (2): rotationens tæthed. Målt først med rigtig `runPass` over et navn der svarer med to certifikater: `cert_rotated` på 5 af 6 pass = 2 880 POST/døgn/site i den betalte kanal, og dæmpningen af kanalen er det der så skjuler `is DOWN`. Fix: `readCertRotationAlert()` + `CERT_ALERT_MIN_GAP_MS` (1 time) som den nye ejer, samme form som de to andre dæmpninger; efter de samme seks pass 1 alarm. **Kendsgerningen skrives stadig på hvert pass** — det er forskellen på P1-49's tyngede `down`, fordi `lastCertRotatedAt` er det eneste spor der overlever passet (P1-61). 11 nye tests → **574/574**; audit 0/0; `node --check`, `matrix --check`, `git diff --check` grønne på Node 26.7.0. Matrix-claim for webhook-rækken var falsk (nævnte kun transition-reglen) og siger nu begge. `ceo/cert-rotation-density`. **Ingen mutationstest** — over tidsbudgeten (42 min). **Næste:** ❓ 1–3 og ❓ 14, ellers en målt opgave; bl.a. `serialNumber`, gemt siden P0-3 men læst af ingen.
+
 - **Iteration 78 (P1-62, målt + fix):** P1-60-fund (1): de to terminal-lister var tavse om et byttet certifikat, så kendsgerningen fandtes kun i den betalte rapport. Målt først med rigtig CLI og rigtige passer: to rækker tegn for tegn ens, `✅ … (200) — SSL 89d`, mens rapporten over samme fil sagde `1 site has its certificate replaced`; SSL-dagstalet var større efter et hijack end før. Fix: `readEntry` spørger `readCertRotationState` (P1-61's ejer) og begge lister placerer `certNote` med sit `🔑`; alderen rejser med, fordi en liste læses dage efter passet. Rækker uden stempel tier (det er det normale tilfælde), listerne er læsere — filen er byte for byte uændret efter begge kommandoer, og `cert_rotated` tilhører stadig passet. 10 nye tests → **563/563**; audit 0/0; `node --check`, `matrix --check`, `git diff --check` grønne på Node 26.7.0. **Ingen mutationstest** — over tidsbudgeten (38 min). `ceo/cert-rotation-lists`. **Næste:** ❓ 1–3 og ❓ 14, ellers en målt opgave; bl.a. rotationens tæthed (et flappende certifikat), P1-63.
 
 - **Iteration 77 (P1-61, målt + fix):** P1-60 fund (1): kundenapporten vidste ikke at et certifikat var byttet, og state-filen havde kendsgerningen væk — `runPass` overskriver `lastCertFingerprint` i samme pass der ser rotationen. Målt først med rigtig CLI og rigtige passer: to rapporter ens i alt, og SSL-dagstalet større efter et hijack end før det. Fix: `lastCertRotatedAt` (P1-56s `lastContentChangedAt`) + `readCertRotationState` som ene ejer + additivt i rapporten (tælling, fire felter, navngiven linje med alderen). Ordet *replaced*, aldrig *mistænkeligt* — de fleste værter udsteder nyt hver 90. dag. 10 nye tests → **553/553**; audit 0/0; `node --check`, `matrix --check`, `git diff --check` grønne på Node 26.7.0. **Ingen mutationstest** — over tidsbudgeten (43 min). `ceo/report-cert-rotation`. **Næste:** ❓ 1–3 og ❓ 14, ellers en målt opgave; bl.a. de to statuslister, der stadig tier om rotation (P1-62).
@@ -4806,8 +4879,43 @@ læsning, ingen ny lyd: `readEntry` var allerede den ene ejer.
   ren. Node 26.7.0. ✅
 - `docs/cert-rotation.md` beskriver de to lister. ✅
 
-**Næste:** rotationens **tæthed** — et certifikat der flapper mellem to servere
-skriver `lastCertRotatedAt` på hvert pass, så rapporten og listerne siger
-"replaced" hver gang. Samme klasse som `content_changed` fik sin tæthed for
-(P1-47, `readContentChangeAlert`), umålt endnu. Derefter `serialNumber`, der gemmes
-siden P0-3 men læses af ingen.
+**Næste:** fund (3) fra P1-60, som P1-63 nu også har lukket for flapperens del:
+`serialNumber` er gemt siden P0-3 (`lastCertSerial`) og læses af ingen.
+
+### P1-63 — FÆRDIG 2026-09-27 (`ceo/cert-rotation-density`) — Rotationens tæthed
+
+**Begrundelse:** fund (2) fra P1-60, som P1-61 og P1-62 lod ligge, og som P1-47's
+content-flop lægger op til: rotationen sammenlignes med *forrige* pass, så et navn der
+svarer med to certifikater er en rotation på hvert pass. Målt først: 5 `cert_rotated`
+i 6 pass = 2 880 POST/døgn/site i den betalte kanal.
+
+**Rettelsen:** `readCertRotationAlert()` i `src/status.js` er den ene ejer af "hvad
+sendes", med `CERT_ALERT_MIN_GAP_MS` (én time) — samme form som `readContentChangeAlert`
+og `readTransitionAlert`, så de tre dæmpninger læses som én regel. `runPass` spørger den
+lige før den skrev hændelsen, og skriver `certAlertedAt`/`certRotationsHeld` på samme
+mønster som content.
+
+**Valgt, og hvorfor:** kendsgerningen skrives stadig på hvert pass. Det er
+**forskellen** på P1-49's tyngede `down`, og det er hele pointen: `down` er et øjeblik
+kunden har betalt for at høre, et certifikat er en kendsgerning om fortiden, og
+`lastCertRotatedAt` er det eneste spor der overlever passet (P1-61). Prisen ved at holde
+beskeden er nul; rapporten og listerne siger stadig det de sagde.
+
+**Acceptkriterier (alle målte, se afsnittet øverst):**
+- Seks pass over en flapper: 1 alarm, 4 rotationer talt i `certRotationsHeld`. ✅
+- `lastCertRotatedAt` skrives på hvert pass, også de holdte, og læses stadig med
+  alder 2 dage senere af `readCertRotationState`. ✅
+- Den næste sendte alarm efter en time siger `3 earlier rotations since the last
+  alert, not sent`, og tælleren bruges. ✅
+- Ét site der ikke roterer: ingen alarm. Ét certifikat der bliver liggende efter én
+  rotation: én alarm, så ingen. ✅
+- Tætheden er pr. site; et nedbrud er aldrig tynget. ✅
+- `down`/`up`, exit-kode, SSL-celle og uptime-tal uændret — verdiktet er UP i alle
+  seks pass før og efter. ✅
+- Matrix-påstanden for webhook-rækken sagde "efter 4 skift i timen" alene, hvilket er
+  transition-reglen; den siger nu begge regler. `matrix --check` 0. ✅
+- `npm test` **574/574** (563 + 11), audit 0/0, `matrix --check` 0, `node --check`
+  ren. Node 26.7.0. ✅
+- `docs/cert-rotation.md` og `docs/pro-alerts.md` §2 beskriver tætheden. ✅
+
+**Næste:** fund (3) fra P1-60 — `serialNumber` er gemt siden P0-3 og læses af ingen.

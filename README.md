@@ -92,7 +92,7 @@ limits and adds alerts that reach you when you are not at the terminal.
 | `watch` background monitoring | 3 URLs, min. 60s interval | Unlimited URLs, min. 30s interval | In both tiers |
 | Terminal alerts on up/down/SSL/content change | ✅ | ✅ | In both tiers |
 | `deskuptime status` — license state and monitored URLs, read-only | ✅ | ✅ | In both tiers |
-| Webhook alerts on every event — a flapping site is held to 1/hour per kind, after 4 changes in the hour (`--webhook`) | — | ✅ | Pro only |
+| Webhook alerts on every event — a flapping site is held to 1/hour per kind, after 4 changes in the hour; a site whose page or certificate changes on every pass is held to 1/hour from the first (`--webhook`) | — | ✅ | Pro only |
 | Local desktop notification (macOS in the CLI, all platforms in the desktop app) | — | ✅ | Pro only |
 | Desktop app: tray, background loop, activity view | — | ✅ | Pro only — private desktop app |
 | Shareable status page / customer report (`report`, Markdown + JSON) | — | ✅ | Pro only |

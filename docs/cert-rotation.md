@@ -130,7 +130,45 @@ ikke andet: ingen hændelse, ingen ny tælling, ingen gemt stempel. Hændelsen
 `cert_rotated` tilhører passet (P1-60), fordi den er en betingelse om *at noget
 skete*, ikke en læsning af en gemt fil.
 
-Uden for denne iteration: **flapperen**. Et certifikat der skifter mellem to
-servere skriver `lastCertRotatedAt` på hvert pass, så rapporten og listerne siger
-"replaced" hver gang. Samme klasse som `content_changed` fik sin tæthed for
-(P1-47) og den er umålt.
+## Tætheden: et certifikat der flapper mellem to servere (P1-63)
+
+Et navn der svarer med ét certifikat på den ene server og et andet på den næste —
+to regioner bag én load balancer, et CDN midt i en udrulning, en canary-deploy — er
+en rotation på **hvert** pass, fordi rotationen sammenlignes med *forrige* pass.
+Målt 2026-09-27 med den rigtige loop, seks pass 30 s fra hinanden:
+
+```
+pass 1  • baseline recorded: UP (200)
+pass 2  🔑 SSL certificate replaced — certificate rotated since …
+pass 3  🔑 SSL certificate replaced — certificate rotated since …
+pass 4  🔑 SSL certificate replaced — certificate rotated since …
+pass 5  🔑 SSL certificate replaced — certificate rotated since …
+pass 6  🔑 SSL certificate replaced — certificate rotated since …
+```
+
+Fem af seks pass, og hver eneste er en POST til den betalte kanal og en
+desktop-notification: 2 880 pr. døgn pr. site. Skaden er ikke larmet i sig selv,
+men det kanalen og notifikationscentret bliver **dæmpet** af — og dæmpningen er
+netop det der skjuler den rigtige `is DOWN`.
+
+Efter: **én** alarm i samme seks pass, og de to state-filer er stadig
+byte for byte forskellige på den måde der betyder noget. Samme regel som
+content-ændringer (P1-47) og samme time, `CERT_ALERT_MIN_GAP_MS`; ejeren er
+`readCertRotationAlert()` i `src/status.js`, og den bygger sin sætning af
+rotationens *egen* sætning, så den ikke kan melde én rotation med en andens ord.
+
+**Kendsgerningen skrives stadig på hvert pass**, også på de pass hvor alarmen
+holdes tilbage — `lastCertRotatedAt` er det eneste spor der overlever passet, fordi
+passet overskriver `lastCertFingerprint` med den nye identitet (P1-61). Det er
+**forskellen** på en tynget `down` (P1-49): der kan en kunde have købt sig det øjeblik
+et site går ned, så dækningen må ikke bruges på et rigtigt nedbrud. Et certifikat
+er en *kendsgerning om fortiden* — det ændrer sig ikke mens man venter på at få at
+vide det — så prisen ved at holde *beskeden* tilbage er nul, og kundenapporten og de
+to lister siger stadig `🔑 certificate replaced i dag`. Det der blev holdt tilbage
+**tælles, ikke kasseres**: den næste sendte alarm siger hvor mange rotationer den
+står for (`3 earlier rotations since the last alert, not sent`).
+
+Den første rotation efter en stille time sendes som før, så et domæne der er kommet
+i nye hænder meldes, og en vært der udsteder nyt certifikat hver 90. dag får sin
+alarm som før. Et nedbrud er aldrig tynget: `cert_rotated` og `down` er to hændelser
+i to kodelinjer, og kun den første har en dækning.

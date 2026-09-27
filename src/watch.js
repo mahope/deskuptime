@@ -17,7 +17,7 @@ import { readFileSync, writeFileSync, mkdirSync, existsSync, renameSync, unlinkS
 import { dirname, posix, win32 } from 'path';
 import { homedir } from 'os';
 import { createHash, randomUUID } from 'crypto';
-import { assertValidHttpUrls, expiredNote, findUrlKey, isNewerPass, partitionUsableUrls, readCertIdentity, readCertRotation, readContentChange, readContentChangeAlert, readEntry, readEvent, readRedirectTarget, readTransitionAlert, queuedAgeMs, readSslState, STALE_AFTER_DAYS, unusableUrlNote, urlIdentity, withoutCredentials } from './status.js';
+import { assertValidHttpUrls, expiredNote, findUrlKey, isNewerPass, partitionUsableUrls, readCertIdentity, readCertRotation, readCertRotationAlert, readContentChange, readContentChangeAlert, readEntry, readEvent, readRedirectTarget, readTransitionAlert, queuedAgeMs, readSslState, STALE_AFTER_DAYS, unusableUrlNote, urlIdentity, withoutCredentials } from './status.js';
 import { recordPass } from './report.js';
 import { formatMs, safeText } from './display.js';
 import { historyFileFrom, pruneHistory, readHistoryFile, recordHistoryPass, saveHistory, historyWriteErrorMessage } from './history.js';
@@ -548,15 +548,38 @@ export async function runPass(state, opts = {}) {
         now,
       });
       if (rotation.compared && rotation.rotated) {
-        events.push(event('cert_rotated', `SSL certificate replaced — ${rotation.note}`));
-        // When the certificate last changed, and whether or not the alert could be
-        // delivered. The line above is the alarm; this is the *fact*, and it is
-        // the only copy that survives: the pass overwrites `lastCertFingerprint`
-        // with the new identity, so measured 2026-09-27, a state file 1 d after a
-        // domain changed owner was byte-for-byte indistinguishable from one
-        // where nothing had ever happened — and the client report, the document a
-        // bureau forwards, said `UP (200) | 100%` about both. Same rule as the
-        // page (`lastContentChangedAt`, P1-56).
+        // Whether the rotation is *sent* is a second question, and it has one
+        // owner too: a name that answers with one certificate on one server and
+        // another on the next is a rotation on every pass, and every rotation
+        // used to become an alert — a POST to the paid channel and a desktop
+        // notification every 30 s, for as long as the loop ran. Measured
+        // 2026-09-27; see readCertRotationAlert(). The comparison still runs on
+        // every pass, and the rotation below is still written on every pass:
+        // this decides what a customer *hears*, not what is true.
+        const alert = readCertRotationAlert({
+          rotation,
+          previousAlertedAt: entry.certAlertedAt,
+          counted: entry.certRotationsHeld,
+          now,
+        });
+        if (alert) {
+          events.push(event('cert_rotated', alert.message));
+          entry.certAlertedAt = now.toISOString();
+          entry.certRotationsHeld = 0;
+        } else {
+          // Held, not dropped: the count rides on the next alert that is sent.
+          entry.certRotationsHeld = (Number.isInteger(entry.certRotationsHeld) ? entry.certRotationsHeld : 0) + 1;
+        }
+        // When the certificate last changed. The line above is the alarm; this is
+        // the *fact*, and it is the only copy that survives: the pass overwrites
+        // `lastCertFingerprint` with the new identity, so measured 2026-09-27, a
+        // state file 1 d after a domain changed owner was byte-for-byte
+        // indistinguishable from one where nothing had ever happened — and the
+        // client report, the document a bureau forwards, said `UP (200) | 100%`
+        // about both. Same rule as the page (`lastContentChangedAt`, P1-56), and
+        // for the same reason it cannot ride on the alert above: a throttle that
+        // dropped the fact would take the knowledge out of the report, which is
+        // where P1-61 put it.
         entry.lastCertRotatedAt = measuredAt;
       }
       entry.lastCertFingerprint = identity.fingerprint;

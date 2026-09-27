@@ -18,7 +18,7 @@ kundeflade kan love dem. Redigér claims i `src/features.js`, ikke i tabellerne.
 | `watch` baggrundsovervågning | 3 URL'er, min. 60 s interval | Ubegrænsede URL'er, min. 30 s interval | I begge |
 | Terminal-udskrift ved UP/DOWN/SSL/content-ændring | ✅ | ✅ | I begge |
 | `deskuptime status` — licenstilstand og overvågede URL'er, read-only | ✅ | ✅ | I begge |
-| Webhook-alerts ved hver hændelse — en flappende site holdes på 1/time pr. art efter 4 skift i timen (`--webhook`) | — | ✅ | Kun Pro |
+| Webhook-alerts ved hver hændelse — en flappende site holdes på 1/time pr. art efter 4 skift i timen; en side hvis indhold eller certifikat ændrer sig på hvert pass holdes på 1/time fra den første (`--webhook`) | — | ✅ | Kun Pro |
 | Lokal desktop-notification (macOS i CLI'en, alle platforme i desktopappen) | — | ✅ | Kun Pro |
 | Desktop-app: tray, baggrundsloop, aktivitetsoversigt | — | ✅ | Kun Pro — privat desktopapp |
 | Email-alerts | — | — | **Ikke bygget** |
@@ -45,20 +45,26 @@ Kommando: `deskuptime watch <url> --webhook <url>`.
 
 - **Hvornår:** én POST pr. hændelse, dog aldrig for `baseline`-begivenheder.
 - **Hvilke hændelser der sendes:** alle typerne i `EVENT_TYPES` undtagen `baseline`.
-  Den eneste type med en tæthed er `content_changed`: **højst én pr. site pr. time**
+  To typer har en tæthed. `content_changed`: **højst én pr. site pr. time**
   (`CONTENT_ALERT_MIN_GAP_MS` i `src/status.js`). En side der renderer en værdi pr.
   forespørgsel — et CSRF-token, en cache-buster, et "sidst opdateret"-tidspunkt, en
   live-tæller — har et nyt hash på *hvert* pass, så uden tætheden blev hver eneste
   forespørgsel til en alarm: målt 2026-09-26 med den rigtige loop gav tre pass tre
-  alarmer på en sådan side. Det er ikke larmet i sig selv, der skader — det er det
-  kanalen og notifikationscentret bliver **dæmpet** af, og dæmpningen er netop det der
-  skjuler den rigtige `is DOWN`. Ændringen læses, hashes, tælles og skrives på hvert
-  pass som før; kun det der *sendes* holdes tilbage. Den første ændring efter en stille
-  time sendes som før, så en defaceret eller redesignet side stadig meldes. Det der
-  blev holdt tilbage **tælles, ikke kasseres**: den næste sendte alarm siger hvor
-  mange ændringer den står for (`3 earlier changes since the last alert, not sent`),
-  så en adapter kan se at siden var aktiv uden at få 2 880 beskeder om det. Et ur der
-  gik baglæs undertrykker intet: spændvidden er negativ, og det er et urproblem, ikke
+  alarmer på en sådan side. `cert_rotated`: **højst én pr. site pr. time**
+  (`CERT_ALERT_MIN_GAP_MS`), fordi rotationen sammenlignes med *forrige* pass, så et
+  navn der svarer med ét certifikat på den ene server og et andet på den næste — to
+  regioner bag én load balancer, et CDN midt i en udrulning, en canary — er en
+  rotation på hvert pass: målt 2026-09-27 gav seks pass **fem** `cert_rotated`, 2 880
+  pr. døgn pr. site. Det er ikke larmet i sig selv, der skader — det er det kanalen og
+  notifikationscentret bliver **dæmpet** af, og dæmpningen er netop det der skjuler den
+  rigtige `is DOWN`. I begge tilfælde læses, hashes/tælles og skrives kendsgerningen på
+  hvert pass som før; kun det der *sendes* holdes tilbage. Den første ændring efter en
+  stille time sendes som før, så en defaceret side, en redesignet side og et domæne der
+  er kommet i nye hænder stadig meldes. Det der blev holdt tilbage **tælles, ikke
+  kasseres**: den næste sendte alarm siger hvor mange den står for (`3 earlier changes
+  since the last alert, not sent` / `3 earlier rotations since the last alert, not
+  sent`), så en adapter kan se at siden var aktiv uden at få 2 880 beskeder om det. Et ur
+  der gik baglæs undertrykker intet: spændvidden er negativ, og det er et urproblem, ikke
   et udsagn om siden.
 - **Hvornår kommer der et `down`:** når et site *nu* er nede, og forrige måling enten
   var op eller ikke kunne læses. En `wasUp` i state-filen, der hverken er `true` eller
