@@ -234,11 +234,31 @@ export function readContentChange({ previousLength = null, length = null, previo
   const titleChanged = before !== null && after !== null && before !== after;
   const sameSize = Number.isFinite(previousLength) && Number.isFinite(length) && previousLength === length;
 
+  // The two titles are quoted verbatim, and every surface that prints this
+  // sentence flattens the text to one line first — `printPass()` on the terminal
+  // and the macOS notification, both through `safeText()`. A title carrying a
+  // newline therefore printed the *same* string on both sides of the arrow,
+  // which is the sentence contradicting itself, measured 2026-09-27 with the real
+  // loop and a real page title holding one line break:
+  //
+  //   🔄 https://kunde.dk/ content changed — page title: "Free iPhone!!" → "Free iPhone!!"
+  //
+  // A customer reads that as "the title did not change", while the sentence says
+  // it did — and a multi-line `<title>` is ordinary (a template that wraps, a
+  // title assembled from two strings). The difference is real and the bytes
+  // still differ, so the change is still reported; only the pair of titles is
+  // replaced by what a reader can actually see. `safeText()` is the one owner of
+  // what a screen shows, so the two sides are compared through it rather than
+  // with a second, weaker idea of "printable".
+  const pairReadable = !titleChanged || safeText(before, { max: 0 }) !== safeText(after, { max: 0 });
+
   if (sameSize) {
     return {
       titleChanged,
       message: titleChanged
-        ? `content changed — page title: "${before}" → "${after}" (same size, ${length} bytes)`
+        ? pairReadable
+          ? `content changed — page title: "${before}" → "${after}" (same size, ${length} bytes)`
+          : `content changed — page title changed, but the two titles differ only in whitespace or characters a screen cannot show (same size, ${length} bytes)`
         : `content changed — same size (${length} bytes): the page's bytes differ`,
     };
   }

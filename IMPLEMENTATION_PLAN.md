@@ -1,4 +1,58 @@
-## Status fra denne iteration (85, P1-69 — kundenapporten kunne sige *at* certifikatet var byttet, *hvor mange* gange og *hvem* der udstedte det nye, men ikke *hvilket* certifikat — selv om tallet har ligget i state-filen siden P0-3)
+## Status fra denne iteration (86, P1-70 — en alarm sagde at sidens titel var ændret, og trykkede den samme titel på begge sider af en pil)
+
+**Målt først, nul kode ændret.** Rigtig CLI, rigtig `watch`-loop, rigtig state-fil med
+Pro, rigtig lokal side hvis `<title>` indeholdt ét linjeskift, og rigtig `osascript` på
+PATH (shimmet, så der ikke popper en notifikation op på Mads' skærm). Passen skrev
+`content_changed`, fordi hashen ændrede sig — og sådan så sætningen ud:
+
+```
+terminal   🔄 http://127.0.0.1:59048/ content changed — page title: "Free iPhone!!" → "Free iPhone!!" (same size, 56 bytes)
+osascript  display notification "http://…/ content changed — page title: \"Free iPhone!!\" → \"Free
+           iPhone!!\" (same size, 56 bytes)" with title "DeskUptime"
+```
+
+**Den samme streng på begge sider af en pil, der siger at titlen ændrede sig.** En kunde
+læser «titlen er ikke ændret», mens sætningen siger det modsatte — P1-35's klasse
+(en sætning, der modsiger sig selv) i en ny forklædning, og den rammer de to flader der
+skriver alarmen: terminalen og macOS-notifikationen, som begge går gennem `safeText()`.
+
+**Årsagen er ikke en fejl i teksten, men at to overflader har to regler for den.** Titlen
+er sidens *egen* tekst, og `extractTitle()` tager `[^<]+` — et linjeskift er ikke `<`, så
+et `<title>` med to linjer er helt almindeligt (en template der bryder, en titel sat
+sammen af to strenge). Sætnings-ejeren `readContentChange()` citerer begge titler råt,
+mens enhver flade der *viser* sætningen flader den til én linje først. Den stærkeste
+flade — den, der bygger et **program** — viste sig dog ikke at være fælden: målt med
+`osacompile` accepterer macOS en rå linjeskift inde i en streng, så notifikationen blev
+sendt. Det er derfor terminalen, der fejler, ikke `osascript`.
+
+**Rettelsen er den mindste der findes, og den ligger i ejeren.** Én betingelse i
+`readContentChange()`: hvis de to titler er forskellige, men ens når de læses gennem
+`safeText()` — den ene ejer af hvad en skærm viser, spurgt i stedet for en svagere egen
+idé om «printbar» — så citeres parret ikke, og sætningen siger hvad der faktisk er
+sandt: at titlen ændrede sig, men at forskellen kun er mellemrum eller tegn en skærm
+ikke viser. **Den normale fornyelse er tegn for tegn uændret**, også når titlen ændrede
+sig med et synligt tegn (testet), og «titlen ændrede sig ikke» beholder sin egen sætning
+(testet). Verdict, exit-kode, JSON, matrixrækker og alle øvrige flader flytter sig ikke.
+
+**Én eksisterende lås måtte udvides, ikke slækkes** (tiende gang): `status.test.js`'e
+«sætningen er besluttet ét sted» tæller `content changed —` i `status.js` og forventede
+3 — to former i ejeren plus én i `contentChangeNote`. Den tæller nu 4, og beskeden siger
+hvilke tre former der er i ejeren. Invarianten er uændret: kun ejeren må skrive
+sætningen.
+
+**Verificeret.** Målingen gentaget efter rettelsen med den rigtige loop:
+`content changed — page title changed, but the two titles differ only in whitespace or
+characters a screen cannot show (same size, 56 bytes)`. **627/627 grøn** (626 + 1), audit
+0/0, `matrix --check` exit 0, `node --check` ren, `git diff --check` rent. Node 26.7.0.
+
+**Næste:** ❓ 1–3, ❓ 14 og ❓ 16 er stadig ubesvarede og afgør om næste iteration bygger
+features overhovedet. **Målt i denne iteration og ikke rettet** (tiden løb ud, fundet er
+noteret herunder, så næste iteration ikke målende kan tage det): en 302 til
+`http://bruger:adgangskode@anden-vært/` lod et pass **stå uden at skrive en eneste linje**
+i over 3 s, og et rent `fetch` mod samme redirect svarede ikke inden for 30 s. Det er den
+ene klasse P1-45 (adgangskode i URL) siger intet om på de to flader der *forlader*
+maskinen: `webhookBody()` sender hele `event.finalUrl` tredje part til, og `notify()`
+bygger sin besked af det rå `event.url`. Målt og noteret; ikke rettet, ikke testet.
 
 **Målt først, nul kode ændret.** Rigtige pass skrev en rigtig state-fil, og den
 betalte rapportflade læste den, for et site der svarede 200 i begge pass med et
@@ -5516,3 +5570,35 @@ om tallet, fordi forskellen ligger i kaldet (`withSerial`) og ikke i en anden s�
 ❓ 1–3 + ❓ 14 afgør om næste iteration bygger features overhovedet. Missionens åbne
 Windows-`device_id`-punkt fra 24/9 kan ikke bevises herfra, for desktop-appen ligger i
 det private repo.
+
+### P1-70 — FÆRDIG 2026-09-27 (`ceo/one-line-title-pair`) — En alarm må ikke citere et par titler, en skærm ikke kan skelne
+
+**Begrundelse:** Målt med den rigtige loop og et `<title>` med ét linjeskift: passen skrev
+`content changed — page title: "Free iPhone!!" → "Free iPhone!!" (same size, 56 bytes)` —
+den samme streng på begge sider af en pil, der siger at titlen ændrede sig. Sætnings-ejeren
+`readContentChange()` citerer sidens egen tekst råt, mens terminalen og macOS-
+notifikationen begge flader den gennem `safeText()`, så et helt almindeligt linjeskift i
+en `<title>` får alarmen til at modsige sig selv på de to flader, der skriver den.
+
+**Omfang:** Én betingelse i ejeren. Parret citeres kun når de to titler kan skelnes
+gennem `safeText()` — den ene ejer af hvad en skærm viser — ellers siger sætningen at
+titlen ændrede sig, men at forskellen kun er mellemrum eller tegn en skærm ikke viser.
+
+**Acceptkriterier (alle målte, se afsnittet øverst):**
+- Et `<title>` med ét linjeskift giver ingen `page title: "…"` i sætningen på nogen flade. ✅
+- Sætningen siger det der er sandt: titlen ændrede sig, forskellen er usynlig. ✅
+- En titel der ændrer sig med et **synligt** tegn citerer begge sider, tegn for tegn som før. ✅
+- En titel der ikke ændrede sig beholder `the page's bytes differ`. ✅
+- `osacompile` accepterer den rå linjeskift-streg, så notifikationen fejler ikke — målt,
+  så ingen sætning blev ændret for den. ✅
+- Verdict, exit-kode, JSON, matrixrækker uændret; **627/627** (626 + 1), audit 0/0,
+  `matrix --check` 0, `node --check` ren, `git diff --check` rent. Node 26.7.0. ✅
+- Den strukturelle lås på «sætningen er besluttet ét sted» udvidet 3 → 4, ikke slækket. ✅
+
+**Åbent og målt, ikke rettet (tidsbudget):** en 302 til
+`http://bruger:adgangskode@anden-vært/` lod et pass stå uden output i over 3 s, og et rent
+`fetch` mod samme redirect svarede ikke inden for 30 s. P1-45 lod ingen nøgle med kode i
+blive tjekket, men de to flader der *forlader* maskinen — `webhookBody()`'s fulde
+`event.finalUrl` til kundens kanal og `notify()`'s rå `event.url` — er ikke dækket af
+P1-45's lås. Kræver måling af, om en adgangskode i et redirect-mål overhovedet kan nå
+en af dem, før den rettes.

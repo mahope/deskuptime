@@ -187,6 +187,31 @@ test('lige før en time er der stadig ikke sendt, lige efter er der', () => {
   assert.equal(atGap.message, change.message, 'nothing was held, so nothing is claimed');
 });
 
+test('en titel med et linjeskift må ikke stå som sit eget modsættende par', () => {
+  // Measured 2026-09-27 with the real loop and a real page title holding one
+  // line break: every surface that prints this sentence flattens the text to one
+  // line (the terminal and the macOS notification, both through safeText), so the
+  // quoted pair read `page title: "Free iPhone!!" → "Free iPhone!!"` — the same
+  // string on both sides of an arrow that says the title changed.
+  const change = readContentChange({
+    previousLength: 56,
+    length: 56,
+    previousTitle: 'Free iPhone!!',
+    title: 'Free\niPhone!!',
+  });
+  assert.equal(change.titleChanged, true, 'the titles really do differ');
+  assert.doesNotMatch(change.message, /page title: "/, `the pair a reader cannot tell apart is quoted: ${change.message}`);
+  assert.match(change.message, /differ only in whitespace or characters a screen cannot show/, change.message);
+  // The ordinary case is byte-for-byte unchanged, both in the pair and in the
+  // words around it: a title that changed by a visible character still names
+  // both sides.
+  const visible = readContentChange({ previousLength: 56, length: 56, previousTitle: 'Kunde', title: 'Kunde A/S' });
+  assert.equal(visible.message, 'content changed — page title: "Kunde" → "Kunde A/S" (same size, 56 bytes)');
+  // A page whose title did not change keeps the size sentence exactly.
+  const same = readContentChange({ previousLength: 56, length: 56, previousTitle: 'Kunde', title: 'Kunde' });
+  assert.equal(same.message, 'content changed — same size (56 bytes): the page\'s bytes differ');
+});
+
 test('en enkelt holdt ændring siges i ental', () => {
   const change = readContentChange({ previousLength: 132, length: 132, previousTitle: 'Kunde', title: 'Kunde' });
   const alert = readContentChangeAlert({ change, counted: 1, now: new Date(BASE) });
