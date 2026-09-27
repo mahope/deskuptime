@@ -62,6 +62,22 @@
  * a `network_error`, and a customer behind such a proxy still wants to know what
  * the certificate of the site in front of the redirect looks like. Only the
  * sentence changes.
+ *
+ * ── P1-74 (2026-09-28) ───────────────────────────────────────────────────────
+ * The measurement above left the other half of the defect standing: the two
+ * commands did not merely *both* tell the truth, they told it in **two different
+ * sentences**, and which one you got was decided by how the address was reached
+ * rather than by what was wrong with it. A bureau running both commands on one
+ * customer site got two descriptions of one failure and no way to tell that they
+ * were the same failure.
+ *
+ * Both shapes are gated on one condition in `undici`'s own source — a username
+ * or a password in the address (`web/fetch/request.js:122` and
+ * `web/fetch/index.js:1257`) — so they are one fact twice, and they are now read
+ * as one: `describeFetchError` answers both with the same sentence, and the last
+ * test locks the two commands to *equal strings* rather than to two regexes that
+ * happen to pass today. Which address it was did not get lost: `headers` already
+ * shows the hop in its own `Final:` line, without the credentials.
  */
 
 import { test } from 'node:test';
@@ -104,6 +120,25 @@ function runCli(args, env) {
 /** The sentence `undici` throws for a redirect into a credentialed address. */
 function undiciCredentialsGate() {
   return { name: 'TypeError', message: 'fetch failed', cause: { message: `${CORS} for request mode "cors"` } };
+}
+
+/** How many times the password appears in a text. */
+function copies(text) {
+  return String(text).split(PASSWORD).length - 1;
+}
+
+/**
+ * The error *sentence* of a terminal run, and nothing else.
+ *
+ * Two commands are only comparable on the sentence they publish, so this strips
+ * the site, the hop, the `Final:` line each one prints in its own way, and the
+ * label — whose padding is column alignment to the site header, a display detail
+ * that differs between the two commands and says nothing about the failure.
+ */
+function errorLineOf(stdout) {
+  const line = String(stdout).split('\n').find(text => text.includes('⚠️'));
+  assert.ok(line, `sætningen skal stå på en linje:\n${stdout}`);
+  return line.slice(line.indexOf('Error:') + 'Error:'.length).trim();
 }
 
 /** The same site as the last test file builds it: 200 behind a credentialed hop. */
@@ -205,24 +240,64 @@ test('et sundt site bag et credentialed redirect siger hvad der skete — på al
   assert.match(pass.stdout, /credentials in it — no request was sent/);
 });
 
-test('de to kommandoer bliver enige om sætningen uden at dommen flytter sig', async (t) => {
+test('de to kommandoer siger præcis det samme om det samme site', async (t) => {
   const env = tempHome(t);
   const { url, finalUrl } = await credentialedRedirect(t);
 
   // `headers` walks the chain by hand, so `fetch` refuses the credentialed
-  // address directly and `undici` names it. That sentence is the *true* one and
-  // P1-71 locked it; it must survive this change untouched.
+  // address directly and `undici` answers with its *other* sentence. Before
+  // P1-74 that reached the terminal: `check` said one thing about the site and
+  // `headers` another, and a bureau that pastes both into the same customer
+  // document cannot tell which of them was the same site.
   const headers = await runCli(['headers', url, '--timeout', REQUEST_TIMEOUT], env);
   assert.equal(headers.code, 2, 'begge kommandoer skal stadig sige DOWN om samme site');
-  assert.match(headers.stdout, /includes credentials/, 'den informative sætning fra headers er ikke rørt');
-  assert.match(headers.stdout, new RegExp(`Final: ${finalUrl.replace(/[.]/g, '\\.')} \\(n/a\\)`), 'hoppet skal stadig kunne læses');
+  assert.equal(copies(`${headers.stdout}${headers.stderr}`), 0, 'adgangskoden nåede en af dem');
 
-  // The two commands now name the same fact in their own words, and neither
-  // contradicts the other about the site. That is the whole point: P1-71's lock
-  // was that they agree about the *verdict*, and this keeps it while the
-  // sentences stop disagreeing about the vocabulary.
+  // `headers` keeps its own `Final:` hop, so *which* address it was is not lost
+  // by the shared sentence — the operator can still go and fix the proxy. That is
+  // the half of the old sentence that was ours, and it lives in its own line.
+  assert.match(
+    headers.stdout,
+    new RegExp(`Final: ${finalUrl.replace(/[.]/g, '\\.')} \\(n/a\\)`),
+    `hoppet skal stadig kunne læses:\n${headers.stdout}`,
+  );
+
   const check = await runCli(['check', url, '--timeout', REQUEST_TIMEOUT], env);
-  assert.equal(check.code, headers.code);
-  assert.match(check.stdout, /credentials in it/);
-  assert.match(headers.stdout, /includes credentials/);
+  assert.equal(check.code, headers.code, 'de to kommandoer skal være enige om dommen');
+  assert.equal(copies(`${check.stdout}${check.stderr}`), 0);
+
+  // The lock itself: one fact, one sentence, read from both. Equal strings, not
+  // two regexes that happen to pass today.
+  assert.equal(errorLineOf(headers.stdout), errorLineOf(check.stdout));
+  assert.equal(errorLineOf(check.stdout), 'Redirected to an address with credentials in it — no request was sent');
+});
+
+test('begge af undici\'s egne sætninger læses som den ene kendsgerning', () => {
+  // Measured on Node 22.23.2 and 26.7.0: which sentence arrives is decided by how
+  // the address was reached, not by what is wrong with it. `ping.js` and
+  // `content.js` follow redirects and get the CORS-shaped one; `headers` hands the
+  // address to `fetch` and gets the constructor one. A single `some()` over both
+  // is what keeps the two commands from drifting apart again.
+  const gate = undiciCredentialsGate();
+  const constructor = {
+    name: 'TypeError',
+    message: `Request cannot be constructed from a URL that includes credentials: http://demo:${PASSWORD}@a.dk/staging`,
+  };
+
+  for (const shape of [gate, constructor]) {
+    const described = describeFetchError(shape);
+    assert.equal(described.errorType, 'network_error', 'dommen flytter sig ikke: requesten blev aldrig sendt');
+    assert.equal(described.error, 'Redirected to an address with credentials in it — no request was sent');
+    assert.doesNotMatch(described.error, /cors/i, 'et site uden en browser kan ikke være blevet afvist på tværs af origin');
+    assert.equal(copies(described.error), 0, 'sætningen må ikke cite noget som helst');
+  }
+
+  // The two shapes are equal as answers, which is the whole claim.
+  assert.deepEqual(describeFetchError(gate), describeFetchError(constructor));
+
+  // And neither is a wildcard: a sentence that merely *mentions* credentials is
+  // still `fetch`'s own to publish, redacted. P1-71's lock, and the reason the
+  // match is on the two measured sentences and not on the word "credentials".
+  const spoken = { cause: { message: `boom http://demo:${PASSWORD}@a.dk/x` } };
+  assert.deepEqual(describeFetchError(spoken), { errorType: 'network_error', error: 'boom http://a.dk/x' });
 });
