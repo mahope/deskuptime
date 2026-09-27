@@ -75,6 +75,29 @@ export function freeLimitMessage(url) {
   return `Free tier monitors ${FREE.urlLimit} URLs. ${url} not added. ${upgradeHint(`unlimited URLs and a ${PRO.minIntervalSeconds}s interval`)}`;
 }
 
+/**
+ * One sentence for "you asked for a faster interval than this tier runs".
+ *
+ * Measured 2026-09-27 with the real CLI: a free user who typed `--interval 30`
+ * — the exact value the matrix and `upgradeHint` above advertise as the Pro one
+ * — got a silent 60s and nothing else. The other two Pro walls (the URL limit
+ * and `--webhook`) both name the upgrade path, so the interval was the only Pro
+ * limit the product refused in silence, and silence is the worst answer here:
+ * the user typed what the sales page says and the tool disagreed without saying
+ * so.
+ *
+ * A paying customer who asks below Pro's own minimum gets the same honesty
+ * without the checkout — they have paid, and a second buy link there is the
+ * reply P1-19 exists to prevent.
+ */
+export function intervalRaisedMessage(asked, minInterval, { pro = false } = {}) {
+  const floor = pro
+    ? `below the ${minInterval}s minimum for Pro`
+    : `below the free tier's ${minInterval}s minimum`;
+  const raised = `--interval ${asked} is ${floor}, so this loop runs every ${minInterval}s instead.`;
+  return pro ? raised : `${raised} ${upgradeHint(`a ${PRO.minIntervalSeconds}s interval`)}`;
+}
+
 export function getStateFile({ env = process.env, platform = process.platform } = {}) {
   const home = platform === 'win32'
     ? env.USERPROFILE || env.HOME || homedir()
@@ -1352,7 +1375,13 @@ export async function startWatch(urls, opts = {}) {
   }
 
   const minInterval = pro ? PRO.minIntervalSeconds : FREE.minIntervalSeconds;
-  const interval = Math.max(opts.interval || 300, minInterval);
+  const askedInterval = opts.interval || 300;
+  const interval = Math.max(askedInterval, minInterval);
+  // Said before the banner, so the number the loop is about to announce is
+  // never one the user did not ask for without being told why.
+  if (interval > askedInterval) {
+    console.error(`⚠️  ${intervalRaisedMessage(askedInterval, minInterval, { pro })}\n`);
+  }
   const added = addMonitoredUrls(state, urls, pro);
   if (added === 0 && Object.keys(state.urls).length === 0) {
     throw new Error('No URLs to monitor.');

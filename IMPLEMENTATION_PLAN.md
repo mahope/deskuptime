@@ -1,3 +1,66 @@
+## Status fra denne iteration (66, P1-50 — `--interval 30` var den eneste Pro-grænse der svarede i stilhed)
+
+**Hvorfor denne flade:** ❓ 1–3 er stadig ubesvarede, så iterationen gik på den
+flade missionen prioriterer som nr. 2 — **konvertering** — og som ingen måling
+havde rørt: *alle de steder en gratis bruger bliver stoppet*. 65 iterationers
+rettelser af rigtighed og robusthed, og den ene Pro-grænse brugeren frivilligt
+går ind i låste stille.
+
+**Målt først, nul kode ændret.** Rigtig CLI, rigtig temp-HOME, rigtig lokal side
+der svarer 200, rigtig state-fil med tre sites og ingen licens. Alle tre Pro-vægge:
+
+```
+4. URL      ⚠️  Free tier monitors 3 URLs. … Pro unlocks unlimited URLs …  ✅ købslink
+--webhook   ⚠️  No webhook was sent. … Pro unlocks it here: <købslink> …    ✅ købslink
+--interval  ⚠️  (intet)   ← tastede 30, kørte hver 60s, sagde intet        ❌ intet link
+```
+
+Grænsen holder og er ærlig — 60s er præcis hvad matrixen siger, og 30s er
+præcis det Pro-forskuddet der sælges. **Men 30s er den værdi brugeren læser på
+salgssiden og derefter skriver i kommandolinjen.** Vedkommende skrev det tal vi
+reklamerer for, værktøjet sagde ja, og så kørte det dobbelt så langsomt uden at
+sige det. Banneren siger `every 60s`, kommandoen siger `30`, og den eneste linje
+i hele CLI'en hvor "det er her Pro kommer ind" passer, var den der var tom.
+
+Det er **kun** en manglende sætning, ikke en lås: de to andre vægge lader loopen
+køre videre og siger det, og det gør denne nu også. Første test i filen er derfor
+om det der *ikke* må ændre sig.
+
+**Én ejer, `intervalRaisedMessage()` i `src/watch.js`,** ved siden af
+`upgradeHint()` og `freeLimitMessage()` — de to andre Pro-vægge. Sætningen
+nævner alle tre tal (det typede, det brugte, Pro-værdien) og bærer
+`PRO_BUY_URL`. **En betalt kunde under Pro's egen gulv får samme ærlighed uden
+kassen** — P1-19's regel, anvendt på endnu en flade: maskinen har betalt, og et
+købslink her er det svar der får en kunde til at købe to gange.
+
+**Målt og grønt:** 455/455 (446 + 9 nye i `test/intervalfloor.test.js`, lagt i
+`npm test` — samme fælde som P1-10), audit 0/0, `node --check` alle JS-filer,
+`matrix --check` og `git diff --check` på **Node 26.7.0**. Et lås på de tre
+Pro-vægge *samlet*, så en fjerde ikke kan tilføjes uden at vælge hvor den sidder.
+Ingen matrix-række ændret (påstanden `min. 30s interval` var sand hele vejen),
+intet nyt JSON-felt, ingen exit-kode ændret, ingen ny state-filnøgle, ingen
+deploy-note nødvendig. Ingen mutationstest — over tidsbudgeten, samme ærlig
+notering som P1-47 og P1-49. `ceo/interval-floor`.
+
+**To fejl i min egen måling, begge fundet af den måling der skulle lade mig
+lukke den:**
+
+1. Første kørsel skrev state-filen for hvert site og overskrev den, så jeg målte
+   2 URL'er og nåede aldrig grænsen på 3. Rettet: state skrives én gang med tre
+   sites, som CLI'en selv skriver den.
+2. Min Pro-stub manglede `instance` (`normalizeLicense` kræver det), så Pro-
+   kolonnen viste `[free tier]` og **svarede 60s for 30s** — et resultat der så
+   ud som en P1 og var min fejl. Og da jeg rettede den, nåede loopen `recheckLicense`
+   og **ringede til mahope.tools** med et nøgleformater `validate`-kald. Det er
+   et kald til en ekstern tjeneste, der ikke skal ske; de følgende målinger
+   bruger `test/fixtures/license-stub.mjs` med `DUB_STUB_SCENARIO=passthrough`,
+   som er den stub planen har brugt hele vejen. **Noteret, fordi det er den
+   tredje målefejl i mit arbejde, der så ud som et produktfund.**
+
+**Næste:** ❓ 1–3 og ❓ 14, ellers en målt opgave.
+
+- **Release-note P1-50:** Skrev du `--interval 30` på en gratis konto, fik du **60 sekunder og ingen besked**. 30 sekunder er præcis det, der står i matrixen og i købsbanneret som Pro-værdien, så du gjorde præcis det, du blev bedt om — og værktøjet svarede ja, kørte dobbelt så langsomt og sagde intet. Nu siger den det, du skrev, det den kører, og hvor du får 30: `--interval 30 is below the free tier's 60s minimum, so this loop runs every 60s instead. Pro unlocks a 30s interval: <købslink>`. **Overvågningen ændres ikke:** loopen starter stadig, måler stadig og alarmerer stadig i terminalen — de to andre Pro-grænse (den fjerde URL og `--webhook`) lader den også køre videre. **Et interval din konto faktisk kører, siger intet**, så linjen betyder noget, når den dukker op. **Har du betalt,** får du den samme ærlighed uden kassen: `deskuptime` sender aldrig en betalt kunde til kassen igen. **Exit-koder, matrix-rækker og JSON er uændrede.**
+
 ## Status fra denne iteration (65, P1-49 — en side der flapper alarmerede 2 016 gange om dagen)
 
 **Hvorfor denne flade:** ❓ 1–3 er stadig ubesvarede, så iterationen tog den
