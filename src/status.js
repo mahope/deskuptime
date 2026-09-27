@@ -1940,6 +1940,16 @@ export function readEntry(entry, { now = new Date(), url = '' } = {}) {
   // marker on top, and it is empty when nothing was replaced — the ordinary
   // case, because a pass writes the stamp only when it saw a different one.
   const cert = readCertRotationState(value, { now });
+  // …and *who* vouched for it. The pass measured the issuer since P1-53, stored it
+  // since P1-64, and the client report has named a changed authority since then —
+  // but measured 2026-09-27, the two free lists still printed `✅ … (200) — SSL
+  // 89d 🔑 certificate replaced today` about a site whose certificate now answers
+  // from `Rogue Cert BV` instead of `Ganske Cloud A/S`, with neither name on the
+  // row. A rotation is the ordinary case and says only that *something* changed;
+  // the authority is the one reading that separates it from a name that is
+  // answered for by somebody else, so the row that carries the rotation is the
+  // row that has to carry this. Asked of the one owner, like the two above.
+  const certIssuer = readCertIssuerState(value, { now });
   // A key that is not an address has no verdict to report. Its stored `wasUp`
   // is whatever a hand-edited file, a botched restore or an old script left
   // behind, and a monitoring pass skips the key entirely (P1-40) — so printing
@@ -2014,6 +2024,15 @@ export function readEntry(entry, { now = new Date(), url = '' } = {}) {
     // plus a checked day count, so a row can place it as it is.
     cert,
     certNote: cert.note,
+    // The authority, in the same two shapes as the rotation above: the reading a
+    // caller can branch on, and the owner's own sentence. It is a second fact
+    // rather than a second wording of the first — a renewal from the same
+    // authority rotates the certificate and changes nothing here, and an
+    // authority that changes hands is exactly the case where every number on the
+    // row still looks healthy — so a row that has both says both, and a caller
+    // cannot drop one by rebuilding the other.
+    certIssuer,
+    certIssuerNote: certIssuer.note,
   };
 }
 
