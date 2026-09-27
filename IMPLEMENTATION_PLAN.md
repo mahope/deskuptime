@@ -1,3 +1,69 @@
+## Status fra denne iteration (65, P1-49 — en side der flapper alarmerede 2 016 gange om dagen)
+
+**Hvorfor denne flade:** ❓ 1–3 er stadig ubesvarede, så iterationen tog den
+sidste målte mangel i P1-47's egen række: P1-47 dæmpede *content*-flooden og
+skrev eksplicit, at `down`, `up`, `ssl_*` og `redirect` aldrig er tynget — fordi
+et bureau med 12 sider stadig skal høre om dem alle. **Den afvejning blev aldrig
+målt.** Det er den her.
+
+**Målt først, nul kode ændret.** Rigtig `runPass` og rigtig `sendWebhook` mod en
+lokal side der skiftede mellem 200 og 500 på et ur (en tæller-request lå fast,
+fordi et 500 ikke læser indhold og derfor aldrig vendte tilbage):
+
+```
+40 pass  →  28 webhook POSTs   (down, up, down, up … i 28 af 40 pass)
+```
+
+Ved det korteste Pro-interval er det **2 016 pr. døgn pr. side**. Hver besked er
+også en desktop-notifikation, og skaden er P1-47's ord igen: en kanal der gruer
+hele dagen **dæmpes**, og det er dæmpningen, der så skjuler et rigtigt
+`is DOWN`. Efter rettelsen, samme måling: **4**.
+
+**Efter:** de første fire skift i timen sendes som før. Derfra **én alarm pr. art
+pr. 15 minutter**, og `down` og `up` har hvert sit vindue og sin egen tæller, så
+en flappende site stadig hører at den er op. Det der holdes tilbage **tælles
+ikke væk**: næste sendte alarm siger `is DOWN — HTTP 500 (18 earlier outages
+since the last alert, not sent)`.
+
+**Reglen er bevidst ikke P1-47s, og det er hele pointen.** En kunde køber
+værktøjet for at høre det øjeblik et site går ned. En ren tidsbegrænset dæmpning
+af `down` kan bruge vinduet i **stilhed**: en site der flapper to gange og så
+går ned kl. 14:30 og bliver nede, ville tie til næste vindue — kunden hører
+intet om et nedbrud der varer. Derfor griber dæmpningen kun en side, der *allerede*
+flapper (`TRANSITION_FLAP_THRESHOLD = 4` skift i vinduet før dette). **Under
+tærsklen er hver eneste hændende uændret sendt**, så det ene nedbrud, det der
+kommer to gange om dagen og det der kommer fire gange i timen er alle urørte.
+Målt som to tests, fordi det er præcis her reglen kan skade: *et nedbrud efter to
+flap i timen meldes stadig*.
+
+**Prisen, sagt ligeud, ikke skjult:** når først en side er flappende, kan et
+rigtigt nedbrud vente op til ét vindue (15 min) med at blive meldt, og kunden ser
+tallet på næste alarm frem for i øjeblikket. Det er den handel det kortere vindue
+køber ned fra en time, og det er derfor tærsklen findes. **Åben beslutning for
+Mads:** se ❓ 14.
+
+**Én ejer, `readTransitionAlert()` i `src/status.js`,** som P1-47s
+`readContentChangeAlert()` — terminal, notifikation og webhook kan ikke nå hver
+sin konklusion. Den ejer også **beskæringen af tidslisten** `entry.transitions`
+(holdt til vinduet og capped ved 24), fordi målingen viste at det ikke er
+valgfrit: den første version beskør `now.getTime() - Date.parse(value)` i
+`watch.js`, og den strukturelle lås `four pass states are decided in one place`
+døde den på det samme — passen aldrer selv et tidspunkt.
+
+**Målt og grønt:** 446/446 (436 + 10 nye i `test/flap.test.js`, lagt i `npm
+test` — samme fælde som P1-10), audit 0/0, `node --check` alle JS-filer,
+`matrix --check` og `git diff --check` på **Node 26.7.0**. Matrix-påstanden var
+efter P1-47 `Webhook alerts on every event` og blev **falsk**, så den siger nu
+`a flapping site is held to 1/hour per kind, after 4 changes in the hour`
+(genereret i README og docs/pro-alerts.md §1 fra `src/features.js`). Ingen ny
+hændelsestype, intet nyt payload-felt, ingen exit-kode, ingen ny state-fil nøgle
+ud over `transitions` og `transitionAlerts`. Ingen mutationstest — over
+tidsbudgeten, samme ærlig notering som P1-47. `ceo/flap-alerts`, `fe9e7db`.
+
+**Næste:** ❓ 1–3 og ❓ 14, ellers en målt opgave.
+
+- **Release-note P1-49:** En site, der **flapper** mellem op og ned, alarmerede **2 016 gange om dagen** pr. side. Før blev hvert skift en besked i din Slack/Discord/Teams-kanal og en desktop-notifikation, 30 sekunder imellem, så længe loopen kørte — målt med 40 pass mod en side der skiftede mellem 200 og 500: 28 beskeder. Det er ikke bare støj: **en kanal, der gruer hele dagen, dæmpes, og det er dæmpningen, der så skjuler et rigtigt `is DOWN`.** Nu sendes de første fire skift i timen som før, og først når en side *allerede* flapper, holdes den til én besked pr. art pr. 15 minutter — et enkelt nedbrud, og selv et site der har flappet to gange og så går ned, høres stadig med det samme. `is DOWN` og `is UP` har hvert sit vindue, så du hører stadig at den er op, og inting kasseres: den næste besked siger hvor mange den står for. **Prisen er ærlig:** på en site der allerede flapper kan et rigtigt nedbrud vente op til 15 minutter, og du ser tallet på næste besked. Det er det, der gør, at vi *ikke* bare har dæmpet `is DOWN` på et ur.
+
 ## Status fra denne iteration (64, P1-48 — ét pass slettede 30 dages uptime og sagde intet)
 
 **Hvorfor denne flade:** ❓ 1–3 er stadig ubesvarede, så iterationen tog den
@@ -3201,6 +3267,20 @@ for selv. Ingen gemt nøgle er omskrevet, ingen eksisterende adgangsd tilstand
 
 ## ❓ Til Mads
 
+14. **Skal en flappende site have sin egen alarm?** P1-49 dæmper en flappende
+    sides `is DOWN`/`is UP` til én besked pr. art pr. 15 minutter, når den har
+    vist fire skift i timen, og prisen er at et rigtigt nedbrud på *den slags
+    site* kan vente op til 15 minutter. Alternativer Mads kan vælge: (a) behold
+    som nu; (b) send **én** dedikeret `is flapping` besked i stedet for at
+    dæmpe — kunden får ét signal i timen, der siger hvor mange skift og hvor
+    stor en udfaldsrate, og nedbrud efter den første time sender igen
+    uændret; (c) dæmp kun `up`, aldrig `down` — det fjerner halvdelen af
+    støjen og bevarer løftet helt, men en nedbrud-til-op-til-nedbrud-cyklus
+    koster stadig to beskeder pr. cyklus. (b) er det eneste, der både dæmper og
+    bevarer løftet, og det kræver en ny hændelsestype i payloaden. **Ingen af
+    dem er bygget** — koden, målingen og tærsklen ligger i afsnittet øverst, så
+    beslutningen er en konstant + en branche, ikke et nyt projekts arbejde.
+
 - **Release-note P1-46:** Det samme site kunne tage **to af de tre gratis-pladser**, hvis du skrev det i to former. Før blev `https://kunde.dk` og `https://kunde.dk/` gemt som to nøgler — og skråstregen er ikke en tastefejl, den er **den form din browser viser i adresselinjen**, altså den du kopierer ind. Følgerne: en kunde med to sites fik `Free tier monitors 3 URLs` for sin tredje, samme site blev kaldt to gange på hvert pass, og din kundenrapport fik **to rækker om ét site med hver sit tal** under `2 site(s) · 2 up`. Værst var vejen tilbage: `deskuptime unwatch https://kunde.dk/` svarede `not monitored`, så det eneste, der virkede, var at redigere `state.json` med licensnøglen i. Nu siger den `Already monitoring this site as https://kunde.dk — https://kunde.dk/ not added.`, `unwatch` finder nøglen i begge former, og **en adresse, der kun er skrevet en gang, tæller én gang**. `/a` og `/a/` er stadig to sider, en query og en port er stadig en del af adressen, og en nøgle uden adresse er stadig sig selv. **Ingen af dine gemte adresser er ændret**, og de gamle rækker i en rapport, der indeholder begge former, forsvinder først når du `unwatch`er den ene.
 
 13. ~~Hvad skal et site, vi ikke kan tjekke, gøre ved et pass?~~ **Besvaret i kode 2026-09-26 (P1-40, `ceo/skip-unusable-urls`):** (c) + (b), planens egen anbefaling. En nøgle i `state.json` uden scheme springes over, de øvrige sites fortsætter, nøglen nævnes på hvert pass og på `watch --status`, `status` og i rapporten, og exit 2 beholdes **kun** når intet kunne tjekkes. Målt først: ét `kunde.dk` blandt 25 nøgler dræbte passet med exit 1 og nul tjek. **Valget er ikke gratis, og en nøgle uden adresse er aldrig et nedet site** — den grænse til det andet svar ((a): passet fejler) er én linje i `runPass` plus exit-koden, hvis Mads vil have den. Målingen og koden ligger i afsnittet øverst.
@@ -3252,6 +3332,8 @@ for selv. Ingen gemt nøgle er omskrevet, ingen eksisterende adgangsd tilstand
 - **Release-note P1-43:** `deskuptime unwatch <url>` **holdt ikke, hvis du havde en `watch`-loop kørerende** — og det er den konfiguration de fleste har, for det er den der sender alarmer. Før skrev kommandoen `✅ No longer monitoring: …`, filen mistede nøglen med det samme, og **ét pass senere** havde loopen lagt den tilbage igen: sitet blev målt forfra, `deskuptime status` sagde `Monitored URLs (2)`, og kundenrapporten viste den igen. På gratisniveauet betød det, at den frigjorte plads var taget igen, så næste `watch <url>` blev afvist med `Free tier monitors 3 URLs`, og den eneste vej tilbage var at redigere filen med licensnøglen i. Nu ser loops filens mtime mod sin **egen** seneste skrivning, og en URL den selv har skrevet, men filen ikke længere har, er fjernet med vilje — enten af `unwatch`, af et cron-pass, eller af en restore. **Og den siger det, i stedet for at tie:** `🛑 No longer monitoring: <url> — removed from the saved list by another command.` **Ingen status, rapport eller historik er slettet**, så en `unwatch` efter et kryds med et kørende cron-job tager også effekt, og din 35 dages historik ligger stadig i `history.json`. **Den ene ting der ikke er lukket:** fjerner du et site i det samme øjeblik, et pass er ved at skrive, tager det pass det tilbage, og det næste pass ærer det. Låsen kan ikke dække det — den er ikke loopens at holde i et kvarter. **Exit-koder, matrix-rækker, JSON-felter og claims er uændrede.**
 
 - **Release-note P1-42:** En alarm, din Slack/Discord/Teams-kanal ikke fik, **kan ikke længere forsvinde**. Før blev hver hændelse sendt i det pass den opstod i, og en modtager der svarer `5xx` hele budgettet igennem fik tre forsøg og så intet: passet havde allerede noteret ændringen, så næste pass rejste ingen ny besked, og intet i loopen sendte den igen. Kanalen hørte intet om nedbruddet og fik så en `is UP` om en genopretning den aldrig blev fortalt om. Nu gemmes en alarm der ikke kom af sted, og **næste pass sender den igen — før de nye alarmer**, så din kanal læser dem i den rækkefølge de skete i. Alarmen beholder sit eget målingstidspunkt, så en sen levering ser ud som sen og ikke som frisk. **Grænserne er med vilje:** 3 forsøg i alt på tværs af passene, højst 20 ventende alarmer og 30 minutter — en kanal der var nede længe nok til at den gamle fejl er rettet, får ikke en gammel `is DOWN` i dag. **Og opgivelsen siges den:** `Giving up on an alert that was never delivered: … Your channel received nothing about it. Check the webhook URL and that the receiver is up.` — en stille drop ville være uadskillelig fra en levering. `deskuptime status` viser nu også hvad kanalen stadig er skyldt, så det overlever en genstart. **Webhook-URL'en skrives aldrig til disk** (den er næsten altid et token), og `message` afkortes til 500 tegn. **Ingen payload-felt er ændret**, så en eksisterende adapter er uberørt.
+
+- **Iteration 65 (P1-49, målt + fix):** ❓ 1–3 ubesvarede, så målingen gik på den sidste del af P1-47's egen afvejning, som aldrig var målt: `down`/`up` er bevidst aldrig tynget. Målt først med rigtig `runPass` + rigtig `sendWebhook` mod en lokal side der skiftede 200/500 på et ur, 40 pass: **28 POSTs**, 2 016/døgn pr. site. Efter: **4**. Reglen er bevidst *ikke* P1-47s, fordi en ren tidsdæmpning af `down` kan bruge vinduet i stilhed på et rigtigt nedbrud; tærsklen (4 skift i vinduet) er derfor det bærende, og den er målt med to tests der begge siger at nedbrud **ikke** holdes. `readTransitionAlert()` i `src/status.js` er den ene ejer og beskrær selv tidslisten, fordi den strukturelle lås `four pass states are decided in one place` døde min første version, der alderede et tidspunkt i `watch.js`. 10 nye tests i `test/flap.test.js` (lagt til i `npm test`) → **446/446** (436 + 10); audit 0/0; `node --check`, `matrix --check`, `git diff --check` grønne på Node 26.7.0. Matrix-påstanden `Webhook alerts on every event` blev falsk og siger nu at en flappende site holdes på 1/time pr. art efter 4 skift. **Ingen mutationstest** — over tidsbudgeten. `ceo/flap-alerts`, `fe9e7db`, mergeet til `main` og pushet 2026-09-27. **Næste:** ❓ 1–3 og ❓ 14, ellers en målt opgave.
 
 ## Deploy-/release-noter
 
