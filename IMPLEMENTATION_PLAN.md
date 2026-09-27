@@ -1,3 +1,58 @@
+## Status fra denne iteration (89, P1-75 — gaten var rød på maskinens `node`, ikke på koden)
+
+**Målt først, nul kode ændret.** Ren `main`, intet stubbet, `node` først på PATH er
+**22.23.2** mens `engines` siger `>=24`:
+
+```
+node tools/run-tests.mjs        →  615/635, 20 fejl   ← alle 20: "Node.js 24+ is required"
+samme suite på Node 26.7.0     →  635/635
+```
+
+Ingen af de 20 er en fejl i koden. `tools/install.sh` og `action.yml` tjekker majoren
+og afviser at køre, så de 7 installertests og de 13 action-tests fik fejlen og intet
+andet. Det er jordemoderstudies fælde fra 23. august, vendt: der brød ved *deploy* fordi
+byggeserveren var for gammel, her bryder den før deploy fordi **min egen maskine** er —
+og 20 røde linjer i en plan læses som 20 fejl, der inviterer en rettelse som intet
+ændrer. Hver efterfølgende iteration har skullet huske en `export PATH` for at skrive
+«grøn» i det her dokument.
+
+**Rettelsen: gaten spørger, og handler — og det afgørende var målt, ikke antaget.**
+`tools/node-gate.mjs` (ny, én ejer) læser kravet i `package.json` — så tallet 24 får
+aldrig en sjette ejer — og **måler** hvert kandidat ved at køre det, aldrig gættet ud fra
+mappenavnet. `resolveRuntime()` i `tools/run-tests.mjs` kører så suiten under en
+understøttet Node, **med den valgte Nodes mappe først i barnets `PATH`**. Den halvdel
+er ikke kosmetik: de 20 fejl kommer fra tests der kører `install.sh` og `action.yml` i
+en skal, og en skal slår `node` op i `PATH`. Målt med hele suiten — kun runnerens Node
+skiftet, PATH uændret — stod **14 fejl** tilbage, så en rettelse uden PATH-allet ville
+have løst 7 af 20. Skiftet **tales højt** (en gaten der stille kører på en anden runtime
+end den der startede den, er en gaten ingen kan begrunde), sker **højst én gang** (en
+maskine med alle versioner en versionmanager nogensinde har installeret er helt
+almindelig — ellers løber «find den nyeste Node» i cirkel), og når ingen brugbar Node
+findes kommer **én** besked der siger hvad der sker og fire konkrete rettelser, så der
+ikke står 20 røde linjer som en gade.
+
+```
+node tools/run-tests.mjs
+node v22.23.2 is older than this project requires (>=24);
+  running the suite under /opt/homebrew/bin/node instead.
+ℹ tests 649   ℹ pass 649   ℹ fail 0        ← acceptkriteriet: grøn uden export PATH
+```
+
+**Verificeret:** 14 nye tests i `test/nodegate.test.js` → **649/649** (635 + 14);
+tre målte mutationer døde alle, den ene målt med hele suiten (14 fejl). Audit 0/0,
+`matrix --check` exit 0, `node --check` ren på alle JS, `sh -n`/`bash -n` grønne,
+`git diff --check` rent. To fejl fundet i **mine egne tests** og rettet i testene, ikke
+i koden — de er noteret under P1-75. Én ny lås er **seks ejere af ét tal** bundet
+sammen: `engines` ↔ `.nvmrc` ↔ `action.yml`s check *og* dets egen fejltekst ↔
+`install.sh` ↔ de fire workflows' `node-version` og CI-matrix. Før var kun `install.sh`
+låst til `engines`; hæver man kravet til 26, ville Action'en kræve 24 mens workflows
+teste 26. Node 22.23.2 (maskinens PATH) og 26.7.0 (`/opt/homebrew/bin/node`).
+`ceo/node-gate`, `a0e5511`.
+
+**Køen:** P1-73 (`dns_error`-grenens credentials-skrubning har intet lås) og P1-74 (én
+kendsgerning, to sætninger om credentials) er begge målbare og står klar; ❓ 1–3, ❓ 14 og
+❓ 16 afventer Mads.
+
 ## Status fra denne iteration (88, P1-72 — et sundt site bag et credentialed redirect blev rapporteret DOWN med en sætning om CORS)
 
 **Målt først, nul kode ændret.** Rigtig CLI, to rigtige lokale servere (den ene
@@ -5144,6 +5199,8 @@ for selv. Ingen gemt nøgle er omskrevet, ingen eksisterende adgangsd tilstand
 
 ## Iterationslog
 
+- **Iteration 89 (P1-75, målt + fix):** ❓ 1–3, ❓ 14 og ❓ 16 stadig ubesvarede, så målingen gik på P1-75, fundet under P1-72's mutationstest: **gaten var rød på maskinens egen `node`, ikke på koden.** Målt på ren `main` 2026-09-28, intet stubbet: `node tools/run-tests.mjs` med `node` først på PATH (**22.23.2**) → **615/635, 20 fejl**, alle 20 `Node.js 24+ is required` (7 fra `install.sh`, 13 fra `action.yml`); samme suite på **26.7.0** → 635/635. Det er jordemoderstudies fælde fra 23. august, vendt: der brød ved deploy fordi byggeserveren var for gammel, her bryder den *før* deploy fordi min egen maskine er, og 20 røde linjer læses som 20 fejl der inviterer en rettelse som intet ændrer. Fix: ny `tools/node-gate.mjs` som **læser** kravet i `package.json` `engines` (aldrig en sjette kopi af tallet) og **måler** hvert kandidat ved at køre det; `resolveRuntime()` i `tools/run-tests.mjs` skifter så suiten kører under en understøttet Node, med den valgte Nodes mappe **først i barnets `PATH`** — målt afgørende, for de 20 fejl kommer fra tests der kører `install.sh` og `action.yml` i en skal: mutation med hele suiten, kun runnerens Node skiftet, viste **14 fejl** (de 13 action-tests + den strukturelle lås), så uden PATH-allet havde rettelsen løst 7 af 20. Skiftet tales højt, højst ét (`DESKUPTIME_NODE_SWITCHED`, fordi en maskine med alle versioner en versionmanager har installeret er almindelig), og uden brugbar Node kommer **én** besked der siger hvad der sker og fire rettelser — målt exit 1, 0 fejlrækker. 14 nye tests i `test/nodegate.test.js` → **649/649** (635 + 14) **målt fra maskinens egen `node` uden `export PATH`**, hvilket var acceptkriteriet. Én test kan ikke stubbes (en rigtig fil: eksekverbar melder sin major, fil uden execute-bit melder intet), og ét **seks-ejeres-lås** binder `engines` ↔ `.nvmrc` ↔ `action.yml`s check og fejltekst ↔ `install.sh` ↔ de fire workflows — før var kun ét par låst. Tre målte mutationer døde alle (1/14/1/1). **To fejl i mine egne tests fundet og rettet i testene, ikke i koden**: `>=24 <25` er korrekt læst som 24, og min "kør aldrig en sti der ikke findes"-påstand havde en probe der kastede i stedet for at svare. Audit 0/0, `matrix --check` 0, `node --check` alle JS, `sh -n`/`bash -n`, `git diff --check` grønne. `ceo/node-gate`, `a0e5511`. **Ingen afhængighed, exit-kode, matrix-række eller claim ændret.** **Næste:** P1-73 og P1-74; ❓ 1–3, ❓ 14, ❓ 16.
+
 - **Iteration 87 (P1-71, målt + fix):** ❓ 1–3, ❓ 14 og ❓ 16 stadig ubesvarede, så målingen gik på det åbne spørgsmål P1-70 lod ligge: kan en adgangskode i et **redirect-mål** nå en flad der forlader maskinen? **Ja — men ikke på de to der blev gættet på.** Målt først med rigtig CLI og to rigtige servere (den ene svarer 200, den anden sender `Location: http://demo:sup3rsecret@…`): `check` var ren (`cross origin not allowed for request mode "cors"`, `finalUrl: null`, exit 2) fordi `fetch` ikke må bygge en request med credentials, så state-filen, kanalen og rapporten holdt; kun `headers`, der går kæden i hån, skrev koden seks gange på terminalen og seks i `--json` — i `Final:`, i `steps[].location` og to gange i `undici`s egen fejl-sætning. Fix: `scrubUrlCredentials()` (søskende til `withoutCredentials`, for en *sætning* der citerer en URL) bruges i `describeFetchError`, den ene sted et fetch-problem bliver en påstand; `readRedirectTarget().finalUrl` går gennem `withoutCredentials()`, fordi det er den kendsgerning der forlader maskinen som den betalte kanals felt; `checkHeaders` følger stadig den **rigtige** adresse og gemmer/siger den rensede, med loop-detektering på de rå strenge i sit eget `seen`-sæt. 4 nye tests i `test/redirectcredentials.test.js` → **631/631** (627 + 4); audit 0/0; `matrix --check` 0; `node --check`, `git diff --check` grønne på Node 26.7.0. **Tre mutationer målt, alle døde** (1/2/1 fejl). `ceo/redirect-credentials`, `4507314`, fast-forward-merget til `main` og pushet 2026-09-27. **Ingen dom, exit-kode, matrix-række eller payload-felt flytter sig** — målt før og efter på samme site. **Næste:** ❓ 1–3, ❓ 14, ❓ 16; og **P1-72**, målt her og ikke rettet: et sundt site bag et credentialed redirect siger `is DOWN — cross origin not allowed for request mode "cors"`.
 
 - **Iteration 84 (P1-68, målt + fix):** ❓ 1–3, ❓ 14 og ❓ 16 er stadig ubesvarede, så målingen gik på det sidste fund P1-63 selv efterlod — "derefter rotationens antal". 24 timers rigtige passer over to sites der kun adskiller sig i hvilket certifikat der svarer, og kundenapporten 90 dage senere skrev `🔑 certificate replaced 90 d ago` for **begge**: en fornyelse hvert 90. dag og et site der roterer 47 gange i døgnet, som er den facon et hijack har. Fix: `certRotationCount` skrives på samme gren og i samme pass som stemplet der allerede står, og bæres videre af `readCertRotationState` — de to gratis-lister spørger samme ejer og siger det uden en linje af egen kode. **Den normale fornyelse er byte for byte uændret**, fordi «1 fornyelse» ikke lærer en kunde noget de ikke havde; tallet løber med i alle fire former af sætningen, også ved et ur der går foran, og en håndskrevet tæller er ingen tæller (`"many"`, `-1`, `1.5`, `1e21` er alle 0). 7 nye tests → **618/618** (611 + 7); audit 0/0; `matrix --check` 0; `node --check`, `git diff --check` grønne på Node 26.7.0. **Fem mutationer målt, alle døde** (3/4/1/3/1 fejl). `ceo/cert-rotation-count`. **To fejl i min egen måling, begge fundet af den:** tælleren lå i checkeren som et *opkalds*-tæller, men `runPass` giver den samme checker alle URL'er én gang hver pr. pass, så den gik to pr. pass, hvert site fik et konstant certifikat, og målingen rapporterede «aldrig roteret» om et site der roterede på hvert pass; og samme fejl en gang til med to sites i én HOME, hvor den anden pass læste fra disk og skrev over den første. Begge var målingen, ikke koden, og begge står i testfilens kommentar. **Næste:** ❓ 1–3, ❓ 14, ❓ 16; `lastCertSerial` læses stadig af ingen.
@@ -5903,7 +5960,7 @@ kommandoers fejl-sætninger om credentials skal udledes af den samme kode, en te
 låse at de to ikke kan glide, og P1-45's afvisnings-sætning ved *typede* URL'er skal
 stå uændret (den er en anden kendsgerning: brugerens fejl, ikke sidens). Mål først.
 
-### P1-75 — Ny — Gaten er rød på maskinens `node`, ikke på koden
+### P1-75 — FÆRDIG 2026-09-28 (`ceo/node-gate`, `a0e5511`) — Gaten skifter Node frem for at blive rød på maskinens
 
 **Målt 2026-09-27, nul kode ændret.** `package.json` siger `engines: >=24` og
 `.nvmrc` siger `24`, men `node` på PATH er **22.23.2**. Under den er gaten **rød med
@@ -5920,3 +5977,62 @@ De simpleste veje er en `.node-version`, eller at `tools/run-tests.mjs` siger de
 opstarten når den ser en for gammel `node` — sidstnævnte er det bedste, fordi den
 forklarer fejlen i stedet for at lade 20 røde linjer stå som en gade. Ingen af delene
 er lavet; ❓ til Mads hvis maskinen hellere får en Node 24+ som standard.
+
+**Målt igen 2026-09-28 på ren `main`, før ét tegn blev ændret:** `node tools/run-tests.mjs`
+på maskinens egen `node` → **615/635, 20 fejl**. Alle 20 er `Node.js 24+ is required`
+(7 fra `install.sh`, 13 fra `action.yml`). Samme suite med `PATH=/opt/homebrew/bin`
+(Node 26.7.0) → **635/635**. Ingen kodefejl, to runtime.
+
+**Rettelsen: gaten spørger, og handler.** Ny `tools/node-gate.mjs` (én ejer) +
+`resolveRuntime()` i `tools/run-tests.mjs`:
+
+- **Kravet læses i `package.json`, skrives aldrig i gaten.** `requiredNodeMajor()`
+  læser `engines.node`s nedre grænse. Et range uden nedre grænse (`24.x`, `^24.0.0`,
+  mangler `engines`) er en fejl i `package.json` og fejler **højt i gaten** frem for at
+  læses som "alt må køre". Det er den sjette mulige ejer, der aldrig opstår.
+- **En Node der overholder kravet rør intet** — ingen ekstra proces, ingen opslag, så CI
+  er uændret. Målt: 635/635 på node 26 før og efter.
+- **En Node der ikke gør, kører suiten under en der gør** — og det afgørende er, at
+  barnet får den valgte Nodes mappe **først på `PATH`**. Målt, ikke antaget: de 20 fejl
+  kommer fra tests der kører `install.sh` og `action.yml` i en skal, og en skal slår
+  `node` op i `PATH`. Mutation målt med hele suiten: kun runnerens Node skiftet, PATH
+  uændret → **14 fejl** (de 13 action-tests + den strukturelle lås). Installerens 7
+  fejl forsvinder, fordi `test/install.test.js` selv sætter `dirname(process.execPath)`
+  først i PATH. Uden PATH-allet ville rettelsen have løst 7 af 20.
+- **Skiftet tales højt:** `node v22.23.2 is older than this project requires (>=24);
+  running the suite under /opt/homebrew/bin/node instead.` En gaten der stille kører på
+  en anden runtime end den der startede den, er en gaten ingen kan begrunde.
+- **Højst én skift** (`DESKUPTIME_NODE_SWITCHED`), fordi maskinen der har *alle* versioner
+  en versionmanager nogensinde installeret er en helt almindelig maskine; uden låsen
+  Finder den den samme for gamle Node igen og igen. Målt: `DESKUPTIME_NODE_SWITCHED=1`
+  → exit 1 med beskeden.
+- **Ingen brugbar Node nogen steder → én besked, og suiten starter ikke:** den nævner den
+  Node der kører, kravet, at `install.sh` og `action.yml` er det der nægter (altså at
+  de 20 linjer ikke er 20 fejl), og fire konkrete rettelser. Målt med kun node 22 på
+  PATH: exit 1, 0 fejlrækker.
+- **Kandidater måles ved at blive kørt** (`node -p process.versions.node`), aldrig gættet
+  ud fra mappenavnet: `node@22` og `node` kan begge være i direkte uoverensstemmelse med
+  deres egen mappe. Listen dækker nvm, fnm, mise, volta, asdf, n, homebrew-opt og de
+  faste `bin`-steder, plus `DESKUPTIME_NODE` som eksplicit svar. `node.exe` på win32.
+
+**14 nye tests i `test/nodegate.test.js`** → **649/649** (635 + 14), målt fra maskinens
+egen `node` **uden `export PATH`** — det var acceptkriteriet. Bl.a. én test der ikke kan
+stubbes (den kører en rigtig fil: en eksekverbar melder sin major, en fil uden
+execute-bit melder intet) og ét **seks-ejeres-lås**: `engines` ↔ `.nvmrc` ↔ `action.yml`s
+check *og* dets egen fejltekst ↔ `install.sh` ↔ de fire workflows' `node-version` og
+CI-matrix. Før var kun `install.sh` låst til `engines`; hæver man kravet til 26, ville
+Action'en kræve 24 og workflows teste 26 — den klasse er nu lukket.
+
+**Tre målte mutationer døde alle:** PATH-prepend væk (1 fejl + 14 målte i fulden),
+`højeste` → `første` (1), skifte-låsen væk (1). To fejl fundet i **mine egne tests** først
+og rettet i testene, ikke i koden: `>=24 <25` er *korrekt* læst som 24 (kun en nedre
+grænse læses — det er den eneste fornuftige læsning), og min "aldrig kør en sti der ikke
+findes"-påstand havde en probe der kastede i stedet for at svare. Audit 0/0,
+`matrix --check` exit 0, `node --check` ren på alle JS, `sh -n`/`bash -n` grønne,
+`git diff --check` rent. Ingen afhængighed ændret, ingen matrix-række, ingen ny claim,
+ingen deploy-note (CLI-repoet deployer ikke).
+
+**Ikke bygget, med vilje:** `.node-version` (asdf/mise) — gaten er ikke længere afhængig
+af den, og hver ny fil med tallet i er endnu en ejersom skal låses. CI-matrixen er bevidst
+kun på 24; lokal kørsel springer til den **højeste** understøttede Node, fordi det er
+nærmest ved det en bruger af den publicerede CLI kører.
