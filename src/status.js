@@ -295,6 +295,102 @@ export function readContentChangeAlert({ change, previousAlertedAt = null, count
   };
 }
 
+/**
+ * How long one site waits between two *sent* alerts of the same kind, once it
+ * is flapping. Fifteen minutes — see {@link readTransitionAlert} for why this
+ * window is a quarter of the content-change one.
+ */
+export const TRANSITION_ALERT_MIN_GAP_MS = 15 * 60 * 1000;
+
+/**
+ * How many up/down transitions a site may show in the window before its alerts
+ * are throttled at all. Four.
+ */
+export const TRANSITION_FLAP_THRESHOLD = 4;
+
+/**
+ * Whether a site's `is DOWN` / `is UP` alert is *sent*, and the sentence that
+ * accounts for what it held back. `null` means "measured, but not sent".
+ *
+ * A site that flaps — up, down, up, down — raises a transition on every pass,
+ * and every transition became an alert: a POST to the paid channel and a desktop
+ * notification, 30 s apart, for as long as the loop ran. Measured 2026-09-27
+ * with the real `runPass` and a real receiver against a site that alternated 200
+ * and 500: six alerts out of eight passes, and at the shortest Pro interval
+ * 5 760 a day, per site. The harm is the one the content throttle was written
+ * for, in the sibling class: a channel that screams all day is muted, and the
+ * muting is what then hides a real `is DOWN`.
+ *
+ * So an alert about uptime is *not* throttled on a timer alone. A customer buys
+ * this product to hear the moment a site breaks, and a per-window cap on
+ * `down` — with no other condition — can spend the window in silence: a site
+ * that flapped twice, went down at 14:30 and stayed down would have its outage
+ * held until the next window, and the customer would be told nothing at all.
+ * So the throttle only engages on a site that is *already* flapping —
+ * {@link TRANSITION_FLAP_THRESHOLD} transitions inside the window before this
+ * one. Below that, every transition is sent exactly as before: the single
+ * outage, the outage that recurs twice a day and the outage that recurs four
+ * times an hour are all untouched, and the promise the customer paid for is
+ * unchanged.
+ *
+ * Above the threshold, one alert of each kind per window, and what was held is
+ * counted, never dropped: the next alert that is sent says how many it stands
+ * for. `down` and `up` keep separate windows and separate counts, so a flapping
+ * site still hears that it is up.
+ *
+ * **The price, stated plainly:** once a site is flapping, a genuine outage can
+ * wait up to {@link TRANSITION_ALERT_MIN_GAP_MS} to be announced, and the
+ * customer sees the count on the next alert rather than at the moment. That is
+ * the trade the shorter window buys down from an hour to fifteen minutes, and it
+ * is why the threshold exists at all — the question of whether a flapping site
+ * should instead get a dedicated "this site is flapping" alert is open for Mads.
+ *
+ * A clock that jumped backwards does not suppress anything: a negative span is
+ * the clock problem the pass already names (`clockAhead`), not evidence about
+ * the site.
+ *
+ * @param {object} args
+ * @param {'up'|'down'} args.type — which transition this is.
+ * @param {string} args.message — the sentence the pass already built.
+ * @param {string[]} [args.recentAt] — when this site's earlier transitions
+ *   happened, oldest first, as the state file records them.
+ * @param {string|null} [args.previousAlertedAt] — when this kind of alert was
+ *   last *sent* for this site.
+ * @param {number} [args.counted] — how many were held since then.
+ */
+export function readTransitionAlert({ type, message, recentAt = [], previousAlertedAt = null, counted = 0, now = new Date(), minGapMs = TRANSITION_ALERT_MIN_GAP_MS, threshold = TRANSITION_FLAP_THRESHOLD } = {}) {
+  const at = now.getTime();
+  const stamp = now.toISOString();
+  const inWindow = (value) => {
+    const ms = typeof value === 'string' ? Date.parse(value) : Number.NaN;
+    const elapsed = at - ms;
+    return Number.isFinite(elapsed) && elapsed >= 0 && elapsed < minGapMs;
+  };
+  // Measured, not guessed: how many transitions this site has already shown
+  // inside the window. A hand-edited or restored file can only make this list
+  // shorter or unreadable, never longer than the timestamps it carries.
+  const earlier = (Array.isArray(recentAt) ? recentAt : []).filter(inWindow);
+  // The list the pass records, so "how often has this site flapped" stays a fact
+  // read from the file and the state cannot grow without bound. Pruning and
+  // ageing live here, not in the pass: a surface that did it itself is how this
+  // repo got a clock 6 h fast wrong twice (P1-32).
+  const transitions = [...earlier, stamp].slice(-24);
+  if (earlier.length < threshold) return { message, held: 0, flapping: false, transitions };
+  const last = typeof previousAlertedAt === 'string' ? Date.parse(previousAlertedAt) : Number.NaN;
+  const elapsed = at - last;
+  if (Number.isFinite(elapsed) && elapsed >= 0 && elapsed < minGapMs) return null;
+  const held = Number.isInteger(counted) && counted > 0 ? counted : 0;
+  const noun = type === 'up' ? 'recovery' : 'outage';
+  return {
+    message: held > 0
+      ? `${message} (${held} earlier ${noun}${held === 1 ? '' : 's'} since the last alert, not sent)`
+      : message,
+    held,
+    flapping: true,
+    transitions,
+  };
+}
+
 /** The three states a judged security header can be in. */
 export const SECURITY_HEADER = {
   /** The site sent the header with a value. */

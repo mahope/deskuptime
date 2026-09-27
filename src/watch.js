@@ -17,7 +17,7 @@ import { readFileSync, writeFileSync, mkdirSync, existsSync, renameSync, unlinkS
 import { dirname, posix, win32 } from 'path';
 import { homedir } from 'os';
 import { createHash, randomUUID } from 'crypto';
-import { assertValidHttpUrls, expiredNote, findUrlKey, isNewerPass, partitionUsableUrls, readContentChange, readContentChangeAlert, readEntry, readEvent, readRedirectTarget, queuedAgeMs, readSslState, STALE_AFTER_DAYS, unusableUrlNote, urlIdentity, withoutCredentials } from './status.js';
+import { assertValidHttpUrls, expiredNote, findUrlKey, isNewerPass, partitionUsableUrls, readContentChange, readContentChangeAlert, readEntry, readEvent, readRedirectTarget, readTransitionAlert, queuedAgeMs, readSslState, STALE_AFTER_DAYS, unusableUrlNote, urlIdentity, withoutCredentials } from './status.js';
 import { recordPass } from './report.js';
 import { formatMs, safeText } from './display.js';
 import { historyFileFrom, pruneHistory, readHistoryFile, recordHistoryPass, saveHistory, historyWriteErrorMessage } from './history.js';
@@ -375,6 +375,10 @@ export async function runPass(state, opts = {}) {
     // customer. wasUp is rewritten from the fresh result at the end of the
     // pass, so the entry repairs itself and the alert is not repeated.
     const firstPass = previous === 'unknown' && !entry.lastChecked;
+    // The transitions this pass measured, before the question of whether they
+    // are *announced*: a baseline is not one, and `down`/`up` are decided
+    // together so the two read the site's flapping the same way.
+    const transitions = [];
 
     if (firstPass) {
       const status = result.healthy ? 'UP' : 'DOWN';
@@ -387,15 +391,61 @@ export async function runPass(state, opts = {}) {
       // saw it: the loop can have been dead for weeks. The owner decides whether
       // the reading behind the claim is recent enough to stand on.
       const { note } = readEvent({ type: 'up', measuredAt, previousChecked });
-      events.push(event('up', `is UP (${result.statusCode}) — ${formatMs(result.responseTimeMs)}${note ? ' ' + note : ''}`));
+      transitions.push({ type: 'up', message: `is UP (${result.statusCode}) — ${formatMs(result.responseTimeMs)}${note ? ' ' + note : ''}` });
     } else if (!result.healthy && (previous === 'up' || previous === 'unknown')) {
       // An unreadable previous verdict cannot prove a transition, but the site
       // is down *now* and the customer is paying to hear about it. Silence here
       // is the bug; the wording claims nothing about when it broke. The note
-      // names the age of the *previous check*, never the moment it broke.
+      // names the age of the *previous* check, never the moment it broke.
       const { note } = readEvent({ type: 'down', measuredAt, previousChecked });
-      events.push(event('down', `is DOWN${result.error ? ' — ' + result.error : ''}${note ? ' ' + note : ''}`));
+      transitions.push({ type: 'down', message: `is DOWN${result.error ? ' — ' + result.error : ''}${note ? ' ' + note : ''}` });
     }
+
+    // Whether an alert about the site's *condition* is sent is a third question,
+    // and it has one owner too: a site that flaps — up, down, up, down — raises
+    // a transition on every pass, and every transition used to become an alert,
+    // a POST to the paid channel and a desktop notification 30 s apart for as
+    // long as the loop ran. Measured 2026-09-27: six alerts out of eight passes,
+    // 5 760 a day at the shortest Pro interval, per site — the same harm as the
+    // content flood one class over, and the fix is deliberately NOT the same
+    // rule: a customer buys this to hear the moment a site breaks, so a plain
+    // per-window cap could spend that window in silence on a real outage. The
+    // throttle only engages on a site that is already flapping. See
+    // readTransitionAlert(). The transition itself is recorded either way, so
+    // the state file and the report count it whether or not it was announced.
+    if (transitions.length > 0) {
+      for (const transition of transitions) {
+        const alerted = readTransitionAlert({
+          type: transition.type,
+          message: transition.message,
+          recentAt: entry.transitions,
+          previousAlertedAt: entry.transitionAlerts?.[transition.type]?.at ?? null,
+          counted: entry.transitionAlerts?.[transition.type]?.held ?? 0,
+          now,
+        });
+        if (alerted) {
+          events.push(event(transition.type, alerted.message));
+          entry.transitionAlerts = {
+            ...entry.transitionAlerts,
+            [transition.type]: { at: now.toISOString(), held: 0 },
+          };
+        } else {
+          // Held, not dropped: the count rides on the next alert that is sent.
+          const previous = entry.transitionAlerts?.[transition.type] ?? {};
+          entry.transitionAlerts = {
+            ...entry.transitionAlerts,
+            [transition.type]: { at: previous.at ?? null, held: (Number.isInteger(previous.held) ? previous.held : 0) + 1 },
+          };
+        }
+        // When it happened is kept, so "how often has this site flapped" is
+        // measured from the file rather than assumed. The owner prunes the list
+        // to its own window and caps it, so a site that flaps for a week cannot
+        // grow the state file — and the pass never ages a time itself.
+        if (alerted) entry.transitions = alerted.transitions;
+        else entry.transitions = [...(Array.isArray(entry.transitions) ? entry.transitions : []), now.toISOString()].slice(-24);
+      }
+    }
+
 
     // Where the answer came from. The engine measured this on every pass and the
     // state file threw it away, so `watch --status`, `status` and the client

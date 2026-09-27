@@ -18,7 +18,7 @@ kundeflade kan love dem. Redigér claims i `src/features.js`, ikke i tabellerne.
 | `watch` baggrundsovervågning | 3 URL'er, min. 60 s interval | Ubegrænsede URL'er, min. 30 s interval | I begge |
 | Terminal-udskrift ved UP/DOWN/SSL/content-ændring | ✅ | ✅ | I begge |
 | `deskuptime status` — licenstilstand og overvågede URL'er, read-only | ✅ | ✅ | I begge |
-| Webhook-alerts ved hver hændelse, content-ændringer højst 1/time pr. site (`--webhook`) | — | ✅ | Kun Pro |
+| Webhook-alerts ved hver hændelse — en flappende site holdes på 1/time pr. art efter 4 skift i timen (`--webhook`) | — | ✅ | Kun Pro |
 | Lokal desktop-notification (macOS i CLI'en, alle platforme i desktopappen) | — | ✅ | Kun Pro |
 | Desktop-app: tray, baggrundsloop, aktivitetsoversigt | — | ✅ | Kun Pro — privat desktopapp |
 | Email-alerts | — | — | **Ikke bygget** |
