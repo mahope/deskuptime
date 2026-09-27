@@ -1884,3 +1884,39 @@ export function describeFetchError(error) {
     error: cause?.message || error?.message || 'Network request failed',
   };
 }
+
+/**
+ * Is the certificate still worth reading, after the request leg failed?
+ *
+ * The request leg and the certificate leg are two connections, and they fail for
+ * different reasons. A request that never got an answer is usually not a
+ * certificate problem at all: a refused connection and a name that does not
+ * resolve never reach a handshake, and a timeout has no certificate to read.
+ * Asking anyway costs a doomed connection — up to `SSL_TIMEOUT_MS` on the very
+ * sites a watch loop checks most often — and teaches nobody anything.
+ *
+ * `network_error` is the other half. It is where every certificate failure
+ * lands, because `describeFetchError` has no vocabulary for certificates:
+ * measured 2026-09-27 against a site serving a certificate that expired 40 days
+ * earlier and one serving a certificate for another host, `fetch` refused both
+ * handshakes and `describeFetchError` called both `network_error`
+ * (`certificate has expired`, `Hostname/IP does not match certificate's
+ * altnames: IP: 127.0.0.1 is not in the cert's list`). The certificate is
+ * sitting right there on the wire, and the SSL leg — which accepts any
+ * certificate on purpose — is the only leg that can read it.
+ *
+ * So a `network_error` on an `https` URL costs one extra connection and buys
+ * the whole certificate reading: days left, issuer, TLS version and whether the
+ * certificate covers the host at all. The verdict cannot move — `healthy` is
+ * the request leg's answer — so this can add a fact, never a verdict. A
+ * non-TLS `network_error` (a reset socket, an abrupt close) simply reads no
+ * certificate and is reported as before.
+ *
+ * @param {object} [failure] — `{ reachable, errorType }` from the request leg
+ * @returns {boolean}
+ */
+export function canReadCertificate(failure) {
+  const { reachable = false, errorType = null } = failure && typeof failure === 'object' ? failure : {};
+  if (reachable) return true;
+  return errorType === 'network_error';
+}

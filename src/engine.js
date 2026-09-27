@@ -8,7 +8,7 @@
 import { checkReachability } from './checkers/ping.js';
 import { checkSSL, SSL_TIMEOUT_MS } from './checkers/ssl.js';
 import { checkContentChange, CONTENT_TIMEOUT_MS } from './checkers/content.js';
-import { assertValidHttpUrls, expectsCertificate, isHealthyStatus, readCertCoverage, readSslIssuer, readSslState, readSslTls, expiredNote } from './status.js';
+import { assertValidHttpUrls, canReadCertificate, expectsCertificate, isHealthyStatus, readCertCoverage, readSslIssuer, readSslState, readSslTls, expiredNote } from './status.js';
 import { formatMs } from './display.js';
 
 /**
@@ -75,11 +75,21 @@ export async function checkUrl(url, opts = {}) {
     return result;
   }
 
-  // 2. SSL check (only if a certificate can exist here, and we got a response)
+  // 2. SSL check (only if a certificate can exist here, and the request leg did
+  // not rule the certificate out)
   // `expectsCertificate()` rather than `url.startsWith('https://')`: the URL
   // parser lowercases a scheme, so `HTTPS://` was monitored over TLS and then
   // never had its certificate read — the renewal warning silently off.
-  if (result.reachable && expectsCertificate(url)) {
+  //
+  // `canReadCertificate()` rather than `result.reachable`: a site that refuses
+  // the handshake *because of its certificate* answers no request, and the gate
+  // threw the certificate away with the answer. Measured 2026-09-27 against a
+  // site serving a certificate that expired 40 days earlier: `checkSSL` on that
+  // host read `{ validDays: 0, isExpired: true, expiredDays: 40 }`, the engine
+  // kept `ssl: null`, and every paid surface then said it knew nothing about
+  // the certificate — `SSL —` in the client report, no `SSL EXPIRED` line, no
+  // `ssl_expired` alert, for the one reason the renewal warning exists.
+  if (expectsCertificate(url) && canReadCertificate(result)) {
     try {
       result.ssl = await checkSSL(url, { timeoutMs: legTimeoutMs(deadline, SSL_TIMEOUT_MS) });
     } catch (err) {

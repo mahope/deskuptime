@@ -1,3 +1,100 @@
+## Status fra denne iteration (71, P1-55 — et udløbet certifikat blev læst, målt og kasseret, så ingen betalt flade kunne sige hvorfor sitet var nede)
+
+**Hvorfor denne flade:** ❓ 1–3 er stadig ubesvarede. Kandidaten var P1-54's
+egen måling, punkt 4: dækning af værtsnavn findes kun på `check`. **Målingen
+sagde noget andet, og noget større.**
+
+**Målt først, nul kode ændret.** Et rigtigt certifikat der udløb **40 dage**
+før kørslen (genereret med `openssl -not_after`, serveret over lokal TLS, kun
+det), gennem den rigtige motor og den rigtige CLI:
+
+```
+checkSSL -> {"validDays":0,"isExpired":true,"expiredDays":40}
+checkUrl -> {"reachable":false,"healthy":false,"errorType":"network_error",
+             "error":"certificate has expired","ssl":null}          ← læst og kasseret
+```
+
+**Fundet er den værste slags i denne kø: ikke en forkert besked, men en manglende
+— om den ting, missionen navngiver først.** `src/engine.js:82` gatede SSL-benet
+på `result.reachable`, og et udløbet certifikat er netop det, der stopper
+request-benet fra nogensinde at få svar. Følgerne på de betalte flader, målt på
+én og samme kørsel:
+
+| Overflade | Før rettelsen |
+|---|---|
+| `watch --status` | `🚨 down  https://kunde.dk/ (—)` |
+| `report` (SSL-celle) | `—` |
+| `report` (resumelinje) | `1 site(s) · 0 up · 1 down · 101 checks · 1 failed` |
+| `report --json` | `sslExpired: false`, `sslExpiredDays: null` |
+| `state.json` | `sslValidDays` **slettet** af passet, ingen `sslExpired` |
+| webhook | ingen `ssl_expired`-alarm |
+
+Alle de ting P1-8, P1-10, P1-22, P1-36 og P1-37 byggede — `🔴 expired`, `N SSL
+EXPIRED`, den navngiven linje, `ssl_expired`-hændelsen — er **uopnåelige for det
+ene tilfælde, de findes for**. Bureauet får et kundedokument, der siger "nede"
+uden at sige hvorfor, og kunden ved ikke at det er et certifikat der skal
+fornyes. Passet sletter oveni den sidste nedtælling (`sslValidDays: 2` → væk),
+altså sletter den præcis den faktum, kunden skulle have brugt.
+
+**Én port, én ejer.** `canReadCertificate(failure)` i `src/status.js`, lige
+efter `describeFetchError` — fordi reglen er ulæselig uden det ordforråd, den
+`describeFetchError` producerer. `network_error` er, målt, hvor **alle**
+certifikat-fejl lander: `fetch` har ingen vocabulaire for certifikater, så både
+`certificate has expired` og `Hostname/IP does not match certificate's
+altnames` bliver `network_error`. `connection_refused`, `dns_error` og `timeout`
+nævner ikke et certifikat og får sig **ikke** et dyrt dyk mere: de når aldrig
+en handshake, og det er præcis de sites en watch-loop tjekker oftest.
+
+**Rettelsen er to linjer i `src/engine.js`, og resten er de eksisterende ejere.**
+Efter: `SSL: 🔴 expired 40d ago` i terminalen, `sslChecked: true` +
+`sslExpired: true` + `sslExpiredDays: 40` i JSON, **to** events i passet
+(`is DOWN` *og* `🔴 SSL certificate expired 40d ago`, som går i kundens
+Slack/Discord/Teams-kanal), `sslExpired: true` i state, `(—, SSL 🔴 expired
+40d ago)` i begge lister, og i rapporten `🔴 expired 40d ago` i SSL-cellen plus
+`· 1 SSL EXPIRED` i resumelinjen. **Verdikt, exit-kode, uptime-tal, matrix-rækker
+og alle JSON-felter uændrede** — `healthy` er request-benets svar, så rettelsen
+kan tilføje en kendsgerning, aldrig en dom.
+
+**Test (9 nye, `test/certondown.test.js`, lagt i `npm test` — samme fælde som
+P1-10):** ejerens sandfalsighed (alle fire `errorType` + `null`/ukendt input), en
+**strukturel lås** på at engine.js ikke may gate SSL-benet på reachability
+igen, det rigtige udløbde certifikat gennem `checkUrl` (og en assertion på at
+fejlen *er* `network_error` — målt, ikke antaget), den rigtige CLI med exit 2
+bevist, terminalens linje, `runPass` med den målte form (state + `ssl_expired`),
+kundenrapportens celle og tælling, og **den anden side**: en refused
+forbindelse får ingen opdigtede certifikat-fakta. 9/9 nye, **507/507** (498 + 9).
+
+**Tre mutationer målt, alle døde:** gammel port genindsat → 4 fejl, ejeren altid
+sand → 1 fejl, ejeren altid falsk → 4 fejl. **Den anden mutation er svagere end
+de to andre, og det er værd at sige:** `runPass`-testen bruger en stub-check, så
+"ingen ekstra connection ved en refused forbindelse" er dækket af enhedstesten
+og ikke end-to-end; den fulde pris er timeout-budgetet, som ikke blev målt her.
+
+**Næste:** ❓ 1–3 og ❓ 14, ellers en målt opgave. Uafsluttede fund fra denne
+måling: (1) **kandidaten der blev skubbet aside holder ikke** — værtsnavnsdækning
+kan ikke nå kundenrapporten, fordi `fetch` afviser et certifikat der ikke dækker
+værten *før* nogen overflade når at spørge: målt `coverage=false` +
+`healthy=false` samtidig på det rigtige CLI. Udbred dækning til de betalte
+flader ville være at fjerne kortere end kunden; (2) `fingerprint` +
+`serialNumber` er målt og ulæst — rotationsdetektion, ny hændelsestype, kræver
+spec først; (3) matrixens næste linje der bør måles på `watch`-fladen:
+`content-ændringsdetektion`; (4) `check --json` udelader `errorType`/`error` helt
+på et sundt tjek — låst som observeret adfærd, ikke rettet.
+
+- **Release-note P1-55:** Hvis et kundes site stod **nede fordi certifikatet
+  udløb**, vidste værktøjet ingenting om certifikatet — på nogen overflade. Før
+  skrev `check` `❌ N/A — DOWN` og `SSL: N/A`, begge statuslister skrev `—` i
+  SSL-pladsen, og kundenrapporten skrev `| — |` i SSL-kolonnen og ingen
+  `SSL EXPIRED`-linje, fordi det udløbne certifikat aldrig blev læst: værktøjet
+  bad om en side, fik **ingen** svar, og kasserede det certifikat, det havde
+  læst på en helt anden forbindelse. Nu siger den samme kørsel
+  `🔴 SSL: expired 40d ago`, sender **to** beskeder i din kanal (at sitet er
+  nede, og at certifikatet er udløbet), og rapporten skriver
+  `🔴 expired 40d ago` og `· 1 SSL EXPIRED` med den navngiven linje under
+  tabellen. **Exit-kode, uptime-tal, matrix-rækker og øvrige felter er
+  uændrede** — et site er stadig DOWN, og et certifikat er stadig en note om
+  certifikatet, aldrig en dom om sitet.
+
 ## Status fra denne iteration (70, P1-54 — matrixen lovede værtsnavnsdækning, og ingen flade kunne sige om certifikatet dækkede)
 
 **Hvorfor denne flade:** ❓ 1–3 er stadig ubesvarede, så iterationen tog den
