@@ -18,7 +18,7 @@ import { buildReport, renderReportJson, renderReportMarkdown } from './report.js
 import { readFileSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
-import { invalidHttpUrls, invalidUrlMessage, partitionUsableUrls, readChain, readContentState, readDisclosure, readEntry, readRedirectTarget, readSecurityHeaders, readSslIssuer, readSslState, contentSkipNote, unusableUrlNote, withoutCredentials, SECURITY_HEADER, STALE_AFTER_DAYS } from './status.js';
+import { invalidHttpUrls, invalidUrlMessage, partitionUsableUrls, readChain, readContentState, readDisclosure, readEntry, readRedirectTarget, readSecurityHeaders, readSslIssuer, readSslState, readSslTls, contentSkipNote, unusableUrlNote, withoutCredentials, SECURITY_HEADER, STALE_AFTER_DAYS } from './status.js';
 import { formatMs, machinesInUse, safeText } from './display.js';
 import { DEFAULT_WINDOW_DAYS, HISTORY_DAYS, historyReadErrorMessage, readHistoryFile } from './history.js';
 import { FREE, PRODUCT, proExtras, renderHelpPro } from './features.js';
@@ -133,6 +133,7 @@ if (command === 'check') {
         expired: r.ssl?.isExpired,
         expiredDays: r.ssl?.expiredDays,
       });
+      const tls = readSslTls(r.ssl);
       return {
         url: r.url,
         reachable: r.reachable,
@@ -169,6 +170,14 @@ if (command === 'check') {
         // certificate was read, exactly like `sslChecked: false` above, so a
         // plain-HTTP or unreachable URL is never read as "issued by nobody".
         sslIssuer: readSslIssuer(r.ssl),
+        // The TLS version and cipher this connection really negotiated, from the
+        // one owner. The checker has measured both since P0-3 and no surface could
+        // read them, while a security questionnaire about a customer's site asks
+        // for exactly these two. `null` per field means the handshake reported
+        // nothing for that one — never an empty string, which would read as "we
+        // looked and there was none".
+        sslProtocol: tls.protocol,
+        sslCipher: tls.cipher,
         // The content facts, from the one owner. `contentLength` was the byte
         // count our own reader had reached when it gave up on an oversized page
         // — a number no server sent, and a different one on every run — so it
@@ -216,6 +225,17 @@ if (command === 'check') {
       // through safeText like every other value on these lines.
       if (summary.sslIssuer) {
         console.log(`   🏷️ Issuer: ${safeText(summary.sslIssuer, { max: 0 })}`);
+      }
+      // What the connection really negotiated. The checker has measured both
+      // since P0-3 and no surface could read them, so a bureau could not answer
+      // the first two questions a security questionnaire asks about a customer's
+      // site. Only the half that was measured is printed: a handshake that
+      // reported a version without a cipher suite does not get a blank to stand
+      // in for the missing one. Both values are the server's, so the line goes
+      // through safeText like the issuer above.
+      const tlsLine = [summary.sslTls.protocol, summary.sslTls.cipher].filter(Boolean).join(' — ');
+      if (tlsLine) {
+        console.log(`   🔐 TLS: ${safeText(tlsLine, { max: 0 })}`);
       }
       if (content.measured) {
         const bytes = content.length === null ? 'size unknown' : `${content.length.toLocaleString('en-US')} bytes`;

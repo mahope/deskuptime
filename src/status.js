@@ -666,6 +666,42 @@ export function readSslIssuer(ssl) {
   return null;
 }
 
+/** One socket-supplied name, trimmed, or `null` for anything that is not one. */
+function readNegotiatedName(name) {
+  return typeof name === 'string' && name.trim() ? name.trim() : null;
+}
+
+/**
+ * The TLS version and cipher suite the connection actually negotiated — or
+ * `null` for each, when no handshake was read.
+ *
+ * `src/checkers/ssl.js` has measured `protocol` and `cipher` on every SSL check
+ * since P0-3 and **no surface could read them**: `check` printed the days and the
+ * issuer, `check --json` had no field, and neither status list, the client report
+ * nor the action summary carried them. "Which TLS version does the customer's
+ * site speak, and with which cipher?" is a line a bureau has to be able to
+ * produce — it is the first thing a security questionnaire asks and the cheapest
+ * thing to prove, and the answer was in the data the whole time.
+ *
+ * `null` per field rather than a whole object, because the two facts are read
+ * independently: a handshake can complete and report a protocol while the cipher
+ * is absent, and a surface must not print an empty half of the line. Neither
+ * value is a judgement — no TLS version is flagged here, because Node will not
+ * complete a handshake below TLS 1.2, so an old protocol is an error on this
+ * surface rather than a value to grade. See the `expiresSoon` note above for the
+ * other place where one threshold lives, and `readSslIssuer` for the sibling fact.
+ *
+ * Both values are chosen by the server, so a terminal surface must pass them
+ * through `safeText()` — see src/display.js.
+ */
+export function readSslTls(ssl) {
+  const value = ssl && typeof ssl === 'object' ? ssl : null;
+  return {
+    protocol: readNegotiatedName(value?.protocol),
+    cipher: readNegotiatedName(value?.cipher),
+  };
+}
+
 /**
  * The fixed wording for a certificate whose reading is too old to renew against.
  *

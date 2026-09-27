@@ -1,3 +1,79 @@
+## Status fra denne iteration (69, P1-53 — matrixen lovede en TLS-version, og ingen flade kunne sige hvilken)
+
+**Hvorfor denne flade:** ❓ 1–3 er stadig ubesvarede, så iterationen tog den
+næste linje fra P1-52's egen måling: `src/checkers/ssl.js` har læst `protocol` og
+`cipher` på **hvert** SSL-tjek siden P0-3, og ingen flade kunne læse dem.
+
+**Målt først, nul kode ændret.** Rigtig `check` mod `https://example.com` og mod
+fire rigtige sites:
+
+```
+før:  🔒 SSL:     90d ✅
+      🏷️ Issuer: SSL Corporation
+målt: protocol "TLSv1.3" + cipher "TLS_AES_256_GCM_SHA384" (example.com,
+      letsencrypt.org, github.com, stripe.com — alle TLSv1.3)
+```
+
+**Én ejer, `readSslTls(ssl)` i `src/status.js`,** ved siden af `readSslIssuer`.
+Den returnerer `{ protocol, cipher }` med **`null` pr. felt**, ikke et objekt
+eller en tom streng: en handshake kan melde en version uden cipher-suite, og så
+skal fladen skrive den halve linje, ikke finde på en pladsholder. Ingen af
+felterne er en **vurdering** — ingen TLS-version advares om, fordi Node gennem
+fører en handshake ikke under TLS 1.2, så en gammel protokol er en *fejl* på
+denne flade (målt: en lukket port giver `errorType: connection_refused`, fordi
+SSL-tjekket aldrig kørte) og ikke en værdi at gradere.
+
+**To overflader + matrixen, additivt:** `   🔐 TLS: TLSv1.3 — TLS_AES_256_GCM_SHA384`
+i `check`'s menneske-output (gennem `safeText`, fordi begge værdier er vælgt af
+serveren — samme regel som issuer), `sslProtocol` + `sslCipher` i `check --json`,
+`sslTls` i `summarize()` (én læsning pr. resultat, ikke to kald), og matrix-rækken
+`ssl-content` siger nu *"SSL expiry countdown, issuer, **negotiated TLS version**
+and content-change detection"* i begge tiers — regenereret i README og
+`docs/pro-alerts.md` (`npm run matrix`). README-eksemplet er en ægte kørning igen
+og feature-bulletten siger det, der vises. **Ingen exit-kode, intet eksisterende
+felt, ingen state-filnøgle ændret.**
+
+**Test (11 nye, `test/ssltls.test.js`, lagt i `npm test` — samme fælde som
+P1-10):** 6 enhedstests af ejeren (begge halve, `null` for 6 ikke-handshake-former,
+**uafhængighed** så den ene halv kan mangle, ikke-streng, trim, `summarize`
+bærer den) og 5 end-to-end: `TLS:`-linjen gennem den rigtige CLI med
+`openssl`-fixture (og at den står *efter* dageslinjen), ingen linje og `null` for
+ren HTTP, `null` for en **mislykket forbindelse** målt — ikke antaget —, hele
+JSON-kontrakten additive, og låsen der siger at matrixens lovede ord og de to
+felter hænger sammen.
+
+**To fejl i min egen måling, begge fundet af de målinger der skulle lukke den** —
+den niende og tiende målefejl i mit arbejde, der så ud som produktfund:
+
+1. Min `close()`-hjælper kaldte `server.closeAllConnections()` på en `net.Server`,
+   som ikke har den metode. Testen kastede, og filen **hangde i stedet for at
+   blive rød** — det samme billede som P1-52's `tls.createServer`-fælde, nu med
+   den modsatte årsag. Hjælperen tjekker nu, om metoden findes.
+2. Jeg hævdede at en fejlet forbindelse sætter `sslError`. Målingen siger
+   `errorType: connection_refused` og `sslError: null`, fordi SSL-tjekket aldrig
+   kørte. Min assertion var forkert, ikke koden — og den siger nu det målte.
+
+**Én lås udvidet, ikke slækket** (ellevte gang): `sslissuer.test.js`'e lås på
+matrixrækken søgte på hele sætningen `issuer and content-change detection`, så
+den låste *ordlyden* og ikke løftet. Den søger nu på rækken og på ordet `issuer`,
+hvilket er præcis det den vogter; min egen TLS-lås fryser den nye sætning.
+
+**Målt og grønt:** 483/483 (472 + 11), audit 0/0, `node --check` alle JS-filer,
+`matrix --check` og `git diff --check` på **Node 26.7.0**. Matrixens øvrige
+rækker urørt, så ingen ny claim uden levering. Ingen deploy-note nødvendig
+(koden ligger i npm-pakken og actionen, ikke i et live-site). `ceo/tls-version`.
+
+**Næste:** ❓ 1–3 og ❓ 14, ellers en målt opgave. Uafsluttede, målte fund fra
+denne måling, i prioriteret rækkefølge: (1) `subjectAltName` er målt på hvert
+tjek og ulæst — bureauets spørgsmål "dækker certifikatet det værtsnavn, vi
+tjekker?" kræver wildcard-regler (`*.a.dk` dækker `b.a.dk` men ikke `a.dk`), så
+det er en vurdering og vil kræve en måling af falske alarmer først; (2)
+`fingerprint` + `serialNumber` er målt og ulæst — værdien er *rotationsdetektion*
+("certifikatet blev udstedt på ny"), altså en ny hændelsestype og ikke en linje,
+kræver spec; (3) matrixens næste linje der bør måles på `watch`-fladen:
+`content-ændringsdetektion`; (4) `check --json` udelader `errorType`/`error`
+helt på et sundt tjek — låst som observeret adfærd, ikke rettet.
+
 ## Status fra denne iteration (68, P1-52 — matrixen lovede "issuer", og ingen flade kunne sige hvem der udstedte certifikatet)
 
 **Hvorfor denne flade:** ❓ 1–3 er stadig ubesvarede, så iterationen gik på den

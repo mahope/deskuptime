@@ -8,7 +8,7 @@
 import { checkReachability } from './checkers/ping.js';
 import { checkSSL, SSL_TIMEOUT_MS } from './checkers/ssl.js';
 import { checkContentChange, CONTENT_TIMEOUT_MS } from './checkers/content.js';
-import { assertValidHttpUrls, expectsCertificate, isHealthyStatus, readSslIssuer, readSslState, expiredNote } from './status.js';
+import { assertValidHttpUrls, expectsCertificate, isHealthyStatus, readSslIssuer, readSslState, readSslTls, expiredNote } from './status.js';
 import { formatMs } from './display.js';
 
 /**
@@ -151,6 +151,8 @@ export function summarize(result) {
     sslIcon: ssl.expired ? '🔴' : ssl.expiringSoon ? '⚠️' : ssl.days !== null ? '🔒' : result.ssl?.error ? '🔓' : '—',
     /** Who issued the certificate, read through the one owner. `null` is a fact too. */
     sslIssuer: readSslIssuer(result.ssl),
+    /** The TLS version and cipher the handshake negotiated, through the one owner. */
+    sslTls: readSslTls(result.ssl),
     lastChecked: result.timestamp,
   };
 }

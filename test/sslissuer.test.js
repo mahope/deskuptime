@@ -178,8 +178,13 @@ test('the JSON contract is additive: every field that existed still exists', { t
 test('the matrix promises "issuer", so the certificate issuer must be reachable', () => {
   const features = readFileSync(join(ROOT, 'src', 'features.js'), 'utf8');
   const cli = readFileSync(CLI, 'utf8');
-  assert.match(features, /issuer and content-change detection/,
-    'the matrix row no longer promises an issuer — drop this test instead of keeping it');
+  // The row itself, not the sentence: this lock guards that the SSL row still
+  // promises an issuer, so it must not freeze the wording around it — P1-53
+  // widened the same row with the negotiated TLS version, which is honest, and
+  // froze the sentence that would have made this test lie about the promise.
+  const row = /id: 'ssl-content',[\s\S]*?\n  \},/.exec(features)?.[0] ?? '';
+  assert.match(row, /\bissuer\b/,
+    'the SSL row no longer promises an issuer — drop this test instead of keeping it');
   // One owner, and the value the site chose is never printed raw.
   assert.equal((cli.match(/readSslIssuer\(/g) || []).length, 1, 'cli.js must read the issuer through the one owner');
   assert.match(cli, /Issuer: \$\{safeText\(/, 'an issuer is chosen by the certificate, so it goes through safeText');
