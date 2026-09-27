@@ -1,3 +1,65 @@
+## Status fra denne iteration (90, P1-73 — `dns_error`-grenen læste sin sætning fra et sted, koden ikke kom fra)
+
+**Målt først, nul kode ændret.** P1-73 bad om ét spørgsmål besvaret målt: kan en
+`ENOTFOUND`/`EAI_AGAIN`-sætning overhovedet citere en URL med credentials i? Svaret
+er **nej**, på to uafhængige måder, målt på Node 22.23.2 og 26.7.0 med rigtig
+`fetch` og rigtig resolver:
+
+```
+fetch('http://kunde.dk/') mod et navn der ikke findes
+  -> cause.code    ENOTFOUND
+  -> cause.message "getaddrinfo ENOTFOUND kunde.dk"      ← kun værten, ingen adresse
+
+fetch('http://demo:sup3rsecret@nonexistent.invalid/')
+  -> TypeError: Request cannot be constructed from a URL that includes credentials
+  -> ingen cause, ingen kode, ingen DNS                    ← aldrig nået resolveren
+```
+
+Værten kan heller ikke *rumme* credentials: `new URL()` flytter alt før det sidste
+`@` over i `username`/`password`. Og en credentialed adresse bliver aldrig spurgt
+om — en skrevet adresse afvises når requesten bygges, en omdirigering afvises af
+`undici`s cross-origin-gate (P1-72), begge **før** der connectes. Så skrubningen i
+denne gren er i dag en no-op på begge runtimes.
+
+**Besvarelsen ændrer ikke beslutningen: skrubningen bliver, som lås.** Den er
+P1-71`s, den koster intet, og «det kan ikke ske» er præcis den begrundelse, der
+fjerner et lås lige før den runtime der bryder det kommer. Der ligger nu en målt
+påstand, der dør hvis kaldet forsvinder — den første acceptmulighed i P1-73.
+
+**Og målingen fandt den rigtige fejl tre linjer over den.** Koden læste koden fra
+`cause?.code || error?.code`, men sætningen fra `cause.message` — ubeskyttet:
+
+```
+$ node -e "describeFetchError({ code: 'ENOTFOUND' })"
+TypeError: Cannot read properties of undefined (reading 'message')
+```
+
+Inde i den funktion, hvis eneste opgave er at beskrive fejl. Og
+`|| 'Host could not be resolved'` ved siden af kunne aldrig nås: det er den
+læsning, der skulle have produceret den tomme streng, der kastede først. Den var
+død kode, der læstes som en reservering — P1-21's klasse, en påstand der ikke
+beskriver noget.
+
+**Ikke nået fra CLI'en i dag, og det er målt:** otte rigtige `fetch`-fejl på begge
+runtimes (refused, to abort-former, uløseligt navn, uløseligt navn efter et hop, TLS
+mod en plain server, `file:`-skema, redirect til `file:`) har alle en `cause`, og de
+to der ikke har, er abort-formerne, som er matchet på *navn* længere oppe.
+Funktionen er eksporteret og skal være total — og den er total nu, fordi koden og
+sætningen læses fra **ét** sted i stedet for to.
+
+**Verificeret:** 4 nye tests i `test/dnsbranch.test.js` → **653/653** (649 + 4);
+fire målte mutationer døde alle (skrubningen væk, den ubeskyttede læsning tilbage,
+`cause`-præcedensen væk, reserveringen væk). Den reelle test går gennem
+`checkReachability` mod en rigtig 302 til et `.invalid`-navn (RFC 2606, kan aldrig
+findes) — altså resolveren, ikke en stub — og springes kun hvis miljøet slet ikke
+har en resolver. `test/credentialsentence.test.js` låser de fire egne sætninger og
+dommen tegn for tegn, urørt. Audit 0/0, `matrix --check` exit 0, `node --check` ren
+på alle JS, `git diff --check` rent. Ingen ny påstand, intet krav ændret, ingen
+deploy-note (CLI-repoet deployer ikke). `ceo/dns-branch-crash`.
+
+**Køen:** P1-74 (én kendsgerning, to sætninger om credentials) er målt og klar;
+❓ 1–3, ❓ 14 og ❓ 16 afventer Mads.
+
 ## Status fra denne iteration (89, P1-75 — gaten var rød på maskinens `node`, ikke på koden)
 
 **Målt først, nul kode ændret.** Ren `main`, intet stubbet, `node` først på PATH er
@@ -5915,27 +5977,38 @@ forbuder, og ville ripple ind i den betalte webhook-kontrakt (P1-34) og `action.
   `git diff --check` rent. Node 26.7.0. ✅
 - Fem målte mutationer døde alle. ✅
 
-### P1-73 — Ny — `dns_error`-grenens credentials-skrubning har intet lås
+### P1-73 — FÆRDIG 2026-09-28 (`ceo/dns-branch-crash`) — `dns_error`-grenens credentials-skrubning har sit lås, og grenen læste sin sætning fra et sted, koden ikke kom fra
 
-**Målt 2026-09-27 under P1-72's mutationstest, nul kode ændret.** P1-72 målte sine egne
-mutationer, og en af dem overlevede: at fjerne `scrubUrlCredentials()` fra
-`describeFetchError`s `dns_error`-grebe (`src/status.js`) dræber **ingen** test — hverken
-de 4 nye i `test/credentialsentence.test.js` eller P1-71's egne. Begge eksisterende
-påstande bruger en besked *uden* URL i (`getaddrinfo ENOTFOUND a.dk`), så skrubningen er
-en no-op i dem.
+**Spørgsmålet besvaret målt 2026-09-28, nul kode ændret, Node 22.23.2 og 26.7.0:
+kan sætningen citere en URL med credentials i? Nej.** To uafhængige grunde:
 
-Det er ikke en fejl: koden er rigtig, og P1-72 lod den urørt. Det er en **manglende lås**
-på et P1-71-lås, og den slags forsvinder stille: næste gang nogen rører den gren, er der
-intet til at sige, at adgangskoden skal være ude.
+1. `cause.message` er `getaddrinfo ENOTFOUND <host>` — kun værten, og værten kan
+   ikke rumme credentials, fordi `new URL()` flytter alt før det sidste `@` over i
+   `username`/`password`. Målt: ingen adresse, ingen sti, ingen query.
+2. En credentialed adresse bliver aldrig spurgt om i resolveren. Skrevet: afvist
+   når requesten bygges (`Request cannot be constructed from a URL that includes
+   credentials`, ingen `cause`, ingen kode). Omdirigeret: afvist af `undici`s
+   cross-origin-gate. Begge **før** der connectes. P1-45 lukker desuden den
+   skrevne adresse på alle fire kommandoer.
 
-**Spørgsmålet må besvares målt, ikke antaget:** kan en `ENOTFOUND`/`EAI_AGAIN`-sætning
-overhovedet citere en URL med credentials i? Målt i P1-71 hed beskeden
-`getaddrinfo ENOTFOUND <vært>` — altså kun værten. Hvis svaret er *nej*, så er
-skrubningen i denne gren hverken nødvendig eller skadelig, og den rigtige rettelse er en
-påstand der låser den, så den ikke forsvinder. Hvis svaret er *ja*, er det en
-lækage-klasse der mangler. **Acceptkriterium:** enten en målt påstand der dør når
-skrubningen fjernes, eller en note i planen om hvorfor grenen ikke kan lække — med
-målingen ved siden af.
+**Rettelsen er derfor låset, ikke udskiftet** — første acceptmulighed i opgaven.
+`test/dnsbranch.test.js` har en målt påstand om en `dns_error`-sætning, der *ville*
+citere `http://demo:sup3rsecret@kunde.dk/staging`; den dør, hvis
+`scrubUrlCredentials()` forlader grenen (målt: 1 fejl). `scrubUrlCredentials`
+documenterer nu selv, at dens brug i denne gren er et lås, med målingen ved.
+
+**Den fejl målingen fandt er større end det manglende lås.** `code` læstes fra
+`cause?.code || error?.code`, sætningen fra `cause.message` ubeskyttet, så en fejl
+med koden på sig selv kastede `TypeError: Cannot read properties of undefined
+(reading 'message')` inde i funktionen, der skal beskrive fejl — og
+`|| 'Host could not be resolved'` var uopnåelig død kode. Nu er der **én** læsning
+for begge dele. Målt mutationer, alle døde: skrubningen væk (1), ubeskyttet læsning
+tilbage (3), `cause`-præcedensen væk (2), reserveringen væk (1).
+
+- Dommen, exit-koden, JSON-formen, `errorType` og de fire egne sætninger: urørt,
+  låst tegn for tegn af `test/credentialsentence.test.js`. ✅
+- 653/653 (649 + 4), audit 0/0, `matrix --check` exit 0, `node --check` ren,
+  `git diff --check` rent. ✅
 
 ### P1-74 — Ny — Én kendsgerning, to sætninger: `describeFetchError` ved ikke hvilket credentials-problem det er
 

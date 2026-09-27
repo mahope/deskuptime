@@ -2460,6 +2460,18 @@ export function withoutCredentials(value) {
  *
  * Only an absolute `http(s)` URL with a userinfo is touched, so a relative
  * `Location: /@handle/` and a `mailto:` address keep their own text.
+ *
+ * `describeFetchError` calls this from its `dns_error` branch as well, and that
+ * call is a **lock, not a repair** — measured 2026-09-28 on Node 22.23.2 and
+ * 26.7.0, no `ENOTFOUND`/`EAI_AGAIN` sentence from `fetch` can quote one: the
+ * cause reads `getaddrinfo ENOTFOUND <host>`, the host cannot hold a userinfo
+ * (`new URL()` moves everything before the last `@` into username/password), and
+ * a credentialed address is refused *before* any resolver is asked about it —
+ * a typed one when the request is built, a redirected one at `undici`'s
+ * cross-origin gate. So the branch is a no-op today on both runtimes. It stays
+ * because the redaction is P1-71's, it costs nothing, and "this cannot happen"
+ * is the reasoning that deletes a lock right before the runtime that breaks it
+ * ships. `test/dnsbranch.test.js` fails if the call goes away.
  */
 export function scrubUrlCredentials(value) {
   return String(value).replace(/(https?:\/\/)[^/\s@]+@/gi, '$1');
@@ -2648,6 +2660,24 @@ const CREDENTIALS_IN_URL_NOTE = 'Redirected to an address with credentials in it
 export function describeFetchError(error) {
   const cause = error?.cause;
   const code = cause?.code || error?.code;
+  // The sentence is read from where the code is, and never unguarded. Measured
+  // 2026-09-28: the code came from `cause?.code || error?.code` while the message
+  // came from `cause.message`, so a failure carrying its code on the error itself
+  // threw `TypeError: Cannot read properties of undefined (reading 'message')`
+  // from inside the one function that exists to describe failures — and the
+  // `|| 'Host could not be resolved'` beside it could never be reached, because
+  // the read that would have produced the empty string threw first. A describer
+  // that throws loses the sentence, the class and with them the whole result,
+  // because `toNetworkResult()` is called *inside* the `catch` that produced it.
+  //
+  // Not reachable from the CLI today, and that is measured rather than hoped
+  // for: eight real `fetch` failures on Node 22.23.2 and 26.7.0 (refused, two
+  // abort shapes, unresolvable, unresolvable after a hop, TLS against a plain
+  // server, a `file:` scheme, a redirect to one) all carry a `cause`, and the
+  // two that do not are the abort shapes, matched by name above. The function is
+  // exported and total, and a total function is the one place allowed to say
+  // "I could not read this" — never to throw it.
+  const message = String(cause?.message || error?.message || '');
 
   if (error?.name === 'TimeoutError' || error?.name === 'AbortError' || code === 'UND_ERR_CONNECT_TIMEOUT') {
     return { errorType: 'timeout', error: 'Request timed out' };
@@ -2656,7 +2686,7 @@ export function describeFetchError(error) {
     return { errorType: 'connection_refused', error: 'Connection refused' };
   }
   if (code === 'ENOTFOUND' || code === 'EAI_AGAIN') {
-    return { errorType: 'dns_error', error: scrubUrlCredentials(cause.message || 'Host could not be resolved') };
+    return { errorType: 'dns_error', error: scrubUrlCredentials(message || 'Host could not be resolved') };
   }
 
   // The request was never sent because the address had credentials in it, and
@@ -2666,7 +2696,7 @@ export function describeFetchError(error) {
   // than incidental: `canReadCertificate()` spends the certificate reading on a
   // `network_error`, which is exactly what a customer whose proxy put HTTP Basic
   // into a `Location` header still wants to know about the site in front of it.
-  if (String(cause?.message || error?.message || '').includes(CREDENTIALS_IN_URL)) {
+  if (message.includes(CREDENTIALS_IN_URL)) {
     return { errorType: 'network_error', error: CREDENTIALS_IN_URL_NOTE };
   }
 
@@ -2677,7 +2707,7 @@ export function describeFetchError(error) {
   // each of them.
   return {
     errorType: 'network_error',
-    error: scrubUrlCredentials(cause?.message || error?.message || 'Network request failed'),
+    error: scrubUrlCredentials(message || 'Network request failed'),
   };
 }
 
