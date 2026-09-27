@@ -183,7 +183,13 @@ export function readRedirectTarget({ url = '', finalUrl = null } = {}) {
   const measured = typeof finalUrl === 'string' && finalUrl !== '' && askedHost !== null && answeredHost !== null;
   const offHost = measured && askedHost !== answeredHost;
   return {
-    finalUrl: typeof finalUrl === 'string' && finalUrl ? finalUrl : null,
+    // Never with credentials in it. This string is published to a customer's own
+    // channel (the paid webhook body) and stored in the state file beside the
+    // license key, and the redirect that produced it is the one thing on the web
+    // that we did not write. Measured 2026-09-27: a `Location:` header carrying a
+    // password reached stdout, `--json` and this field; `fetch` itself refuses
+    // to build such a request, so the host comparison was never affected (P1-71).
+    finalUrl: typeof finalUrl === 'string' && finalUrl ? withoutCredentials(finalUrl) : null,
     offHost,
     askedHost,
     answeredHost,
@@ -2440,6 +2446,26 @@ export function withoutCredentials(value) {
 }
 
 /**
+ * The credentials taken out of every URL inside a *sentence*, for every place
+ * that shows text we did not write.
+ *
+ * `withoutCredentials` is the owner for one address; this is its sibling for the
+ * strings that quote an address — and the measured leak (P1-71) was in exactly
+ * those, never in the address a user typed. A site that answers
+ * `Location: http://demo:pass@…` put the password into `undici`'s own error
+ * sentence, `Request cannot be constructed from a URL that includes credentials:
+ * http://demo:pass@…`, and that sentence is what `describeFetchError` publishes
+ * as `error` on stdout, in `--json`, in the alert that goes to the customer's
+ * channel and in the state file next to the license key.
+ *
+ * Only an absolute `http(s)` URL with a userinfo is touched, so a relative
+ * `Location: /@handle/` and a `mailto:` address keep their own text.
+ */
+export function scrubUrlCredentials(value) {
+  return String(value).replace(/(https?:\/\/)[^/\s@]+@/gi, '$1');
+}
+
+/**
  * Can a pass send a request to this address? One decision, so a key that the
  * pass skips can never be fatal at a command line (the P1-40 rule) and a key a
  * command line accepts can never be a site we report as down.
@@ -2591,12 +2617,17 @@ export function describeFetchError(error) {
     return { errorType: 'connection_refused', error: 'Connection refused' };
   }
   if (code === 'ENOTFOUND' || code === 'EAI_AGAIN') {
-    return { errorType: 'dns_error', error: cause.message || 'Host could not be resolved' };
+    return { errorType: 'dns_error', error: scrubUrlCredentials(cause.message || 'Host could not be resolved') };
   }
 
+  // The sentence comes from `fetch`, not from us, and it quotes the URL that
+  // failed — so a site that redirects to a URL with a password in it hands us a
+  // sentence with that password in it (P1-71). This is the one place an error
+  // becomes a claim, on six surfaces, so the redaction belongs here and not in
+  // each of them.
   return {
     errorType: 'network_error',
-    error: cause?.message || error?.message || 'Network request failed',
+    error: scrubUrlCredentials(cause?.message || error?.message || 'Network request failed'),
   };
 }
 

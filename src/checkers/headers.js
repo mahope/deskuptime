@@ -13,6 +13,7 @@ import {
   isHealthyStatus,
   readChain,
   readHttpsState,
+  withoutCredentials,
 } from '../status.js';
 
 const SECURITY_HEADERS = [
@@ -30,7 +31,10 @@ function emptySecurity() {
 function errorResult(originalUrl, currentUrl, error) {
   const https = readHttpsState({ startUrl: originalUrl });
   return {
-    finalUrl: currentUrl,
+    // The URL we asked last, without the credentials a redirect may have put in
+    // it (P1-71). The comparison stays on the real strings: whether we were
+    // redirected is a fact about the walk, not about the spelling of the address.
+    finalUrl: withoutCredentials(currentUrl),
     redirected: currentUrl !== originalUrl,
     steps: [],
     reachable: false,
@@ -58,7 +62,24 @@ function errorResult(originalUrl, currentUrl, error) {
  */
 export function checkHeaders(url, maxRedirects = 10, options = {}) {
   const steps = [];
+  // `current` is what we request, `shown` what we may print: a `Location:` header
+  // can carry a username and a password (P1-71), and the chain is read by three
+  // surfaces — the terminal, `headers --json` and the CI job that pastes it into
+  // a step summary. Measured 2026-09-27: before this, `headers` printed the
+  // password in the `Final:` line, in the error sentence and in
+  // `steps[].location`, all three of them, for a site that answered 200.
+  //
+  // The request still goes to the real address, so the verdict does not move: a
+  // credentialed hop still fails the way `check` fails on it (`fetch` refuses to
+  // build the request), and the two commands keep agreeing. `seen` is the raw
+  // form, so loop detection cannot be fooled by two hops that differ only in
+  // their password.
   let current = url;
+  let shown = withoutCredentials(url);
+  // The raw addresses of the hops we have followed, in the raw form: the first
+  // hop is recorded like any other, so a self-redirect is still "1 hop", and two
+  // hops that differ only in their password cannot pass for a loop.
+  const seen = new Set();
 
   return new Promise((resolve) => {
     const follow = (remaining) => {
@@ -83,10 +104,12 @@ export function checkHeaders(url, maxRedirects = 10, options = {}) {
           // left a redirect in front of us is an unfinished reading, one that
           // hit a dead end is the site's own response. See `readChain`.
           if (next && remaining <= 0) return finish(r, CHAIN_STOP.MAX_REDIRECTS);
-          if (next && steps.some((s) => s.url === next)) return finish(r, CHAIN_STOP.LOOP);
+          if (next && seen.has(next)) return finish(r, CHAIN_STOP.LOOP);
           if (!next) return finish(r, CHAIN_STOP.NO_LOCATION);
-          steps.push({ url: current, status: r.status, location: next });
+          seen.add(next);
+          steps.push({ url: shown, status: r.status, location: withoutCredentials(next) });
           current = next;
+          shown = withoutCredentials(next);
           follow(remaining - 1);
           return;
         }
@@ -113,7 +136,7 @@ export function checkHeaders(url, maxRedirects = 10, options = {}) {
       const healthy = chain.complete && isHealthyStatus(r.status);
 
       resolve({
-        finalUrl: current,
+        finalUrl: shown,
         redirected: steps.length > 0 || current !== url,
         steps,
         reachable: true,
