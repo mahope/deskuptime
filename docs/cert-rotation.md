@@ -172,3 +172,42 @@ Den første rotation efter en stille time sendes som før, så et domæne der er
 i nye hænder meldes, og en vært der udsteder nyt certifikat hver 90. dag får sin
 alarm som før. Et nedbrud er aldrig tynget: `cert_rotated` og `down` er to hændelser
 i to kodelinjer, og kun den første har en dækning.
+
+## En anden udsteder (P1-64, 2026-09-27)
+
+Det tredje spørgsmål i tabellen ovenfor — *hvem udstedte det?* — var kun besvaret for
+`check`. `readSslIssuer` måler udstederen siden P1-53, men ingen skrev den ned, så
+kundenapporten kunne hverken svare på spørgsmålet eller se det ene signal, der
+skelner en fornyelse fra et navn, der er kommet i nye hænder.
+
+Målt først, nul kode ændret: rigtig `runPass`, rigtig state-fil, rigtig CLI. To pass
+over et site der svarer 200 i begge, hvor den eneste forskel er hvilket certifikat
+— og hvilken udsteder — der svarede anden gang:
+
+```
+| https://kunde.dk/ | UP (200) | 100% | … | 89 d | … |
+**1 site has its certificate replaced …** (🔑 certificate replaced today)
+```
+
+Rotationen var der. Udstederen var ikke nogen steder — heller ikke i state-filen, så
+et senere pass kunne ikke finde den. Og nedtællingen taler imod opmærksomhed: et
+nyudstedt certifikat har typisk *flere* dage tilbage end det det erstattede.
+
+Ejeren er `readCertIssuerState()` i `src/status.js`, samme form som
+`readCertRotationState`: alderen gennem `passAge`, et ur-skævt stempel navner
+skævningen, en halv påstand er ingen påstand, og et certifikat uden oplyst udsteder
+sletter ikke den sidste kendte. `runPass` gemmer `sslIssuer` på hvert pass og
+stempler `certIssuerBefore` + `certIssuerChangedAt`, når den nye udsteder afviger fra
+den sidste kendte. Sammenligningen står **uden for** rotationsgrenen: en anden
+udsteder giver næsten altid også et andet certifikat, men en kendsgerning der kun
+skrives inde i en branche forsvinder stille, når en læsning tager den anden vej.
+
+Rapporten får én navngiven linje under tabellen med **begge** navne, tællingen i
+resumelinjen og otte additive felter pr. site. **Ingen status, exit-kode, uptime-tal
+eller SSL-celle flytter sig** — udstederen kommer ikke i cellen, den er en linje
+under tabellen, ligesom rotationen.
+
+Ordet er *different issuer* og aldrig *rogue*: et site der flytter vært, eller en CA
+der overtages, giver det samme billede helt uskyldigt. En fornyelse fra den **samme**
+udsteder er stadig `🔑 certificate replaced` og ikke et skift — 90 dages fornyelser er
+den normale gang og må ikke se ud som et overtag.
