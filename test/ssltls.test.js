@@ -223,8 +223,13 @@ test('the JSON contract is additive: every field that existed still exists', { t
 test('the matrix promises a negotiated TLS version, so the field must be reachable', () => {
   const features = readFileSync(join(ROOT, 'src', 'features.js'), 'utf8');
   const cli = readFileSync(CLI, 'utf8');
-  assert.match(features, /negotiated TLS version and content-change detection/,
-    'the matrix row no longer promises a TLS version — drop this test instead of keeping it');
+  // The row itself, not the sentence: this lock guards that the SSL row still
+  // promises a TLS version, so it must not freeze the wording around it — P1-54
+  // widened the same row with hostname coverage, which is honest, and froze the
+  // sentence that would have made this test lie about the promise.
+  const row = /id: 'ssl-content',[\s\S]*?\n  \},/.exec(features)?.[0] ?? '';
+  assert.match(row, /negotiated TLS version/,
+    'the SSL row no longer promises a TLS version — drop this test instead of keeping it');
   // One owner, and the values the server chose are never printed raw.
   assert.equal((cli.match(/readSslTls\(/g) || []).length, 1, 'cli.js must read the handshake through the one owner');
   assert.match(cli, /TLS: \$\{safeText\(/, 'a negotiated name is the server\'s, so it goes through safeText');

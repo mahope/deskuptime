@@ -8,7 +8,7 @@
 import { checkReachability } from './checkers/ping.js';
 import { checkSSL, SSL_TIMEOUT_MS } from './checkers/ssl.js';
 import { checkContentChange, CONTENT_TIMEOUT_MS } from './checkers/content.js';
-import { assertValidHttpUrls, expectsCertificate, isHealthyStatus, readSslIssuer, readSslState, readSslTls, expiredNote } from './status.js';
+import { assertValidHttpUrls, expectsCertificate, isHealthyStatus, readCertCoverage, readSslIssuer, readSslState, readSslTls, expiredNote } from './status.js';
 import { formatMs } from './display.js';
 
 /**
@@ -153,6 +153,8 @@ export function summarize(result) {
     sslIssuer: readSslIssuer(result.ssl),
     /** The TLS version and cipher the handshake negotiated, through the one owner. */
     sslTls: readSslTls(result.ssl),
+    /** Whether that certificate covers the host we asked about, through the one owner. */
+    sslCoverage: readCertCoverage(result.ssl, result.url),
     lastChecked: result.timestamp,
   };
 }

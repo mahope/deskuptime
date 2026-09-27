@@ -1,3 +1,5 @@
+import net from 'node:net';
+
 import { safeText } from './display.js';
 
 export const DEFAULT_TIMEOUT_MS = 15000;
@@ -699,6 +701,141 @@ export function readSslTls(ssl) {
   return {
     protocol: readNegotiatedName(value?.protocol),
     cipher: readNegotiatedName(value?.cipher),
+  };
+}
+
+/** How many certificate names a sentence may name before it counts the rest. */
+const CERT_NAMES_IN_NOTE = 4;
+
+/**
+ * The host names a certificate carries, with the `subjectAltName` prefixes
+ * removed, in the order the certificate lists them.
+ *
+ * Node hands every entry over as `"DNS:name"`, `"IP Address:1.2.3.4"` or
+ * `"othername:…"`. Only the two that are host names are kept: an `email:` or
+ * `URI:` entry is not a name the connection could be validated against, so
+ * counting it would invent a certificate that covers the host.
+ */
+function readCertNames(ssl) {
+  const value = ssl && typeof ssl === 'object' ? ssl : null;
+  const entries = value?.subjectAltName;
+  // An array is what the checker measures. Anything else is a shape we have
+  // never read, and guessing at it would be the one owner deciding what a
+  // certificate says.
+  if (!Array.isArray(entries)) return [];
+  const names = [];
+  for (const entry of entries) {
+    if (typeof entry !== 'string') continue;
+    const trimmed = entry.trim();
+    const name = trimmed.startsWith('DNS:')
+      ? trimmed.slice(4)
+      : trimmed.startsWith('IP Address:')
+        ? trimmed.slice(11)
+        : '';
+    const clean = name.trim();
+    if (!clean) continue;
+    if (names.some(seen => comparableHost(seen) === comparableHost(clean))) continue;
+    names.push(clean);
+  }
+  return names;
+}
+
+/**
+ * A host reduced to the shape a comparison can be sure of: lower case, no
+ * trailing root dot, and in punycode when the certificate was written in
+ * unicode. `new URL()` is the parser the URL validator already uses, so an
+ * IDN name cannot be compared in one form and requested in another.
+ */
+function comparableHost(value) {
+  if (typeof value !== 'string') return null;
+  let name = value.trim().toLowerCase();
+  if (!name) return null;
+  if (name.endsWith('.')) name = name.slice(0, -1);
+  if (!name) return null;
+  if (/^[\x00-\x7f]*$/.test(name)) return name;
+  try {
+    return new URL(`https://${name}`).hostname || name;
+  } catch {
+    return name;
+  }
+}
+
+/**
+ * Whether one certificate name covers one host, the way a browser decides it.
+ *
+ * A wildcard covers exactly one label: `*.a.dk` covers `b.a.dk`, and neither
+ * `a.dk` (nothing is left of the wildcard) nor `x.b.a.dk` (two labels are).
+ * Getting this wrong is not a detail — measured against real certificates, a
+ * literal comparison calls `www.npmjs.com` uncovered, because that
+ * certificate names `*.npmjs.com`. That is a false alarm on one of the largest
+ * sites on the internet, which is why this is a rule and not a `includes()`.
+ */
+function certNameCoversHost(certName, host) {
+  if (certName === host) return true;
+  if (!certName.startsWith('*.')) return false;
+  const suffix = certName.slice(1);
+  if (!host.endsWith(suffix)) return false;
+  const label = host.slice(0, -suffix.length);
+  return label.length > 0 && !label.includes('.');
+}
+
+/**
+ * Does the certificate cover the host we asked about — and what does it name?
+ *
+ * `src/checkers/ssl.js` has read `subjectaltname` on every SSL check since P0-3
+ * and **no surface could read it**. "Does the certificate cover the hostname we
+ * monitor?" is the question a bureau gets when a client's site warns in one
+ * browser and not another, and the answer was in the data the whole time. The
+ * check is silent either way today, because the handshake runs with
+ * `rejectUnauthorized: false`: a wrong certificate is reported as a healthy site.
+ *
+ * `coversHost` is a judgement, so it is `null` — not `false` — whenever there
+ * is nothing to judge: no certificate was read, the URL does not name a host, or
+ * the certificate carries no host names at all. A certificate with an empty
+ * `subjectAltName` is old, and the verdict for one is a browser's, not ours.
+ * `false` therefore means the certificate was read, it names hosts, and none of
+ * them is this one.
+ *
+ * The host compared is the one the checker asked for — the certificate served
+ * for the redirect target is somebody else's certificate and is measured by
+ * checking that host. No exit code, no stored state and no event changes: this
+ * is a fact for the surface that already reads the certificate, not a verdict
+ * about the site.
+ *
+ * The names come from the certificate, so a terminal surface must pass the note
+ * through `safeText()` — see src/display.js.
+ *
+ * @param {object} ssl — the checker's result, or nothing at all
+ * @param {string} url — the URL the certificate was asked for
+ */
+export function readCertCoverage(ssl, url) {
+  const names = readCertNames(ssl);
+  let host = null;
+  try {
+    host = typeof url === 'string' ? comparableHost(new URL(url).hostname) : null;
+  } catch {
+    host = null;
+  }
+  const unknown = { coversHost: null, names, note: null };
+  if (!host || names.length === 0) return unknown;
+
+  // A wildcard can never cover an address; only the exact `IP Address:` entry can.
+  const address = net.isIP(host) !== 0;
+  const coversHost = names.some((name) => {
+    const certName = comparableHost(name);
+    if (!certName) return false;
+    return certName === host || (!address && certNameCoversHost(certName, host));
+  });
+  if (coversHost) {
+    return { coversHost: true, names, note: `Certificate covers ${host}` };
+  }
+  const shown = names.slice(0, CERT_NAMES_IN_NOTE);
+  const rest = names.length - shown.length;
+  const list = shown.join(', ');
+  return {
+    coversHost: false,
+    names,
+    note: `Certificate does not cover ${host} — it names: ${list}${rest > 0 ? `, and ${rest} more` : ''}`,
   };
 }
 

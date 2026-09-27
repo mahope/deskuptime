@@ -1,3 +1,103 @@
+## Status fra denne iteration (70, P1-54 — matrixen lovede værtsnavnsdækning, og ingen flade kunne sige om certifikatet dækkede)
+
+**Hvorfor denne flade:** ❓ 1–3 er stadig ubesvarede, så iterationen tog den
+første kandidat fra P1-53's egen måling: `subjectaltname` er læst på **hvert**
+SSL-tjek siden P0-3, og ingen flade kunne læse det.
+
+**Målt først, nul kode ændret.** Rigtig `checkSSL` mod otte rigtige certifikater:
+
+```
+example.com   →  ["DNS:example.com","DNS:*.example.com"]
+www.google.com→  ["DNS:www.google.com"]            github.com → ["DNS:github.com","DNS:www.github.com"]
+www.npmjs.com →  ["DNS:npmjs.com","DNS:*.internal.npmjs.com","DNS:*.npmjs.com"]   ← afgørende
+```
+
+Det afgørende fund er falske alarmer: en **bogstavelig** sammenligning erklærer
+`www.npmjs.com` for u[dækket], fordi det er `*.npmjs.com` der dækker det — en
+falsk alarm på en af nettets største sider. Derfor er wildcard-reglen en regel
+(RFC 6125: `*.a.dk` dækker `b.a.dk`, men hverken `a.dk` (intet er tilbage af
+wildcardet) eller `x.b.a.dk` (to labels er)), ikke et `includes()`. Målt på
+`comparableHost` desuden: unicode/punycode (`bøchen.dk` ≡ `xn--bchen-vua.dk` i
+begge retninger), store/små bogstaver, rod-prik, og at et `*.0.0.1` aldrig dækker
+en adresse.
+
+**Én ejer, `readCertCoverage(ssl, url)` i `src/status.js`,** ved siden af
+`readSslIssuer` og `readSslTls`. Den svarer på **den vært vi bad om** — et
+certifikat der serveres for et redirect-mål er en andens certifikat og måles ved
+at tjekke den vært. `coversHost` er **null, ikke false**, når der intet er at
+dømme om: intet certifikat læst, URL'en har ingen vært, eller certifikatet
+overhovedet ingen værtsnavne har. Det sidste er den falske-alarm-guard: et gammelt
+certifikat uden `subjectAltName` er en browsers sag, ikke vores, så begge flader
+forholder sig tavse i stedet for at skrive "dækker ikke".
+
+**To overflader + matrixen, additivt:** `   📜 Certificate covers example.com`
+og `⚠️  Certificate does not cover x — it names: a, b, c` i `check`s
+menneske-output (gennem `safeText`, fordi navnene er certifikatets), `sslCoversHost`
++ `sslCertNames` i `check --json`, `sslCoverage` i `summarize()` (én læsning pr.
+resultat), og matrix-rækken `ssl-content` siger nu *"…negotiated TLS version,
+**hostname coverage** and content-change detection"* i begge tiers — regenereret i
+README og `docs/pro-alerts.md` (`npm run matrix`). **Ingen exit-kode, intet
+eksisterende felt, ingen state-filnøgle, ingen ny hændelsestype** — et forkert
+certifikat er et *faktum om certifikatet*, ikke et DOWN.
+
+**Test (15 nye, `test/certcoverage.test.js`, lagt i `npm test` — samme fælde som
+P1-10):** 8 enhedstests af ejeren (eksakt + wildcard, apex/2-label-fraden,
+adresse kun af egen `IP Address:`-post, punycode begge veje, 10 "intet at dømme
+om"-former, trim/dedupe/præfiks, sætningen der tæller resten, `summarize`
+bærer den) og 7 gennem den rigtige kode: `📜`-linjen og de to JSON-felter gennem
+den rigtige CLI med `openssl`-fixture, et certifikat der kun navner **en anden
+vært** målt på checkens egen `checkSSL`-resultat, et uden navne (null og tavshed),
+ren HTTP og en **mislykket forbindelse** målt — ikke antaget —, hele
+JSON-kontrakten additive, og låsen der siger at matrixens lovede ord og de to
+felter hænger sammen.
+
+**To fejl i min egen måling, begge fundet af de målinger der skulle lukke den** —
+den ellevte og tolvte målefejl i mit arbejde, der så ud som produktfund:
+
+1. Jeg skrev to end-to-end-tests der begge forventede et CLI-run med exit 0 mod
+   en fixture, hvis certifikat **ikke** dækker `127.0.0.1`. Målingen siger exit 2:
+   `fetch` (undici) afviser selv den handshake, fordi Node validerer værtsnavnet
+   mod certifikatet. Det er browserens dom, ikke min linje — og det betyder at
+   de to negative tilfælde må måles på checkens egen `checkSSL`-resultat, som er
+   derfra sandt. Skrevet ned, så næste iteration ikke "fixer" testen.
+2. Samme måling fandt at min no-SAN-fixture heller ikke kan serveres: `fetch`
+   nægter et `NODE_EXTRA_CA_CERTS`-certifikat uden SAN. Også målt, ikke gættet.
+
+**Én lås udvidet, ikke slækket** (tolvte gang): `ssltls.test.js`'e lås på
+matrixrækken søgte på hele sætningen `negotiated TLS version and
+content-change detection` og døde på min egen ærlige rækkeudvidelse. Den søger nu
+på rækken og på ordet, præcis som `sslissuer.test.js`'e blev det i P1-53.
+
+**Målt og grønt:** 498/498 (483 + 15), audit 0/0, `node --check` alle JS-filer,
+`matrix --check` og `git diff --check` på **Node 26.7.0**. Ingen deploy-note
+nødvendig (koden ligger i npm-pakken og actionen, ikke i et live-site).
+`ceo/cert-coverage`.
+
+**Næste:** ❓ 1–3 og ❓ 14, ellers en målt opgave. Uafsluttede, målte fund fra
+denne måling, i prioriteret rækkefølge: (1) `fingerprint` + `serialNumber` er
+målt og ulæst — værdien er *rotationsdetektion* ("certifikatet blev udstedt på
+ny"), altså en ny hændelsestype og ikke en linje, så den kræver spec først;
+(2) matrixens næste linje der bør måles på `watch`-fladen:
+`content-ændringsdetektion`; (3) `check --json` udelader `errorType`/`error` helt
+på et sundt tjek — låst som observeret adfærd, ikke rettet; (4) dækning er kun
+en *flade* (`check`) — den følger hverken kundenrapporten eller watch-listerne,
+fordi ingen af dem gemmer værtsnavnet, de spørger om.
+
+- **Release-note P1-54:** `deskuptime check` kan nu se forskel på et certifikat
+  der **dækker** den adresse du tjekker, og et der ikke gør. Før læste
+  værktøjet alle værtsnavne på certifikatet og kasserede dem, mens handshake'en
+  med vilje accepterer et forkert certifikat — så et domæne der er parkeret
+  eller hijacket læste som et sundt site med gyldigt certifikat. Nu står der
+  `📜 Certificate covers kunde.dk`, eller
+  `⚠️ Certificate does not cover 127.0.0.1 — it names: kunde.dk` med de navne
+  certifikatet faktisk har. Det er browsers dom, værktøjet gætter ikke: et gammelt
+  certifikat uden `subjectAltName` siger **intet**, og et wildcard regnes rigtigt
+  (`*.a.dk` dækker `b.a.dk`, men hverken `a.dk` eller `x.b.a.dk` — ellers ville
+  `www.npmjs.com` være en falsk alarm). `check --json` får to additive felter,
+  `sslCoversHost` (`true`/`false`/`null`) og `sslCertNames`. **Verdikt, exit-kode,
+  historik og alarmer er uændrede** — et forkert certifikat er en note, ikke et
+  nedbrud.
+
 ## Status fra denne iteration (69, P1-53 — matrixen lovede en TLS-version, og ingen flade kunne sige hvilken)
 
 **Hvorfor denne flade:** ❓ 1–3 er stadig ubesvarede, så iterationen tog den

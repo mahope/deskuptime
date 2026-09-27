@@ -18,7 +18,7 @@ import { buildReport, renderReportJson, renderReportMarkdown } from './report.js
 import { readFileSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
-import { invalidHttpUrls, invalidUrlMessage, partitionUsableUrls, readChain, readContentState, readDisclosure, readEntry, readRedirectTarget, readSecurityHeaders, readSslIssuer, readSslState, readSslTls, contentSkipNote, unusableUrlNote, withoutCredentials, SECURITY_HEADER, STALE_AFTER_DAYS } from './status.js';
+import { invalidHttpUrls, invalidUrlMessage, partitionUsableUrls, readCertCoverage, readChain, readContentState, readDisclosure, readEntry, readRedirectTarget, readSecurityHeaders, readSslIssuer, readSslState, readSslTls, contentSkipNote, unusableUrlNote, withoutCredentials, SECURITY_HEADER, STALE_AFTER_DAYS } from './status.js';
 import { formatMs, machinesInUse, safeText } from './display.js';
 import { DEFAULT_WINDOW_DAYS, HISTORY_DAYS, historyReadErrorMessage, readHistoryFile } from './history.js';
 import { FREE, PRODUCT, proExtras, renderHelpPro } from './features.js';
@@ -134,6 +134,7 @@ if (command === 'check') {
         expiredDays: r.ssl?.expiredDays,
       });
       const tls = readSslTls(r.ssl);
+      const coverage = readCertCoverage(r.ssl, r.url);
       return {
         url: r.url,
         reachable: r.reachable,
@@ -178,6 +179,17 @@ if (command === 'check') {
         // looked and there was none".
         sslProtocol: tls.protocol,
         sslCipher: tls.cipher,
+        // Whether the certificate covers the host we asked about, and every name
+        // it does cover, from the one owner. The checker has read
+        // `subjectaltname` on every SSL check since P0-3 and no surface could
+        // read it, while the handshake deliberately accepts a wrong
+        // certificate — so a client whose domain is parked behind someone
+        // else's certificate read as a healthy site with a valid certificate.
+        // `null` where there is nothing to judge: no certificate was read, or
+        // the certificate names no hosts at all (an old certificate, whose
+        // verdict belongs to a browser).
+        sslCoversHost: coverage.coversHost,
+        sslCertNames: coverage.names,
         // The content facts, from the one owner. `contentLength` was the byte
         // count our own reader had reached when it gave up on an oversized page
         // — a number no server sent, and a different one on every run — so it
@@ -225,6 +237,15 @@ if (command === 'check') {
       // through safeText like every other value on these lines.
       if (summary.sslIssuer) {
         console.log(`   🏷️ Issuer: ${safeText(summary.sslIssuer, { max: 0 })}`);
+      }
+      if (summary.sslCoverage.note) {
+        // Does the certificate cover the host we asked about? The checker has
+        // measured the names on every SSL check and the handshake accepts a
+        // wrong certificate on purpose, so a parked or hijacked domain reads as
+        // a healthy site with a valid certificate. Silent when there is nothing
+        // to judge — no certificate, or one that names no hosts. The names come
+        // from the certificate, so the line goes through safeText like the rest.
+        console.log(`   ${summary.sslCoverage.coversHost ? '📜' : '⚠️ '} ${safeText(summary.sslCoverage.note, { max: 0 })}`);
       }
       // What the connection really negotiated. The checker has measured both
       // since P0-3 and no surface could read them, so a bureau could not answer

@@ -57,8 +57,8 @@ export const MATRIX = [
   },
   {
     id: 'ssl-content',
-    en: 'SSL expiry countdown, issuer, negotiated TLS version and content-change detection',
-    da: 'SSL-udløbsnedtælling, issuer, forhandlet TLS-version og content-ændringsdetektion',
+    en: 'SSL expiry countdown, issuer, negotiated TLS version, hostname coverage and content-change detection',
+    da: 'SSL-udløbsnedtælling, issuer, forhandlet TLS-version, værtsnavnsdækning og content-ændringsdetektion',
     free: YES,
     pro: YES,
     implemented: true,

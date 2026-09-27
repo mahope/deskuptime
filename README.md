@@ -14,6 +14,7 @@ npx @mahope/deskuptime check https://example.com
    Response: 96ms
    🔒 SSL:     90d ✅
    🏷️ Issuer: SSL Corporation
+   📜 Certificate covers example.com
    🔐 TLS: TLSv1.3 — TLS_AES_256_GCM_SHA384
    — Content: 559 bytes
 ```
@@ -23,7 +24,7 @@ npx @mahope/deskuptime check https://example.com
 ## Features
 
 - **Uptime checking** — HTTP status code + response time measurement
-- **SSL certificate validation** — expiry countdown, issuer and the negotiated TLS version, in the terminal and in `--json`
+- **SSL certificate validation** — expiry countdown, issuer, hostname coverage and the negotiated TLS version, in the terminal and in `--json`
 - **Content change detection** — SHA-256 hash comparison between checks
 - **Cross-platform** — CLI (npm) + desktop app (Tauri, Mac/Windows)
 - **Universal** — works on any website, any CMS, any stack
@@ -85,7 +86,7 @@ limits and adds alerts that reach you when you are not at the terminal.
 | Feature | Free CLI (MIT) | Pro ($19 one-time, 3 machines) | Status |
 | --- | --- | --- | --- |
 | `check` and `headers` on any number of URLs | ✅ | ✅ | In both tiers |
-| SSL expiry countdown, issuer, negotiated TLS version and content-change detection | ✅ | ✅ | In both tiers |
+| SSL expiry countdown, issuer, negotiated TLS version, hostname coverage and content-change detection | ✅ | ✅ | In both tiers |
 | GitHub Action with JSON output, `down-count` and job summary | ✅ | ✅ | In both tiers |
 | JSON output (`--json`) for scripts and CI | ✅ | ✅ | In both tiers |
 | `watch` background monitoring | 3 URLs, min. 60s interval | Unlimited URLs, min. 30s interval | In both tiers |

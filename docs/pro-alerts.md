@@ -12,7 +12,7 @@ kundeflade kan love dem. Redigér claims i `src/features.js`, ikke i tabellerne.
 | Funktion | Gratis (CLI, MIT) | Pro ($19 one-time, 3 maskiner) | Status |
 | --- | --- | --- | --- |
 | `check` og `headers` på vilkårlig mange URL'er | ✅ | ✅ | I begge |
-| SSL-udløbsnedtælling, issuer, forhandlet TLS-version og content-ændringsdetektion | ✅ | ✅ | I begge |
+| SSL-udløbsnedtælling, issuer, forhandlet TLS-version, værtsnavnsdækning og content-ændringsdetektion | ✅ | ✅ | I begge |
 | GitHub Action med JSON-output, `down-count` og job-summary | ✅ | ✅ | I begge |
 | JSON-output (`--json`) til scripts og CI | ✅ | ✅ | I begge |
 | `watch` baggrundsovervågning | 3 URL'er, min. 60 s interval | Ubegrænsede URL'er, min. 30 s interval | I begge |
