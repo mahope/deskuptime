@@ -1,3 +1,82 @@
+## Status fra denne iteration (84, P1-68 — kundenapporten sagde det samme om et site der fornyer certifikatet hvert 90. dag som om et der roterer det 47 gange i døgnet)
+
+**Hvad der blev fundet, målt først og nul kode ændret.** P1-63 standsede en
+flappende sides rotationer i den betalte kanal, men efterlod dem to steder, og
+P1-63's egen `Næste` pegede på dem: `lastCertRotatedAt` er et *tidspunkt* og
+`certRotationsHeld` bruges op i den næste sendte alarm, så ingen af dem kan sige
+**hvor mange** rotationer der har været. 24 timers rigtige passer over to sites,
+begge `UP (200)` med gyldigt certifikat der dækker navnet, adskilt af præcis
+én ting — hvilket certifikat der svarer:
+
+```
+quiet.dk   fornyer en gang          (den normale 90-dages gang)
+flap.dk    et nyt certifikat hvert pass  (CDN midt i en udrulding, canary,
+                                          et domæne der roterer for at blive
+                                          foran en bloklist)
+```
+
+Kundenapporten 90 dage efter at overvågningen stoppede:
+
+```
+**2 sites have their certificate replaced since monitoring — …:**
+https://quiet.dk/ (🔑 certificate replaced 90 d ago)
+https://flap.dk/   (🔑 certificate replaced 90 d ago)
+```
+
+**To linjer, tegn for tegn ens.** Og det er præcis det dokument, hvor forskellen
+er værd penge: rapporten er det en bureau videresender til en kunde. Faconen
+med et certifikat der skifter på hvert pass er den et hijack har, og den sagde
+det samme som en fornyelse fire gange om året. Det er den *betalte* flade, og
+den var den eneste af de tre, der ikke kunne se det.
+
+**Rettelsen er den mindste der findes: intet nytes, intet gemmes, ingen ny
+hændelsestype, ingen ny celle, intet tal i resumelinjen flytter sig.**
+`certRotationCount` skrives på den samme gren og i samme pass som stemplet der
+allerede står, så en rotation aldrig kan tælles i det ene og ikke i det andet.
+`readCertRotationState` — ejeren P1-61 lavede, og P1-62/64/65/66 har udvidet —
+bærer tallet videre til alle tre flader. **De to gratis-lister spørger den samme
+ejer**, så de siger det uden en eneste linje af egen kode.
+
+**Den normale forbliver uændret, tegn for tegn.** Én fornyelse siger
+`🔑 certificate replaced 90 d ago`, præcis som den altid har sagt, fordi «1
+fornyelse» ikke lærer en kunde noget de ikke havde, og et tal i et
+videresendt dokument skal være værd at læse. Først den anden ændrer sætningen:
+
+```
+  ✅ https://flap.dk/ (200) — SSL 89d 🔑 certificate replaced 1 d ago · 47 replacements since the site was added
+  ✅ https://quiet.dk/ (200) — SSL 89d 🔑 certificate replaced 1 d ago
+```
+
+Tallet løber med i **alle fire** former af sætningen — i dag, `N d ago`, ved et
+ulæseligt stempel og ved et ur der går foran — ellers ville præcis de maskiner
+hvor det betyder mest (et forkert ur, en kludret state-fil) være dem der ikke fik
+det. Og en håndskrevet tæller er ingen tæller: `"many"`, `-1`, `1.5` og `1e21`
+er alle fravær af et antal, ikke et antal af noget.
+
+**To fejl i min egen måling, begge fundet af den måling.** (1) Tælleren lå i
+checkeren som et *opkalds*-tæller, men `runPass` giver den samme checker *alle*
+URL'er, én gang hver pr. pass — så tælleren gik to pr. pass, hvert site fik et
+konstant certifikat, og målingen rapporterede «aldrig roteret» om et site der
+roterede på hvert pass. Rettet til et tæller pr. URL. (2) Den samme fejl havde
+jeg lavet en gang til med to sites i én HOME, hvor den anden pass læste fra
+disk og skrev over den første. Begge var målingen, ikke koden, og begge er
+skrevet ned i testfilens kommentar, så næste iteration ikke laver dem igen.
+
+**Verifieret på den maskine den udgives på.** Fem mutationer målt, alle døde:
+passen tæller ikke (3 fejl), tælleren vises også ved 1 (4), en håndredigeret
+tæller troes (1), `--json` mister feltet (3), ur-skæv-formen mister tallet (1).
+**618/618 grøn** (611 + 7), audit 0/0, `matrix --check` exit 0, `node --check`
+ren på alle JS og MJS inkl. den nye testfil, `git diff --check` rent. Node
+26.7.0.
+
+**Næste:** (1) ❓ 1–3 og ❓ 14 er stadig ubesvarede og afgør om næste iteration
+bygger features overhovedet; (2) de tre fund fra P1-66 ligger stadig:
+`lastCertSerial` læses af ingen, og kanalen får intet struktureret om udstederen
+(❓ 16); (3) missionens **åbne punkt fra 24/9** er stadig ikke verificeret herfra:
+CLI (`os.hostname()`) og desktop-appen (`COMPUTERNAME`) skal give samme device_id
+på Windows — P0-6 fik CLI'en, men den private desktop-app ligger uden for
+repoet, så det kan ikke bevises her.
+
 ## Status fra denne iteration (83, P1-67 — gaten har været rød siden P1-58: 11 merges er kommet gennem uden at blive testet på den maskine de udgives på)
 
 **Hvad der blev fundet, først og fremmest.** Denne iteration skulle have valgt ❓
@@ -4809,6 +4888,8 @@ for selv. Ingen gemt nøgle er omskrevet, ingen eksisterende adgangsd tilstand
 
 ## Iterationslog
 
+- **Iteration 84 (P1-68, målt + fix):** ❓ 1–3, ❓ 14 og ❓ 16 er stadig ubesvarede, så målingen gik på det sidste fund P1-63 selv efterlod — "derefter rotationens antal". 24 timers rigtige passer over to sites der kun adskiller sig i hvilket certifikat der svarer, og kundenapporten 90 dage senere skrev `🔑 certificate replaced 90 d ago` for **begge**: en fornyelse hvert 90. dag og et site der roterer 47 gange i døgnet, som er den facon et hijack har. Fix: `certRotationCount` skrives på samme gren og i samme pass som stemplet der allerede står, og bæres videre af `readCertRotationState` — de to gratis-lister spørger samme ejer og siger det uden en linje af egen kode. **Den normale fornyelse er byte for byte uændret**, fordi «1 fornyelse» ikke lærer en kunde noget de ikke havde; tallet løber med i alle fire former af sætningen, også ved et ur der går foran, og en håndskrevet tæller er ingen tæller (`"many"`, `-1`, `1.5`, `1e21` er alle 0). 7 nye tests → **618/618** (611 + 7); audit 0/0; `matrix --check` 0; `node --check`, `git diff --check` grønne på Node 26.7.0. **Fem mutationer målt, alle døde** (3/4/1/3/1 fejl). `ceo/cert-rotation-count`. **To fejl i min egen måling, begge fundet af den:** tælleren lå i checkeren som et *opkalds*-tæller, men `runPass` giver den samme checker alle URL'er én gang hver pr. pass, så den gik to pr. pass, hvert site fik et konstant certifikat, og målingen rapporterede «aldrig roteret» om et site der roterede på hvert pass; og samme fejl en gang til med to sites i én HOME, hvor den anden pass læste fra disk og skrev over den første. Begge var målingen, ikke koden, og begge står i testfilens kommentar. **Næste:** ❓ 1–3, ❓ 14, ❓ 16; `lastCertSerial` læses stadig af ingen.
+
 - **Iteration 81 (P1-65, målt + fix):** ❓ 1–3 ubesvarede, så fladen var den P1-64 lod ligge: de to **gratis** lister. Ikke en manglende måling men en manglende læsning — state-filen har ført `sslIssuer`/`certIssuerBefore`/`certIssuerChangedAt` siden P1-64, og ingen læste dem. Målt først med rigtig `runPass`, rigtig state-fil, rigtig CLI, temp-HOME: begge lister skrev `🔑 certificate replaced today` og sagde hverken `Ganske Cloud A/S`, `Rogue Cert BV` eller *issuer*; `readEntry` havde nul `issuer`-felter; rapporten over samme fil navngavnede begge. Fix: `readEntry` spørger `readCertIssuerState` og eksponerer `certIssuer` + `certIssuerNote`; begge lister placerer sætningen, gennem `safeText` fordi begge navne er certifikatets egen tekst. Rækken bæder begge sætninger — to kendsgerninger, ikke to formuleringer af én — mens en fornyelse fra samme udsteder tier om udstederen. 12 nye tests → **597/597** (585 + 12); audit 0/0; `node --check`, `matrix --check`, `git diff --check` grønne på Node 26.7.0. **Ingen status, exit-kode, uptime-tal eller SSL-celle flytter sig**, og listerne skriver stadig ikke — låst i en test som læser filen byte for byte. `ceo/cert-issuer-lists`. **Ingen mutationstest** — over tidsbudgeten. **Næste:** ❓ 1–3 og ❓ 14, ellers en målt opgave; bl.a. `cert_rotated`-alarmen, rotation pr. antal og `lastCertSerial`.
 
 - **Iteration 82 (P1-66, målt + fix):** den betalte kanal var den sidste af de fire flader der ikke navngav udstederen — `cert_rotated`, `POST'en` til kundens Slack/Discord/Teams og notificationen bag den. Målt først med rigtig `runPass`, rigtig state-fil, rigtig HTTP-modtager og det rigtige `sendWebhook`: state-filen kendte `Ganske Cloud A/S → Rogue Cert BV`, kundenapporten og begge lister navngav dem, og kanalen sagde `SSL certificate replaced — certificate rotated since the certificate seen today` og stoppede. Fix: `readCertRotationAlert()` får udstederens *egne* ord fra `readCertIssuerState()` som sit eget led — ingen ny hændelsestype, intet nyt payload-felt, ingen ny state, og en fornyelse fra samme udsteder er byte for byte uændret. To fejl fundet i min egen rettelse, begge af målingen: (1) første kørsel sendte `(Ganske Cloud A/S → Ganske Cloud A/S)`, fordi ejeren læser `sslIssuer` som «nu» og den var ikke skrevet endnu — skrivningen står nu før læsningen, låst på rækkefølgen i kilden; (2) `readCertIssuerState` regnede et stempel som et skift, selv når de to navne var ens, så en håndskrevet/flettet/gendannet fil fik `A → A` på alle fire flader — `changed` kræver nu at navnene er forskellige. 14 nye tests → **611/611** (597 + 14); audit 0/0; `node --check`, `matrix --check`, `git diff --check` grønne på **Node 26.7.0**. `docs/cert-rotation.md` + `docs/pro-alerts.md` opdaterede. `ceo/cert-issuer-alert`. **Ingen mutationstest** — over tidsbudgeten. **Næste:** ❓ 1–3 og ❓ 14, ellers en målt opgave; bl.a. rotation pr. *antal* (P1-63) og `lastCertSerial`, gemt siden P0-3 men læst af ingen.
@@ -5298,3 +5379,36 @@ er den hyppigste normale gang.
 **Næste:** `cert_rotated`-alarmen i den betalte kanal nævner stadig ikke den nye udsteder
 (fund fra P1-64), så et hijack er tyst i den kanal der sælges; derefter rotationens antal
 og `lastCertSerial`, som P1-62/P1-63 lod ligge.
+
+### P1-68 — FÆRDIG 2026-09-27 (`ceo/cert-rotation-count`) — Rapporten skal kunne se en flappende side fra en fornyelse
+
+**Begrundelse:** P1-63 standsede rotationens tæthed i kanalen, men efterlod de to tal den
+påpegede, og P1-63s egen `Næste` sagde "derefter rotationens antal". `lastCertRotatedAt`
+er et tidspunkt og `certRotationsHeld` bruges op i den næste sendte alarm, så ingen af dem
+kan sige hvor mange rotationer der har været. Målt først, 24 timers rigtige passer over to
+sites der kun adskiller sig i hvilket certifikat der svarer: rapporten skrev
+`🔑 certificate replaced 90 d ago` for begge — om en fornyelse hvert 90. dag og om et
+site der roterer 47 gange i døgnet, som er den facon et hijack har. Det er den betalte
+flade, og den var den eneste af de tre der ikke kunne se det.
+
+**Rettelsen:** `certRotationCount` skrives på samme gren og i samme pass som stemplet der
+allerede står. `readCertRotationState` (ejeren fra P1-61) bærer tallet videre; de to
+gratis-lister spørger samme ejer og siger det uden egen kode. **Den normale fornyelse er
+byte for byte uændret** — først den anden rotation ændrer sætningen, fordi «1 fornyelse»
+ikke lærer en kunde noget. Tallet løber med i alle fire former af sætningen, også ved et
+ur der går foran. `report --json` får ét additivt felt.
+
+**Acceptkriterier (alle målte, se afsnittet øverst):**
+- Rapporten skelner `· 47 replacements since the site was added` fra den uændrede fornyelseslinje. ✅
+- Én fornyelse: `🔑 certificate replaced 90 d ago`, uændret i alle fire former. ✅
+- Aldrig roteret: `certRotationCount: 0` og ingen sætning. ✅
+- State-fil skrevet før tælleren fandtes: 0, ingen opgradering opfinder en rotation. ✅
+- `"many"`, `-1`, `1.5`, `1e21`, `NaN`, `Infinity`, `{}`, `[]`, `true`: alle 0. ✅
+- Begge gratis-lister siger det samme om den samme fil, via rigtig CLI. ✅
+- Matrixens webhook-påstand urørt (den er om kanalen), ingen celle flytter sig. ✅
+- Fem mutationer målt, alle døde. `npm test` **618/618** (611 + 7), audit 0/0,
+  `matrix --check` 0, `node --check` ren, `git diff --check` rent. Node 26.7.0. ✅
+- `docs/cert-rotation.md` og `docs/agency-report.md` beskriver antallet. ✅
+
+**Næste:** `lastCertSerial` er gemt siden P0-3 og læses stadig af ingen, og ❓ 16 spørger
+om kanalen skal have et struktureret udsteder-felt på `cert_rotated`.

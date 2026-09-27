@@ -297,6 +297,14 @@ export function buildReport(state, { title, now = new Date(), history, windowDay
         certRotated: cert.rotated,
         certRotatedAt: cert.rotatedAt,
         certRotatedAgeDays: cert.ageDays,
+        // How many times the certificate has been replaced since the site was
+        // added. `certRotated` above answers *whether*, and its two siblings
+        // answer *when* — none of the three can say *how often*, so a site that
+        // renewed once and a site whose certificate was replaced 47 times in
+        // 24 h were the same two lines in this document. Additive, and `0` for
+        // every state file written before the counter existed, so no upgrade
+        // invents a rotation.
+        certRotationCount: cert.rotations,
         // The authority behind that certificate, and whether it is the one the
         // customer's site answered with before. Additive: the SSL cell above is
         // untouched, so a report that was parsed for its day count still is.

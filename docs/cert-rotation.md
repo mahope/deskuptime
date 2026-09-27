@@ -319,3 +319,52 @@ og uden autoriteten. Og en autoritet der skifter uden at certifikatet roterer si
 hijacker intet alene — et CDN midt i en udrulding kan gøre det uskyldigt — så den
 gemmer kendsgerningen til rapporten og de to lister og rejser ingen hændelse. At opfinde
 en hændelsestype for den ville double antallet af POSTs på præcis den slags site.
+
+## Hvor mange gange (P1-68, 2026-09-27)
+
+**Målingen.** 24 timers rigtige passer over to sites, begge `UP (200)` med et gyldigt
+certifikat der dækker navnet. De adskiller sig kun i hvilket certifikat der svarer:
+`quiet.dk` fornyer en gang — den normale 90-dages gang — mens `flap.dk` svarer med et
+nyt certifikat på hvert pass, som et CDN midt i en udrulding, en canary-deploy eller et
+domæne der roterer certifikater for at blive foran en bloklist. Kundenapporten skrevet
+90 dage efter at overvågningen stoppede:
+
+```
+**2 sites have their certificate replaced since monitoring — …:**
+https://quiet.dk/ (🔑 certificate replaced 90 d ago)
+https://flap.dk/   (🔑 certificate replaced 90 d ago)
+```
+
+To linjer, tegn for tegn ens, om forskellen på en fornyelse fire gange om året og på
+den facon et hijack har. Rapporten er præcis det dokument, hvor forskellen er værd
+penge, og det var den eneste flade der ikke kunne se den.
+
+**Hvorfor ingen af de to eksisterende tal kunne.** `lastCertRotatedAt` er et *tidspunkt*,
+ikke et antal, og P1-63's `certRotationsHeld` bruges op i den næste alarm der sendes —
+så ingen af dem kan sige hvor mange der har været. Tællingen skrives derfor på den
+samme gren og i samme pass som stemplet der allerede står, så en rotation aldrig kan
+tælles i det ene og ikke i det andet. `readCertRotationState` — ejeren P1-61 lavede, og
+P1-62/64/65/66 har udvidet — bærer tallet videre, og de to gratis-lister spørger den
+samme ejer, så de siger det uden en eneste linje af egen.
+
+**Den normale forbliver uændret, tegn for tegn.** Én fornyelse siger
+`🔑 certificate replaced 90 d ago`, præcis som den altid har sagt, fordi en kunde der
+læser «1 fornyelse» ikke lærer noget de ikke havde, og et tal i et videresendt
+dokument skal være værd at læse. Først den anden ændrer sætningen:
+
+```
+  ✅ https://flap.dk/ (200) — SSL 89d 🔑 certificate replaced 1 d ago · 47 replacements since the site was added
+  ✅ https://quiet.dk/ (200) — SSL 89d 🔑 certificate replaced 1 d ago
+```
+
+Tallet løber med i alle fire former af sætningen — i dag, `N d ago`, ved et
+ulæseligt stempel og ved et ur der går foran — ellers ville præcis de maskiner hvor
+tallet betyder mest (et forkert ur, en kludret state-fil) være dem der ikke fik det.
+
+**En håndskrevet tæller er ingen tæller.** `certRotationCount` i `status.js` er den ene
+ejer af «er dette et antal», af samme grund som `readPassTime` findes: `"many"`, `-1`,
+`1.5` og `1e21` er alle fravær af et antal, ikke et antal af noget. Nul er et rigtigt
+svar — et site der er tilføjet og aldrig har roteret — og det er også svaret i hver
+state-fil skrevet før tælleren fandtes, så ingen opgradering opfinder en rotation.
+`report --json` får ét additivt felt, `certRotationCount`; ingen celle, ingen
+exit-kode og intet tal i resumelinjen flytter sig.

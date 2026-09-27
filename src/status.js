@@ -1083,13 +1083,33 @@ export function readCertRotationState(entry, { now = new Date() } = {}) {
   const rotated = typeof value.lastCertRotatedAt === 'string' && value.lastCertRotatedAt !== '';
   const reading = passAge(rotated ? value.lastCertRotatedAt : null, now);
   const ageDays = reading.state === PASS_AGE.AGED ? reading.ageDays : null;
+  const rotations = certRotationCount(value.certRotationCount);
   return {
     rotated,
     rotatedAt: rotated ? value.lastCertRotatedAt : null,
     ageDays,
     aheadMs: reading.aheadMs,
-    note: certRotationStateNote({ rotated, ageDays, aheadMs: reading.aheadMs }),
+    rotations,
+    note: certRotationStateNote({ rotated, ageDays, aheadMs: reading.aheadMs, rotations }),
   };
+}
+
+/**
+ * How many times a certificate has been replaced, from a state file that may
+ * have been hand-edited, restored from a backup or half-written by a crash.
+ *
+ * One integer, read the same way everywhere, for the same reason
+ * `readPassTime` exists: the value is only a number when it is a number, and
+ * anything else is the absence of a count rather than a count of something.
+ * Zero is a real answer — a site that was added and never rotated — and it is
+ * the answer for every state file written before this counter existed, so no
+ * upgrade invents a rotation.
+ *
+ * @param {unknown} value — the raw `certRotationCount` from the state file
+ * @returns {number} a non-negative integer
+ */
+export function certRotationCount(value) {
+  return Number.isSafeInteger(value) && value > 0 ? value : 0;
 }
 
 /**
@@ -1100,12 +1120,27 @@ export function readCertRotationState(entry, { now = new Date() } = {}) {
  * sentence states the fact and nothing more. It carries the age, because a report
  * is read once and often days after the pass that produced it, and "the
  * certificate was replaced" without a date reads as "this morning".
+ *
+ * The count rides along for one and only one case: a certificate that has been
+ * replaced *more than once*. One replacement is the ordinary renewal every host
+ * does every 90 days, and naming it would put a number in a client document that
+ * means nothing. Many is not ordinary — a name that answers with a different
+ * certificate on every pass is a CDN mid-rollout, a canary deploy, or a domain
+ * rotating certificates to stay ahead of a blocklist, and those are findings a
+ * bureau can bill for. Measured 2026-09-27, the report printed the same line for
+ * a site that had renewed once and for a site that had rotated 47 times in 24 h.
+ *
+ * So the sentence is byte-for-byte what it always was for a single rotation and
+ * for no rotation at all, and only a second one changes it.
  */
-export function certRotationStateNote({ rotated = false, ageDays = null, aheadMs = 0 } = {}) {
+export function certRotationStateNote({ rotated = false, ageDays = null, aheadMs = 0, rotations = 0 } = {}) {
   if (rotated !== true) return '';
-  if (Number.isFinite(aheadMs) && aheadMs > 0) return `🔑 certificate replaced — ${clockAheadNote(aheadMs)}`;
+  // More than one, and never fewer: the ordinary renewal stays exactly as it was,
+  // because a client who reads "1 replacement" learns nothing they did not have.
+  const many = certRotationCount(rotations) > 1 ? ` · ${certRotationCount(rotations)} replacements since the site was added` : '';
+  if (Number.isFinite(aheadMs) && aheadMs > 0) return `🔑 certificate replaced — ${clockAheadNote(aheadMs)}${many}`;
   const when = ageDays === null ? 'at an unreadable time' : ageDays === 0 ? 'today' : `${ageDays} d ago`;
-  return `🔑 certificate replaced ${when}`;
+  return `🔑 certificate replaced ${when}${many}`;
 }
 
 /**

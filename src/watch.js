@@ -17,7 +17,7 @@ import { readFileSync, writeFileSync, mkdirSync, existsSync, renameSync, unlinkS
 import { dirname, posix, win32 } from 'path';
 import { homedir } from 'os';
 import { createHash, randomUUID } from 'crypto';
-import { assertValidHttpUrls, expiredNote, findUrlKey, isNewerPass, partitionUsableUrls, readCertIdentity, readCertIssuerState, readCertRotation, readCertRotationAlert, readContentChange, readContentChangeAlert, readEntry, readEvent, readRedirectTarget, readSslIssuer, readTransitionAlert, queuedAgeMs, readSslState, STALE_AFTER_DAYS, unusableUrlNote, urlIdentity, withoutCredentials } from './status.js';
+import { assertValidHttpUrls, expiredNote, findUrlKey, isNewerPass, partitionUsableUrls, readCertIdentity, readCertIssuerState, readCertRotation, readCertRotationAlert, readContentChange, readContentChangeAlert, readEntry, readEvent, readRedirectTarget, readSslIssuer, readTransitionAlert, queuedAgeMs, readSslState, STALE_AFTER_DAYS, unusableUrlNote, urlIdentity, withoutCredentials, certRotationCount } from './status.js';
 import { recordPass } from './report.js';
 import { formatMs, safeText } from './display.js';
 import { historyFileFrom, pruneHistory, readHistoryFile, recordHistoryPass, saveHistory, historyWriteErrorMessage } from './history.js';
@@ -630,6 +630,31 @@ export async function runPass(state, opts = {}) {
         // dropped the fact would take the knowledge out of the report, which is
         // where P1-61 put it.
         entry.lastCertRotatedAt = measuredAt;
+        // How many times the certificate has been replaced since the site was
+        // added. `lastCertRotatedAt` above is the *time* of the last one, and
+        // P1-63's `certRotationsHeld` is spent on the next alert that goes out,
+        // so neither of them could say how many there have been — measured
+        // 2026-09-27, 24 h of a flapping name and one routine renewal, the paid
+        // client report printed the same two lines for both:
+        //
+        //   **2 sites have their certificate replaced since monitoring — …:**
+        //   https://quiet.dk/ (🔑 certificate replaced 90 d ago)
+        //   https://flap.dk/   (🔑 certificate replaced 90 d ago)
+        //
+        // A name that answers with a different certificate on every pass — a
+        // CDN mid-rollout, a canary deploy, a domain rotating certificates to
+        // stay ahead of a blocklist — is the shape of a hijack, and the document
+        // a bureau forwards said the same thing about it as about a renewal
+        // every 90 days. This counter is what tells the two apart, and it is
+        // written on the same branch and in the same pass as the stamp above, so
+        // a rotation can never be counted in one and not the other.
+        //
+        // It is not reset by anything, and it is a plain integer: a
+        // hand-edited, restored or half-written value is ignored rather than
+        // believed, and one that is not a number cannot become a sentence. A
+        // count below 1 is no count, so a file that was edited downwards reads
+        // as "never replaced" instead of as a negative number of rotations.
+        entry.certRotationCount = certRotationCount(entry.certRotationCount) + 1;
       }
       entry.lastCertFingerprint = identity.fingerprint;
       entry.lastCertSeenAt = measuredAt;
