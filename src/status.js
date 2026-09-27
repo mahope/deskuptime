@@ -1071,11 +1071,18 @@ export function readCertRotation({ fingerprint = null, baselineFingerprint = nul
  * "nothing to compare against" is one of three verdicts.
  *
  * @param {object} entry — one `state.urls[...]` entry
- * @param {{now?: Date}} [options]
+ * @param {{now?: Date, withSerial?: boolean}} [options]
+ * @param {boolean} [withSerial] — put the certificate's serial number in the
+ *   note. The field `serial` is always returned; only the *sentence* is the
+ *   caller's choice, because only one surface has a use for an unshortened
+ *   serial. The state file has carried it since P0-3 (`lastCertSerial`) and
+ *   nothing read it: measured 2026-09-27, a hijack-then-reissue where the report
+ *   named the rotation, the count and both authorities, and no document carried
+ *   the number the customer's security review asks for.
  * @returns {{rotated: boolean, rotatedAt: string|null, ageDays: number|null,
- *   aheadMs: number, note: string}}
+ *   aheadMs: number, rotations: number, serial: string|null, note: string}}
  */
-export function readCertRotationState(entry, { now = new Date() } = {}) {
+export function readCertRotationState(entry, { now = new Date(), withSerial = false } = {}) {
   const value = entry && typeof entry === 'object' ? entry : {};
   // A site whose certificate was never replaced has no rotation to report. The
   // stamp is written only where a pass saw a different certificate than the one it
@@ -1084,13 +1091,15 @@ export function readCertRotationState(entry, { now = new Date() } = {}) {
   const reading = passAge(rotated ? value.lastCertRotatedAt : null, now);
   const ageDays = reading.state === PASS_AGE.AGED ? reading.ageDays : null;
   const rotations = certRotationCount(value.certRotationCount);
+  const serial = certSerialNumber(value.lastCertSerial);
   return {
     rotated,
     rotatedAt: rotated ? value.lastCertRotatedAt : null,
     ageDays,
     aheadMs: reading.aheadMs,
     rotations,
-    note: certRotationStateNote({ rotated, ageDays, aheadMs: reading.aheadMs, rotations }),
+    serial,
+    note: certRotationStateNote({ rotated, ageDays, aheadMs: reading.aheadMs, rotations, serial: withSerial ? serial : null }),
   };
 }
 
@@ -1113,6 +1122,38 @@ export function certRotationCount(value) {
 }
 
 /**
+ * The serial number the issuer gave the certificate that answered last, from a
+ * state file that may have been hand-edited, restored from a backup or
+ * half-written by a crash.
+ *
+ * One string, canonicalised, for the same reason `certRotationCount` above is an
+ * integer: the value is a serial number when it is one and the absence of one
+ * otherwise. RFC 5280 caps a serial at 20 octets, so 40 hex characters is the
+ * format's real maximum — a longer run is not a serial we failed to shorten, it
+ * is a value nobody can look up, and printing it would put a number in a customer
+ * document that answers to nothing.
+ *
+ * Only the separators a serial is *written* with are removed — whitespace, the
+ * colons from `openssl x509 -serial`, a `0x` prefix — and what is left must be hex
+ * and nothing else. Removing every non-hex character instead would turn the word
+ * `not-a-serial` into the serial `aeae`: measured here, on the first version of
+ * this function, and the reason it now rejects rather than filters. What survives
+ * is lowercase hex alone, which is what makes the string safe to put in a document
+ * a bureau forwards — after this, it cannot contain a newline, a pipe or a
+ * markdown escape, so it needs no escaping of its own. The one-off `check`
+ * prints the same canonical form, so the two never disagree about which
+ * certificate they are naming.
+ *
+ * @param {unknown} value — the raw `lastCertSerial` from the state file
+ * @returns {string|null}
+ */
+export function certSerialNumber(value) {
+  if (typeof value !== 'string') return null;
+  const hex = value.trim().replace(/^0x/i, '').replace(/[\s:]/g, '');
+  return /^[0-9a-f]{1,40}$/i.test(hex) ? hex.toLowerCase() : null;
+}
+
+/**
  * What a surface says about a replaced certificate, in one sentence.
  *
  * A rotation is not a verdict — a certificate is reissued every 90 days by most
@@ -1132,15 +1173,25 @@ export function certRotationCount(value) {
  *
  * So the sentence is byte-for-byte what it always was for a single rotation and
  * for no rotation at all, and only a second one changes it.
+ *
+ * The serial number rides along on exactly one caller's request, `withSerial`
+ * below, and never for another reason. It is a number a reader can act on — a
+ * security questionnaire asks for the serial behind the issuer, and the report is
+ * the document that gets asked — while the two terminal lists print a line the
+ * reader glances at, where an unshortened 40-character number teaches nothing.
+ * That difference is a decision about where the number is *used*, not about
+ * whether it is true, so it lives in the call and not in this sentence.
  */
-export function certRotationStateNote({ rotated = false, ageDays = null, aheadMs = 0, rotations = 0 } = {}) {
+export function certRotationStateNote({ rotated = false, ageDays = null, aheadMs = 0, rotations = 0, serial = null } = {}) {
   if (rotated !== true) return '';
   // More than one, and never fewer: the ordinary renewal stays exactly as it was,
   // because a client who reads "1 replacement" learns nothing they did not have.
   const many = certRotationCount(rotations) > 1 ? ` · ${certRotationCount(rotations)} replacements since the site was added` : '';
-  if (Number.isFinite(aheadMs) && aheadMs > 0) return `🔑 certificate replaced — ${clockAheadNote(aheadMs)}${many}`;
+  const number = certSerialNumber(serial);
+  const named = number === null ? '' : ` · serial ${number}`;
+  if (Number.isFinite(aheadMs) && aheadMs > 0) return `🔑 certificate replaced — ${clockAheadNote(aheadMs)}${many}${named}`;
   const when = ageDays === null ? 'at an unreadable time' : ageDays === 0 ? 'today' : `${ageDays} d ago`;
-  return `🔑 certificate replaced ${when}${many}`;
+  return `🔑 certificate replaced ${when}${many}${named}`;
 }
 
 /**

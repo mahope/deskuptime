@@ -113,9 +113,13 @@ test('den betalte rapport kan se en flappende side fra en fornyelse', async t =>
   assert.match(rows[FLAP].certRotatedNote, /🔑 certificate replaced 90 d ago · \d+ replacements since the site was added/);
   assert.ok(rows[FLAP].certRotationCount > 1, `flapping count was ${rows[FLAP].certRotationCount}`);
 
-  // And the ordinary renewal says exactly what it has always said — the whole
-  // reason the count is not printed for a single rotation.
-  assert.equal(rows[QUIET].certRotatedNote, '🔑 certificate replaced 90 d ago');
+  // And the ordinary renewal still gets no count — the whole reason the count is
+  // not printed for a single rotation. P1-69 extended this lock rather than
+  // loosening it: the sentence now also carries that certificate's serial number,
+  // so the rule it was written to protect is asserted on its own, independently of
+  // the rest of the line, and the full sentence is asserted too.
+  assert.ok(!rows[QUIET].certRotatedNote.includes('replacements'), rows[QUIET].certRotatedNote);
+  assert.match(rows[QUIET].certRotatedNote, /^🔑 certificate replaced 90 d ago · serial [0-9a-f]+$/);
   assert.equal(rows[QUIET].certRotationCount, 1);
 
   // The count reaches the document itself, not only the machine surface.
@@ -147,7 +151,10 @@ test('en fornyet side siger præcis, hvad den altid har sagt', async t => {
 
   const row = buildReport(state, { now: at(5 * HOUR) }).sites[0];
   assert.equal(row.certRotationCount, 1);
-  assert.equal(row.certRotatedNote, '🔑 certificate replaced today');
+  // Same extension as above: no count for one rotation, locked on its own, and
+  // the sentence it produces.
+  assert.ok(!row.certRotatedNote.includes('replacements'), row.certRotatedNote);
+  assert.match(row.certRotatedNote, /^🔑 certificate replaced today · serial [0-9a-f]+$/);
 });
 
 test('et site der aldrig har roteret, tæller nul', async t => {

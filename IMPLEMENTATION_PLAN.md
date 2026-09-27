@@ -1,3 +1,70 @@
+## Status fra denne iteration (85, P1-69 — kundenapporten kunne sige *at* certifikatet var byttet, *hvor mange* gange og *hvem* der udstedte det nye, men ikke *hvilket* certifikat — selv om tallet har ligget i state-filen siden P0-3)
+
+**Målt først, nul kode ændret.** Rigtige pass skrev en rigtig state-fil, og den
+betalte rapportflade læste den, for et site der svarede 200 i begge pass med et
+certifikat der blev byttet imellem — en udsteder, der skifter, nøjagtig som et
+hijack ser ud på ledningen:
+
+```
+state.json   lastCertSerial = "0badc0de99"     ← skrevet af hvert pass siden P0-3
+rapport      **1 site has its certificate replaced …** (🔑 certificate replaced today)
+rapport      **1 site answers from a certificate authority other than …** (🏢 … → Rogue Cert BV)
+report --json   certRotated, certRotationCount, sslIssuer, certIssuerChanged …
+                — og intet serial nogen steder.
+```
+
+Det er fund nummer to af de tre fra P1-66, som P1-68 satte tilbage i køen:
+**`lastCertSerial` blev læst af ingen.** Den tredje (❓ 16, struktureret
+udsteder-felt på den betalte kanal) afventer Mads og er ikke rørt.
+
+**Hvorfor det er Pro-værdi og ikke kosmetik.** Et sikkerhedsspørgsmål beder om
+udstederen *og* serienummeret som et par. Rapporten er det dokument et bureau
+videresender, når kunden beder om det — og før denne iteration var det eneste
+flade i hele produktet, der kendte nummeret, den engangskommando `check`, som
+skriver det afkortet til tolv tegn med en ellipse, altså et tal der ikke kan
+slås op. Bureauet måtte altså bede kunden om at løbe et værktøj for at få svar
+på sit eget spørgsmål.
+
+**Rettelsen er den mindste der findes, og intet nyt gemmes.** State-filen har haft
+nummeret hele tiden, så der er ingen ny hændelsestype, intet nyt felt at skrive,
+intet ny state-nøgle: ét additivt felt, én klynge i en sætning der allerede
+findes, og en linje i rapportens fodnote. **Ingen status, ingen exit-kode, intet
+uptime-tal, ingen celle og ingen matrix-række flytter sig.**
+
+**Den beslutning der var værd at tage eksplicit: de to gratis-lister beholder den
+sætning de altid har skrevet.** De deler sætnings-ejeren med rapporten, så
+nummeret *kunne* have bredt sig til dem med én parameter. Det gør det ikke, for et
+40-tegns tal på en linje man lige skimter lærer ingen, mens det i et videresendt
+dokument er præcis den rigtige størrelse. Forskellen ligger derfor i **kaldet**
+(  `readCertRotationState(entry, { withSerial: true })` kun i `report.js`) og ikke i en
+sekund sætning — så der er stadig én ejer, og beslutningen er låst af en test
+(M5, mutationen der giver listerne nummeret, dør).
+
+**Én fejl i min egen måling, og den var i min egen kode.** Canonicaliseringen
+fjernede *alle* ikke-hex-tegn, så ordet `not-a-serial` blev til serialen `aeae` —
+et tal kunden kunne have slået op. Rettet til at fjerne kun de separatorer et
+serial *skrives* med (mellemrum, koloner fra `openssl x509 -serial`, `0x`) og
+kræve hex bagefter. **At afvise er stærkere end at rense**, og det er-testen
+holder.
+
+**To eksisterende låse måtte udvides, ikke slækkes** (otteende gang): P1-68's to
+tests låste hele sætningen for en enkelt fornyelse. Reglen de vovede — *én
+fornyelse får intet antal* — er nu hævvet for sig selv (`!includes('replacements')`),
+så den overlever selvom resten af linjen ændrer sig. Det er strengere end før.
+
+**Verificeret.** Fem mutationer målt, alle døde: rapporten beder ikke om tallet
+(4 fejl), ingen canonicalisering (3), længdegrænsen væk (2), JSON-feltet væk (3),
+listerne får tallet (1). **626/626 grøn** (618 + 8), audit 0/0, `matrix --check`
+exit 0, `node --check` ren på alle JS og MJS inkl. den nye testfil, `git diff
+--check` rent. Node 26.7.0.
+
+**Næste:** (1) ❓ 1–3 og ❓ 14 er stadig ubesvarede og afgør om næste iteration
+bygger features overhovedet; (2) ❓ 16 (struktureret udsteder-felt på den betalte
+kanal) afventer Mads — det er en time, ikke et projekt; (3) missionens **åbne
+punkt fra 24/9** er stadig ikke verificeret herfra: CLI (`os.hostname()`) og
+desktop-appen (`COMPUTERNAME`) skal give samme device_id på Windows — P0-6 fik
+CLI'en, men den private desktop-app ligger uden for repoet.
+
 ## Status fra denne iteration (84, P1-68 — kundenapporten sagde det samme om et site der fornyer certifikatet hvert 90. dag som om et der roterer det 47 gange i døgnet)
 
 **Hvad der blev fundet, målt først og nul kode ændret.** P1-63 standsede en
@@ -5412,3 +5479,40 @@ ur der går foran. `report --json` får ét additivt felt.
 
 **Næste:** `lastCertSerial` er gemt siden P0-3 og læses stadig af ingen, og ❓ 16 spørger
 om kanalen skal have et struktureret udsteder-felt på `cert_rotated`.
+
+### P1-69 — FÆRDIG 2026-09-27 (`ceo/report-cert-serial`) — Rapporten skal kunne se hvilket certifikat der svarer
+
+**Begrundelse:** Fund nummer to af de tre fra P1-66. `lastCertSerial` skrives af hvert
+pass siden P0-3 og blev læst af ingen, så det betalte dokument, et bureau videresender
+til en kunde, kunne sige *at* certifikatet var byttet (P1-61), *hvor mange* gange
+(P1-68) og *hvem* der udstedte det nye (P1-66) — men ikke *hvilket* certifikat. Et
+sikkerhedsspørgsmål beder om udsteder og serienummer som et par, og den eneste flade der
+kendte nummeret var `check`, der skriver det afkortet til tolv tegn med en ellipse, altså
+et tal der ikke kan slås op.
+
+**Omfang:** Ét additivt felt `certSerial` på sitet i `report --json`, tallet hægt på den
+certifikatlinje der allerede findes under tabellen, en sætning i fodnoten, og
+`certSerialNumber()` som den ene ejer af canonicaliseringen. **De to gratis-lister
+beholder den sætning de altid har skrevet** — de deler sætnings-ejeren, men beder ikke
+om tallet, fordi forskellen ligger i kaldet (`withSerial`) og ikke i en anden sætning.
+
+**Acceptkriterier (alle målte, se afsnittet øverst):**
+- Rapporten over et reelt hijack-then-reissue skriver `🔑 certificate replaced today · serial 0badc0de99`. ✅
+- `report --json` har `certSerial` med hele nummeret, ikke et præfiks. ✅
+- Aldrig roteret: ingen linje, og nummeret står ingen steder i dokumentet. ✅
+- P1-68's antalsregel urørt: én fornyelse får intet antal, to og flere får deres tæller,
+  og tallet og nummeret står i den rækkefølge. ✅
+- De to gratis-lister er tegn for tegn uændret (mutation M5 dør). ✅
+- Rotation uden serial: stadig en rotation, `certSerial: null`, sætningen uændret. ✅
+- Kun separatorerne fra `0F:11:CE`, `0x0F11CE` og mellemrum fjernes; `not-a-serial` er
+  **null**, ikke `aeae`. 41 tegn er ikke et serial (RFC 5280, 20 oktetter). ✅
+- Alle fire former af sætningen bærer nummeret, også ur-skæv og ulæseligt stempel. ✅
+- Fem mutationer målt, alle døde. `npm test` **626/626** (618 + 8), audit 0/0,
+  `matrix --check` 0, `node --check` ren, `git diff --check` rent. Node 26.7.0. ✅
+- To eksisterende låse i P1-68 udvidet, ikke slækket — antalsreglen hævnes nu for sig selv. ✅
+- `docs/agency-report.md` og fodnoten beskriver feltet og beslutningen om listerne. ✅
+
+**Næste:** ❓ 16 (struktureret udsteder-felt på den betalte kanal) afventer Mads, og
+❓ 1–3 + ❓ 14 afgør om næste iteration bygger features overhovedet. Missionens åbne
+Windows-`device_id`-punkt fra 24/9 kan ikke bevises herfra, for desktop-appen ligger i
+det private repo.

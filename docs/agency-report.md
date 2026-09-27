@@ -40,7 +40,7 @@ eksisterende state, som `watch` allerede skriver.
 Rapporten dækker pr. site: `url`, `status` (`up`/`down`/`unknown`),
 `statusCode`, `uptimePercent`, `window`, `checks`, `failures`, `responseMs`,
 `sslDaysRemaining`, `contentBytes`, `contentReadAt`, `contentChanged`,
-`contentChangedAt`, `contentChangedAgeDays`, `contentTitle`, `contentNote`, `certRotated`, `certRotatedAt`, `certRotatedAgeDays`, `certRotationCount`, `certRotatedNote`,
+`contentChangedAt`, `contentChangedAgeDays`, `contentTitle`, `contentNote`, `certRotated`, `certRotatedAt`, `certRotatedAgeDays`, `certRotationCount`, `certSerial`, `certRotatedNote`,
 `lastChecked`, `monitoringSince`, og en `summary` med antal
 sites/checks/failures.
 
@@ -188,11 +188,18 @@ Det er her bureauet bliver solgt, og derfor er reglerne hårde:
   exit-kode, uptime-tal eller SSL-celle ændrer sig** — et udstedt certifikat er
   en kendsgerning, ikke en dom. Ejeren er `readCertRotationState` i
   `src/status.js`; i `--json` hedder felterne `certRotated`, `certRotatedAt`,
-  `certRotatedAgeDays`, `certRotationCount`, `certRotatedNote` og
+  `certRotatedAgeDays`, `certRotationCount`, `certSerial`, `certRotatedNote` og
   `summary.certRotated`. `certRotationCount` er additivt og tæller hvor mange
   gange certifikatet er blevet skiftet siden sitet blev tilføjet; det står i
   sætningen kun når tallet er over ét, for én fornyelse er den normale gang og
-  siges præcis som før. Spec: `docs/cert-rotation.md`.
+  siges præcis som før. `certSerial` er serienummeret på det certifikat der
+  svarer nu, og det står i sætningen på den linje der allerede findes — altså kun
+  for et site hvor certifikatet er blevet skiftet. Det er præcis det par et
+  sikkerhedsspørgsmål beder om: udsteder *og* serienummer. Nummeret har ligget i
+  state-filen siden P0-3 og blev læst af ingen; de to terminal-lister beder
+  bevidst ikke om det, for et 40-tegns tal på en linje man lige skimter lærer
+  ingen, og forskellen ligger derfor i kaldet og ikke i sætningen. Spec:
+  `docs/cert-rotation.md`.
 - **En svartid er en måling, eller ingenting.** Målt 2026-09-26 med rigtig
   `check` + `watch --once` + `report` mod to lokale fixtures (en lukket port og
   en server der accepterer forbindelsen og aldrig svarer), nul kode ændret:
