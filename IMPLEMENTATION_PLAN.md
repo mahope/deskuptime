@@ -1,3 +1,83 @@
+## Status fra denne iteration (75, P1-59 — `check` sammenlignede aldrig siden med noget, så den gratis flade lovede en evne den ikke havde)
+
+**Hvorfor denne flade:** ❓ 1–3 er stadig ubesvarede, og P1-57 efterlod to
+uafsluttede fund. Dette var det første af dem, og da målingen var gjort, viste
+det sig at være **dobbelt så stort som noteret**.
+
+**Målt først, nul kode ændret.** Rigtig CLI, temp-HOME, rigtig lokal side, to
+state-filer der afveg i én ting — den gemte `lastHash`:
+
+```
+matchende lastHash   ->  — Content: 89 bytes
+afvigende lastHash   ->  — Content: 89 bytes
+```
+
+To forskellige tilstande, én sætning. Og den afslørede grunden: `cli.js` kaldte
+`checkUrls(urls, { timeoutMs })`, så `content.js` fik `previousHash ===
+undefined` og svarede `changed: null` **hver eneste kørsel**. De to grene i
+`check`'s egen output der tegner et verdikt — `🔄` og `⏸️` — var **udeafhængig
+kode**. Matrix-rækken `ssl-content` lover "content-change detection" i
+**gratis**-tieret, og `check` er gratis-tierets hoveddør: den holdt om et
+værdigt løfte på den mest brugte flade i værktøjet.
+
+**Rettelsen har to dele, og den anden er den interessante.** Først får
+`check` en baseline: den læser state-filen **read-only** og giver hver URL sin
+egen `lastHash` med (`opts.contentHashes`, et nyt per-URL-kort i `engine.js`;
+`runPass` beholder sin egen `contentHash` for én URL ad gangen). Så bliver
+verdiktet nået. **Og så får verdiktet sin alder**, fordi "uændret" er sand om to
+læsninger og siger intet om strækningen imellem dem: en side der blev skrevet om
+og skrevet tilbage mellem to pass hasher identisk i begge ender. Det er den
+samme regel som P1-36 (certifikat-nedtællingen) og P1-57 (sidestørrelsen på de
+to lister) — **en måling uden sin alder**.
+
+**Ejeren** er `readContentComparison()` i `src/status.js`, med
+`CONTENT_VERDICT` som de tre ord: `changed`, `unchanged`, `no-baseline`. Den
+bygger både ikonet og sætningen, så de to kan ikke blive uvede — og den spørger
+`passAge`, den ene ejer af en registreret tid, så et håndskrevet tidspunkt ikke
+kan alderes til "i dag" her og noget andet andet sted.
+
+**Målt, alle syv tilstande:**
+
+```
+ingen baseline        ->  — Content: 89 bytes — no reading to compare against
+baseline i dag, ændret->  🔄 Content: 89 bytes — changed since the reading today
+baseline i dag, samme ->  ⏸️ Content: 89 bytes — unchanged since the reading today
+baseline 40 d, samme  ->  ⏸️ Content: 89 bytes — unchanged since the reading 40 d ago
+ur 3 d for hurtigt    ->  ⏸️ Content: 89 bytes — unchanged since a reading 3 d ahead of this machine's clock
+```
+
+**Valgt, og hvorfor:** kommandoen skriver **stadig ikke** state. Den blev målt
+read-only inden den læste filen, fordi en engangskommando der stille bliver en
+forfatter er præcis den ændring P1-43 brugte en iteration på at fortryde for
+`unwatch`. Baselinen er derfor altid **watch-loopens** læsning, aldrig `check`'s
+egen — en test hævder filens bytes er uændrede efter en kørsel. En bruger der
+aldrig har overvåget et site (den almindelige CI-vej) får den korte linje
+`— Content: 89 bytes — no reading to compare against`. Stilhed var netop det, der
+gjorde fundet usynligt: det samme tegn står en linje ovenover og betyder
+"intet certifikat blev læst".
+
+**Exit-kode, uptime-tal, matrix-rækker, `--help` og alle øvrige felter er
+uændrede.** `check --json` får to additive felter, `contentChanged`
+(`true`/`false`/`null`, hvor `null` er "intet at sammenligne med", ikke `false`)
+og `contentBaselineReadAt` — før skulle et CI-job selv diff'e to hashes og
+havde ingen måde at spørge hvor gammel den ene var.
+
+**Test (5 nye, `test/contentchange.test.js`, samme fil som P1-56/57 og allerede i
+`npm test`):** ejeren på alle tre verdikter plus tre ur-tilstande for læsningen,
+den fulde kunderejse gennem den rigtige CLI på en **gratis** maskine (læs siden
+for at lære hashen, plant den med et 40 dage gammelt stempel, server den samme
+side og så en ændret), og den manglende baseline plus read-only-garantien.
+**Fem mutationer målt, alle døde** (1/1/1/2/1 fejl): baselinen fjernet fra
+kaldet, alderen fjernet fra sætningen, ikonet læst uden om ejeren, `null` læst
+som `false`, og `engine.js` der ignorerer det nye kort. **Én fejl i min egen
+test:** den hævdede at `check` ikke skabte state-filen — men det er mit eget
+fixture der skabte den, så påstanden var om filens *bytes*, ikke dens
+tilstedeværelse. Rettet.
+
+**Resultat: 533/533 grøn** (528 + 5), audit 0/0, `node --check` på alle
+JS-filer, `matrix --check`, `sh -n` og `git diff --check` grønne på Node
+26.7.0.
+
 ## Status fra denne iteration (74, P1-58 — hele suiten, ikke bare én fil, kunne skrive til Mads' rigtige `~/.deskuptime/state.json`)
 
 **Hvorfor denne flade:** P1-57 efterlod P1-58 som det eneste konkrete fund.
@@ -4132,6 +4212,27 @@ for selv. Ingen gemt nøgle er omskrevet, ingen eksisterende adgangsd tilstand
 
 ## Iterationslog
 
+- **Iteration 75 (P1-59, målt + fix):** ❓ 1–3 ubesvarede, så målingen gik på
+  P1-57's egen uafsluttede fund 1. Rigtig CLI, gratis maskine (temp-HOME), rigtig
+  lokal side, to state-filer der afveg i den gemte `lastHash`:
+  `matchende -> — Content: 89 bytes` / `afvigende -> — Content: 89 bytes`.
+  **Fix:** `check` læser state read-only og får hver URL sin baseline
+  (`opts.contentHashes`); `readContentComparison()` + `CONTENT_VERDICT` i
+  `status.js` ejer verdikt **og** alder, så et `⏸️` altid siger hvilken læsning
+  det er uændret *siden* — en side kan ændre sig og ændre sig tilbage og hashe
+  identisk i begge ender. Uret læses gennem `passAge`, så et fremtidigt stempel
+  navner skævningen. Syv tilstande målt (ingen baseline, ændret/uændret i dag,
+  uændret 40 d, ur 3 d frem). `check --json` får `contentChanged`
+  (`true`/`false`/`null`) og `contentBaselineReadAt`. **Målt read-only inden
+  ændringen:** kommandoen skriver stadig ikke state — baselinen er altid
+  loopens læsning. 5 nye tests i `test/contentchange.test.js` →
+  **533/533** (528 + 5); audit 0/0; `node --check`, `matrix --check`, `sh -n`,
+  `git diff --check` grønne på Node 26.7.0. **Fem mutationer, alle døde**
+  (1/1/1/2/1 fejl). **Én fejl i min egen test:** den hævdede at `check` ikke
+  skabte state-filen, men det var mit eget fixture — påstanden var om filens
+  bytes. `ceo/check-content-compare`.
+
+
 - **Iteration 73 (P1-57, målt + fix):** ❓ 1–3 ubesvarede, så målingen gik på P1-56's egen fund 1 og 2 — de to terminal-lister. Rigtig CLI, **gratis** maskine (temp-HOME, ingen licens), rigtig lokal side skrevet om til `<title>Free iPhone!!</title>`: `pass -> 🔄 content changed (92 → 77 bytes)`, `watch --status -> ✅ up (200) @ …`, `status -> ✅ (200)`. Samme måling som P1-56, en flade lavere, og på **gratis**-fladerne. **Fix:** `readEntry` spørger nu `readContentChangeState` og giver `contentNote` + `contentSize`; sætningen er rapportens egen, kun tegnene er listernes, og titlen går gennem `safeText` (første gang et `<title>` fra et overvåget site når en terminalrække). **Målingen rettede min egen design-antagelse:** "læsningen og passet er stemplet samme tid" er forkert — `lastContentReadAt 07:47:03.000Z` mod `lastChecked 07:47:03.292Z` — så reglen ville have skjult størrelsen på præcis de sider, der var læst. I stedet bærer tallet sin egen algering, spurgt af `passAge`. 4 nye tests i `test/contentchange.test.js` (allerede i `npm test`) → **518/518** (514 + 4); audit 0/0; `node --check`, `matrix --check`, `git diff --check` grønne på Node 26.7.0. **Fem mutationer: fire døde (5/5/7/1 fejl), den femte overlevede** — `safeText` omkring sætningen fjernet gav 0 fejl, fordi mit stempel lå i fremtiden og sætningen så tog ur-grenen uden titel; beviset fra den muterede kode var `page title: "^[[2JOWNED"`. Testen hævder nu både at teksten overlever og at kontrolbytene er væk. **To målefejl i min egen måling:** `execFileSync` i samme proces som HTTP-fixturen (igen), og en **destruktureringsfejl i min egen test, som kørte `watch --once` mod den rigtige `~/.deskuptime/state.json` på Mads' maskine** og skrev resultatet der (jeg har ikke adgang til at rense filen; ingen licensnøgle i output). Fælden er lukket permanent i denne fil — `cli()` kaster på en ikke-temp `HOME` — og **P1-58 er lagt i køen for de 32 andre testfiler**, der stadig ingen lås har. `ceo/content-in-lists`, `b3fc25f`, fast-forward-merget til `main` og pushet 2026-09-27. **Næste:** P1-58 (målt, lille) eller ❓ 1–3 / ❓ 14, ellers en målt opgave. **Uafsluttede fund fra denne måling:** (1) matrix-rækken `terminal-alerts` siger "content change" — nu sand på alle tre terminalflader; (2) `check` skriver stadig `— Content: 77 bytes` uden at sige hvornår læsningen skete, selv om `contentReadAt` kan svare på det.
 
 - **Iteration 67 (P1-51, målt + fix):** ❓ 1–3 ubesvarede, så målingen gik på det sidste lag i det betalte produkt, ingen måling havde rørt: **selve dokumentet** og om et tal og dets navneord var enige. Rigtig CLI, Pro-stub (aldrig et kald til mahope.tools), rigtig `state.json` + `history.json` med ét site overvåget én gang — tilstanden for et bureau, der tilføjede en kundes site i går: `100% (1 checks)`, `100% (1 recorded d, 1 checks)`, `· 1 checks ·`. **Målingen fandt samtidig, at intet andet var forkert** — partitionen, vinduesdækningen, JSON'en og alle flertalformer for rigtig-tallede sites var korrekte; der var ingen skjult sandhedsfejl i denne rapport, kun engelsk, på præcis den række en kunde læser når et site er nyt. **Fix:** `counted(count, singular, plural)` i `src/report.js` som den ene ejer, brugt af `uptimeCell`, `windowCell` og resumelinjen. Første test er om det der *ikke* må ændre sig (alle flertalformer, `1 failed`, det testlåste `site(s)`, hele JSON-kontrakten); **sidste test er låsen** der forbyder `1 checks`/`1 faileds`/`1 recorded days` overalt i den renderede rapport, fordi et nyt talt navneord er en fjerde plads at lave det samme på. **En fejl i min egen rettelse, fundet og taget tilbage:** jeg skrev først `1 failed` til `failed passed`, hvilket var en ny fejl og ikke en rettelse. 7 nye tests i `test/grammar.test.js` (lagt til i `npm test`) → **462/462** (455 + 7); audit 0/0; `node --check` alle JS-filer, `matrix --check`, `git diff --check` grønne på Node 26.7.0. **To målefejl i egen måling, begge fundet af den måling der skulle lade mig lukke den:** en håndlavet state-fil skrevet med `lastCheck` i stedet for `lastChecked` fik resumelinjen til at sige `2 up · 1 down · 3 not checked` = 6 sites ud af 3, som så ud som P1-13's partition-fejl igen (den var min fejl), og første testkørsel kaldte `buildReport` med ét objektargument i stedet for to. Den sjette sådanne fejl efter de fem i P1-41/P1-50 — **målingsværktøjet fejler oftere end koden.** Ingen exit-kode, intet nyt JSON-felt, ingen matrix-række, ingen state-filnøgle, ingen deploy-note nødvendig. `ceo/report-grammar`. **Næste:** ❓ 1–3 og ❓ 14, ellers en målt opgave.
@@ -4290,7 +4391,34 @@ Den betalte rapport sagde det efter P1-56; listerne sagde intet. Det er **gratis
 
 **Status 2026-09-27:** 4 nye tests i `test/contentchange.test.js` (samme fil som P1-56, allerede i `npm test`) → **518/518** (514 + 4); audit 0/0; `node --check`, `matrix --check` grønne på Node 26.7.0. **Fem mutationer målt: fire døde (5/5/7/1 fejl), den femte overlevede** og afslørede en vakuum-test (et fremtidigt stempel får sætningen til at droppe titlen) — rettet, se afsnittet øverst. **Fælden fra min egen test lukket permanent i denne fil:** `cli()` kaster hvis `HOME` ikke er et temp-mappe, efter at en destruktureringsfejl kørte `watch --once` mod den rigtige `~/.deskuptime/state.json` på Mads' maskine. Ingen matrix-række, claim, exit-kode eller payload-felt ændret; ingen deploy-note nødvendig (offentlig npm-udgivelse er Mads').
 
-### P1-58 — FÆRDIG 2026-09-27 (`ceo/test-home-isolation`) — Hele suiten kunne skrive til den, der kørte den
+#### P1-59 — FÆRDIG 2026-09-27 (`ceo/check-content-compare`) — `check` sammenlignede aldrig siden med noget
+
+**Målt fund:** `cli.js` kaldte `checkUrls(urls, { timeoutMs })`, så `content.js`
+fik `previousHash === undefined` og svarede `changed: null` på hver kørsel.
+Målt med den rigtige CLI mod en lokal side, først med en `lastHash` der passede
+og så med en der var bevidst forkert: **begge** skrev `— Content: 89 bytes`.
+`🔄` og `⏸️` var udeafhængig kode, og matrix-rækken `ssl-content` lovede
+"content-change detection" i gratis-tieret på den mest brugte flade.
+
+**Rettelsen:** `check` læser state-filen read-only og giver hver URL sin egen
+baseline (`opts.contentHashes` i `engine.js`); `readContentComparison()` i
+`status.js` er den ene ejer af verdikt **og** alder, så "uændret" altid navner
+den læsning det blev sammenlignet med — en side kan ændre sig og ændre sig
+tilbage mellem to pass og hashe identisk i begge ender. `CONTENT_VERDICT` er de
+tre ord. Uret læses gennem `passAge`, så et fremtidigt stempel navner skævningen
+og ikke alderes.
+
+**Hvorfor den ikke skriver state:** målt read-only inden ændringen. Baselinen er
+altid watch-loopens læsning, aldrig `check`'s egen.
+
+**Additive JSON:** `contentChanged` (`true`/`false`/`null`) og
+`contentBaselineReadAt`. **Exit-kode, uptime, matrix-rækker, `--help` uændret.**
+
+**Bevis:** 5 nye tests i `test/contentchange.test.js` → **533/533** (528 + 5);
+audit 0/0; `node --check`, `matrix --check`, `sh -n`, `git diff --check` grønne
+på Node 26.7.0. Fem mutationer, alle døde (1/1/1/2/1 fejl).
+
+## P1-58 — FÆRDIG 2026-09-27 (`ceo/test-home-isolation`) — Hele suiten kunne skrive til den, der kørte den
 
 **Målt først, nul kode ændret.** Før målingen: hvilke filer *kan* nå den rigtige
 `HOME`? Svaret var ikke "dem der glemmer en env" — det var **suiten selv**, fordi

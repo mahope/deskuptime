@@ -53,7 +53,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { readContentChangeState, readEntry } from '../src/status.js';
+import { readContentChangeState, readContentComparison, readEntry, CONTENT_VERDICT } from '../src/status.js';
 import { buildReport, renderReportMarkdown } from '../src/report.js';
 import { assertTempHome } from './helpers/env.mjs';
 
@@ -506,4 +506,122 @@ test('a page title chosen by the site cannot drive the terminal', async (t) => {
     assert.ok(row.includes('OWNED-BY-PAGE'), `${label}: the title was dropped instead of flattened: ${JSON.stringify(row)}`);
     assert.equal(stdout.includes(`${ESC}[2J`), false, `${label}: the escape sequence was printed`);
   }
+});
+
+// ── P1-59 — `check` never compared the page with anything ────────────────────
+//
+// P1-56 put the change in the client report, P1-57 in the two terminal lists.
+// This is the surface above both, and it was silent for a different reason: it
+// never asked. `cli.js` called `checkUrls(urls, { timeoutMs })`, `content.js`
+// received `previousHash === undefined`, and answered `changed: null` on every
+// single run — so the `🔄` and `⏸️` branches in `check`'s own output were
+// unreachable code, and the matrix row promising "content-change detection" in
+// the *free* tier was true of the watch loop and of nothing else.
+//
+// Measured 2026-09-27 with the real CLI against a local page, first with a
+// stored `lastHash` that matched the page exactly and then with one that was
+// deliberately wrong:
+//
+//   matchende lastHash   ->  — Content: 89 bytes
+//   afvigende lastHash   ->  — Content: 89 bytes
+//
+// Two different states, one sentence, and a bare `—` that already meant
+// something else on the line above it (`— SSL: N/A` is "no certificate was
+// read"). The blocks below pin the three verdicts, the age each one carries, and
+// the guarantee that this fix did not turn a read-only one-off into a writer.
+
+test('the owner concludes nothing when there is no reading to compare with', () => {
+  // `null` is the checker's own word for "nothing was compared", and it must not
+  // be read as a falsy `false` — that is the false all-clear P1-21 removed from
+  // `check --json`, one field over.
+  const none = readContentComparison({ changed: null, readAt: '2026-09-27T08:00:00.000Z', now: NOW });
+  assert.equal(none.verdict, CONTENT_VERDICT.NO_BASELINE);
+  assert.equal(none.compared, false);
+  assert.equal(none.note, 'no reading to compare against');
+});
+
+test('the owner names the reading an unchanged verdict was reached against', () => {
+  // The age is the second half of the claim, not decoration. Two readings can
+  // hash identically with the page rewritten and rewritten back in between, so
+  // "unchanged" without a date is a statement about the past read as a statement
+  // about now — the same defect P1-36 removed from the certificate countdown and
+  // P1-57 removed from the page size on the two lists.
+  const today = readContentComparison({ changed: false, readAt: '2026-09-27T06:00:00.000Z', now: NOW });
+  assert.equal(today.verdict, CONTENT_VERDICT.UNCHANGED);
+  assert.equal(today.compared, true);
+  assert.equal(today.ageDays, 0);
+  assert.equal(today.note, 'unchanged since the reading today');
+
+  const fortyDays = readContentComparison({
+    changed: false,
+    readAt: new Date(NOW.getTime() - 40 * DAY).toISOString(),
+    now: NOW,
+  });
+  assert.equal(fortyDays.ageDays, 40);
+  assert.equal(fortyDays.note, 'unchanged since the reading 40 d ago');
+});
+
+test('the owner names a change, and refuses to age a reading from the future', () => {
+  const changed = readContentComparison({ changed: true, readAt: '2026-09-24T09:00:00.000Z', now: NOW });
+  assert.equal(changed.verdict, CONTENT_VERDICT.CHANGED);
+  assert.equal(changed.note, 'changed since the reading 3 d ago');
+
+  // A clock problem is named as one, and no age is printed beside it — the same
+  // separation `passAge` forces for every other recorded time in the tool.
+  const ahead = readContentComparison({
+    changed: false,
+    readAt: new Date(NOW.getTime() + 3 * DAY).toISOString(),
+    now: NOW,
+  });
+  assert.equal(ahead.ageDays, null);
+  assert.equal(ahead.note, 'unchanged since a reading 3 d ahead of this machine\'s clock');
+
+  // A hand-edited or pre-P1-2 state has a hash and no readable time. It is not
+  // rounded into "today", which is the claim that would have been false.
+  const unknown = readContentComparison({ changed: false, readAt: 'not a date', now: NOW });
+  assert.equal(unknown.ageDays, null);
+  assert.equal(unknown.note, 'unchanged since a reading of unknown age');
+});
+
+test('check compares the page with the stored reading and says so out loud', async t => {
+  // The full journey through the real CLI, on a free machine, against a page the
+  // test controls: read it once to learn its hash, plant that hash with a
+  // timestamp, then serve the same page and a different one.
+  const site = await pageFixture(t);
+  site.serve('clean');
+  const probe = await cli(['check', site.url, '--json'], freeHome(t, {}).options);
+  const hash = JSON.parse(probe.stdout)[0].contentHash;
+  assert.equal(typeof hash, 'string');
+
+  const readAt = new Date(Date.now() - 40 * DAY).toISOString();
+  const planted = freeHome(t, { [site.url]: { ...PASS, lastHash: hash, lastContentReadAt: readAt } });
+
+  site.serve('clean');
+  const same = await cli(['check', site.url], planted.options);
+  assert.match(same.stdout, /⏸️ Content: \d+ bytes — unchanged since the reading 40 d ago/,
+    `the 40-day-old reading must be named, not rounded into "today": ${JSON.stringify(same.stdout)}`);
+
+  site.serve('defaced');
+  const differs = await cli(['check', site.url], planted.options);
+  assert.match(differs.stdout, /🔄 Content: \d+ bytes — changed since the reading 40 d ago/,
+    `a changed page must be visible on the free surface: ${JSON.stringify(differs.stdout)}`);
+});
+
+test('check says it had nothing to compare against, and still writes nothing', async t => {
+  // A site the user has never watched — the ordinary case for a CI job, and the
+  // one that printed a bare `—` indistinguishable from the `— SSL: N/A` above it.
+  const site = await pageFixture(t);
+  site.serve('clean');
+  const { stateFile, options } = freeHome(t, {});
+  const before = readFileSync(stateFile, 'utf8');
+  const result = await cli(['check', site.url], options);
+  assert.match(result.stdout, /— Content: \d+ bytes — no reading to compare against/,
+    `a missing baseline must be named: ${JSON.stringify(result.stdout)}`);
+
+  // And the guarantee that came with it: this fix reads the state file and does
+  // not write it. `deskuptime check` has never been a writer, and a one-off
+  // command that silently became one is the change P1-43 spent an iteration
+  // undoing for `unwatch`. The fixture put that file there, so the claim is
+  // about its bytes rather than its existence.
+  assert.equal(readFileSync(stateFile, 'utf8'), before, `check rewrote ${stateFile}`);
 });

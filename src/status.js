@@ -1091,6 +1091,87 @@ function byteCountNote(bytes, readAt, now) {
   return `${size}, read at an unknown time`;
 }
 
+/** The three things a comparison against a stored reading can conclude. */
+export const CONTENT_VERDICT = {
+  /** A stored reading was compared with, and the page differs from it. */
+  CHANGED: 'changed',
+  /** A stored reading was compared with, and the page is identical to it. */
+  UNCHANGED: 'unchanged',
+  /** There was no reading to compare with, so nothing was concluded. */
+  NO_BASELINE: 'no-baseline',
+};
+
+/**
+ * What a content comparison concluded, and how old the thing it was compared with
+ * is. One owner, so `check` and every future surface cannot answer the same
+ * question two ways.
+ *
+ * `check` never compared content until 2026-09-27. It called
+ * `checkContentChange(url, undefined)`, so `previousHash` was never set,
+ * `content.js` answered `changed: null` on every run, and the two branches that
+ * print a verdict — `🔄` and `⏸️` — were unreachable. Measured with the real CLI
+ * against a local page whose stored `lastHash` was a perfect match, and then
+ * against one that was deliberately wrong:
+ *
+ *   matchende lastHash   -> — Content: 89 bytes
+ *   afvigende lastHash   -> — Content: 89 bytes
+ *
+ * Two different states, one sentence, and a bare `—` that already meant
+ * something else one line up (`— SSL: N/A` is "no certificate was read"). The
+ * matrix row `ssl-content` promises "content-change detection" in the **free**
+ * tier, and `check` is the free tier's front door.
+ *
+ * The age is not decoration, it is the second half of the claim. "Unchanged" is
+ * true of two readings and says nothing about the span between them: a page
+ * rewritten and rewritten back between two passes hashes identically at both
+ * ends. So an unchanged verdict always names the reading it was compared with,
+ * and a baseline whose time cannot be placed says so instead of being rounded
+ * into "today" — the same rule as the certificate countdown (P1-36) and the page
+ * size on the two lists (P1-57).
+ *
+ * A baseline is the watch loop's reading, never `check`'s own. `check` stays
+ * read-only, exactly as measured before this change: it did not write
+ * `state.json`, and a one-off command that silently became a writer is the
+ * change P1-43 spent an iteration undoing for `unwatch`.
+ *
+ * @param {object} [input] — `{ changed, readAt }`
+ * @param {boolean|null} [input.changed] — the checker's own `content.changed`
+ * @param {unknown} [input.readAt] — the state's `lastContentReadAt` for the hash
+ *   that was compared with, which `runPass` stamps in the same breath as the hash
+ * @param {Date} [input.now]
+ * @returns {{verdict: string, compared: boolean, ageDays: number|null,
+ *   aheadMs: number, note: string}}
+ */
+export function readContentComparison({ changed = null, readAt = null, now = new Date() } = {}) {
+  // `null` is the checker's own word for "there was nothing to compare with", so
+  // it is taken at face value rather than read as a falsy `false`.
+  if (changed !== true && changed !== false) {
+    return {
+      verdict: CONTENT_VERDICT.NO_BASELINE,
+      compared: false,
+      ageDays: null,
+      aheadMs: 0,
+      note: 'no reading to compare against',
+    };
+  }
+  const reading = passAge(readAt, now);
+  const verdict = changed === true ? CONTENT_VERDICT.CHANGED : CONTENT_VERDICT.UNCHANGED;
+  // A baseline dated in the future is a clock problem, not a fact about the page:
+  // it is named as one, and the age stays out of the sentence.
+  const when = reading.state === PASS_AGE.AHEAD
+    ? `a reading ${clockAheadNote(reading.aheadMs)}`
+    : reading.state === PASS_AGE.AGED
+      ? `the reading ${reading.ageDays === 0 ? 'today' : `${reading.ageDays} d ago`}`
+      : 'a reading of unknown age';
+  return {
+    verdict,
+    compared: true,
+    ageDays: reading.state === PASS_AGE.AGED ? reading.ageDays : null,
+    aheadMs: reading.aheadMs,
+    note: changed === true ? `changed since ${when}` : `unchanged since ${when}`,
+  };
+}
+
 /**
  * One reading of the content check, shared by every surface that prints one.
  *

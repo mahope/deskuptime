@@ -18,7 +18,7 @@ import { buildReport, renderReportJson, renderReportMarkdown } from './report.js
 import { readFileSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
-import { invalidHttpUrls, invalidUrlMessage, partitionUsableUrls, readCertCoverage, readChain, readContentState, readDisclosure, readEntry, readRedirectTarget, readSecurityHeaders, readSslIssuer, readSslState, readSslTls, contentSkipNote, unusableUrlNote, withoutCredentials, SECURITY_HEADER, STALE_AFTER_DAYS } from './status.js';
+import { invalidHttpUrls, invalidUrlMessage, partitionUsableUrls, readCertCoverage, readChain, readContentComparison, readContentState, readDisclosure, readEntry, readRedirectTarget, readSecurityHeaders, readSslIssuer, readSslState, readSslTls, contentSkipNote, unusableUrlNote, withoutCredentials, CONTENT_VERDICT, SECURITY_HEADER, STALE_AFTER_DAYS } from './status.js';
 import { formatMs, machinesInUse, safeText } from './display.js';
 import { DEFAULT_WINDOW_DAYS, HISTORY_DAYS, historyReadErrorMessage, readHistoryFile } from './history.js';
 import { FREE, PRODUCT, proExtras, renderHelpPro } from './features.js';
@@ -121,7 +121,29 @@ if (command === 'check') {
   }
 
   const json = args.includes('--json');
-  const results = await checkUrls(urls, { timeoutMs });
+  // What each site was last read as, so `check` can compare instead of only
+  // measuring. Read-only, and measured to be read-only before it was added: this
+  // command does not write `state.json`, and it must not start — a one-off check
+  // that quietly became a writer is the change P1-43 spent an iteration undoing
+  // for `unwatch`. A site the user never watched, or an unreadable state file,
+  // simply has no baseline, and the line says so.
+  const stored = readStateFile().state;
+  const contentHashes = new Map();
+  const baselineReadAt = new Map();
+  for (const url of urls) {
+    const entry = stored.urls[url];
+    if (!entry || typeof entry !== 'object') continue;
+    if (typeof entry.lastHash === 'string' && entry.lastHash !== '') contentHashes.set(url, entry.lastHash);
+    if (typeof entry.lastContentReadAt === 'string' && entry.lastContentReadAt !== '') baselineReadAt.set(url, entry.lastContentReadAt);
+  }
+  const results = await checkUrls(urls, { timeoutMs, contentHashes });
+
+  // The one owner of the comparison, asked once per result so the JSON and the
+  // terminal line cannot be built from two different readings of the same fields.
+  const contentVerdict = r => readContentComparison({
+    changed: r.content?.changed ?? null,
+    readAt: baselineReadAt.get(r.url) ?? null,
+  });
 
   if (json) {
     // Machine-readable output: stdout is pure JSON for piping into jq/CI
@@ -199,6 +221,14 @@ if (command === 'check') {
         contentSkipped: content.skipped,
         contentLength: content.length,
         contentHash: r.content?.hash ?? null,
+        // The verdict the comparison actually reached, and the reading it was
+        // reached against. Both additive. Before this, `check` compared with
+        // nothing and `contentHash` was the only content fact a script could
+        // read — so a CI job holding two of these had to diff the hashes itself
+        // and had no way to ask how old the one it diffed against was. `null`
+        // for `contentChanged` means "no reading to compare with", not `false`.
+        contentChanged: contentVerdict(r).compared ? contentVerdict(r).verdict === CONTENT_VERDICT.CHANGED : null,
+        contentBaselineReadAt: baselineReadAt.get(r.url) ?? null,
         errorType: r.errorType,
         error: r.error,
       };
@@ -214,7 +244,15 @@ if (command === 'check') {
       const redirect = readRedirectTarget({ url: result.url, finalUrl: result.finalUrl });
       const statusSymbol = result.healthy ? '✅' : '❌';
       const sslEmoji = summary.sslIcon;
-      const changedEmoji = result.content?.changed === true ? '🔄' : result.content?.changed === false ? '⏸️' : '—';
+      // The icon and the sentence come from the one owner, so the two cannot
+      // disagree. Before this, the icons were read off `content.changed` here and
+      // the sentence did not exist: both verdict branches were unreachable, and
+      // the `—` that stood in for them is the same glyph `— SSL: N/A` uses one
+      // line up for "no certificate was read".
+      const contentVerdictForResult = contentVerdict(result);
+      const changedEmoji = contentVerdictForResult.verdict === CONTENT_VERDICT.CHANGED
+        ? '🔄'
+        : contentVerdictForResult.verdict === CONTENT_VERDICT.UNCHANGED ? '⏸️' : '—';
       const httpStatus = result.statusCode || 'N/A';
 
       // Everything below except our own labels can be chosen by the site being
@@ -260,7 +298,13 @@ if (command === 'check') {
       }
       if (content.measured) {
         const bytes = content.length === null ? 'size unknown' : `${content.length.toLocaleString('en-US')} bytes`;
-        console.log(`   ${changedEmoji} Content: ${bytes}`);
+        // The owner always speaks, verdict or not. A silent `—` is what made this
+        // invisible: the identical glyph one line up (`— SSL: N/A`) means "no
+        // certificate was read", so the old line could not say whether the page
+        // had been compared with anything. Measured 2026-09-27, where a stored
+        // `lastHash` that matched exactly and one that was deliberately wrong
+        // both printed `— Content: 89 bytes`.
+        console.log(`   ${changedEmoji} Content: ${bytes} — ${contentVerdictForResult.note}`);
       } else if (content.skipped) {
         // A page we declined to read used to print no Content line at all, so
         // "we deliberately did not look" was indistinguishable from "nothing to

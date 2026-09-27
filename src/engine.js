@@ -35,6 +35,11 @@ export function legTimeoutMs(deadline, fallbackMs, now = Date.now()) {
  * @param {string} url
  * @param {object} [opts]
  * @param {string} [opts.contentHash] — optional previous content hash to detect changes
+ * @param {Map<string,string>|object} [opts.contentHashes] — the same, per URL, for a
+ *   multi-URL run where each site has its own stored reading. `check` reads the
+ *   state file for this; `runPass` passes one URL at a time and uses
+ *   `opts.contentHash`. Without it `content.js` answers `changed: null` and the
+ *   page is never compared with anything.
  * @param {number} [opts.timeoutMs] — budget for the whole check (all three legs)
  * @returns {Promise<object>} { url, reachable, healthy, statusCode, responseTimeMs, ssl, content, error? }
  */
@@ -100,7 +105,15 @@ export async function checkUrl(url, opts = {}) {
   // 3. Content hash (for change detection)
   if (result.healthy) {
     try {
-      const contentResult = await checkContentChange(url, opts.contentHash, {
+      // The per-URL map wins over the single hash, so one option serves both a
+      // one-URL pass and a batch without either caller having to know about the
+      // other. `Map` and a plain object are both accepted, because a state file
+      // is a plain object and rewrapping it at every call site is the kind of
+      // ceremony that gets skipped.
+      const stored = opts.contentHashes instanceof Map
+        ? opts.contentHashes.get(url)
+        : opts.contentHashes?.[url];
+      const contentResult = await checkContentChange(url, stored ?? opts.contentHash, {
         timeoutMs: legTimeoutMs(deadline, CONTENT_TIMEOUT_MS),
       });
       result.content = contentResult;
