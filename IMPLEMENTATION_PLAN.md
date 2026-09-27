@@ -1,3 +1,78 @@
+## Status fra denne iteration (80, P1-64 — kundenapporten kunne ikke sige hvem der udstedte kundens certifikat, og en ny udsteder læs som en helt almindelig fornyelse)
+
+**Hvorfor denne flade:** ❓ 1–3 er stadig ubesvarede, så iterationen tog det tredje
+uafsluttede fund fra P1-60 og det sidste spørgsmål i `docs/cert-rotation.md`s egen
+tabel: *hvem udstedte det?* `readSslIssuer` har målt det siden P1-53 — og kun
+`check` spurgte nogensinde. Ingen gemte det, så kundenapporten, dokumentet et bureau
+videresender, kunne ikke svare på det første spørgsmål et sikkerhedsspørgsmål stiller.
+
+**Målt først, nul kode ændret.** Rigtig `runPass`, rigtig state-fil, rigtig CLI, temp-HOME.
+To pass over et site der svarer 200 i begge. Den eneste forskel er hvilket
+certifikat — og hvilken udsteder — der svarede anden gang (`Ganske Cloud A/S` →
+`Rogue Cert BV`):
+
+```
+| https://kunde.dk/ | UP (200) | 100% (2 checks) | 100% (1 recorded d, 2 checks) | 12 ms | 89 d | stable · 89 bytes | … |
+**1 site has its certificate replaced …** https://kunde.dk/ (🔑 certificate replaced today)
+```
+
+Rotationen var navngivet. Udstederen var **ikke** nogen steder: ikke i tabellen, ikke
+i en linje under den, ikke i `--json` — og ikke i state-filen, så selv et senere pass
+kunne ikke finde den. Nedtællingen taler imod at bemærke det: et nyudstedt certifikat
+har typisk *flere* dage tilbage end det det erstattede, så et hijack læses som det
+sundeste af de to.
+
+**Rettelsen er skrivevejen, så læsevejen, så dokumentet.** `runPass` gemmer nu
+`sslIssuer` på hvert pass (sammenligningen sker *før* den overskrives) og stempler
+`certIssuerBefore` + `certIssuerChangedAt` når den nye udsteder afviger fra den
+sidste kendte. Ejeren er `readCertIssuerState()` i `src/status.js` med
+`certIssuerChangeNote()`, samme form som `readCertRotationState` — alderen gennem
+`passAge`, et ur-skævt stempel navner skævningen, en halv påstand (stempel uden det
+gamle navn, eller navn uden stempel) er **ingen** påstand, og et certifikat uden
+oplyst udsteder sletter ikke den sidste kendte.
+
+**En fælde fundet undervejs, i min egen test:** jeg havde lagt sammenligningen *inde i*
+rotationsgrenen, og min fixture lignede to certifikater fra to udstederne — det er
+umuligt i virkeligheden, så testen døde. Men den døde af en rigtig grund: en kendsgerning
+der kun skrives inde i en branche forsvinder stille, når en læsning tager den anden vej.
+Sammenligningen står derfor nu selvstændigt, og koster én streng.
+
+**Kundenapporten (betalt, den dyreste flade):** én navngiven linje under tabellen med
+**begge** navne — `🏢 certificate answers from a different issuer 2 d ago (Ganske Cloud A/S → Rogue Cert BV)` —
+`tællingen i resumelinjen` (`· 1 from a new certificate authority`), `summary.certIssuerChanged`
+og otte additive felter pr. site (`sslIssuer`, `certIssuerChanged`, `certIssuerChangedAt`,
+`certIssuerChangedPrevious`, `certIssuerChangedAgeDays`, `certIssuerChangedNote` …).
+**Ingen status, exit-kode, uptime-tal eller SSL-celle flytter sig**, og det er låst i en
+test: udstederen kommer *ikke* i cellen, den er en linje under tabellen, ligesom rotationen.
+Ordet er *different issuer* og aldrig *rogue* — et site der flytter vært, eller en CA der
+overtages, giver det samme billede helt uskyldigt. En fornyelse fra den *samme* udsteder
+er stadig `🔑 certificate replaced` og **ikke** et skift, hvilket er den hyppigste
+normalgang: 90 dages fornyelser må ikke se ud som et overtag.
+
+**Test (11 nye i `test/certissuerchange.test.js`, auto i `npm test`):** ejeren på de
+fire tilstande gennem `readCertIssuerState` (skift med alder / intet stempel / kun
+nuværende udsteder / ulæseligt stempel) + ur-skæv, to halve påstande der er afvist som
+påstande, et navn der ikke kan læses uden opdigtet myndighed, sætningen kun hos ejeren
+(inkl. `an unnamed authority`), fire rigtige passer der skelner baseline → uændret →
+fornyelse fra samme udsteder → ny udsteder, et certifikat uden udsteder der ikke sletter
+den sidste kendte, rapportens linje og tælling, fornyelse-uden-skift, sundt site uden
+linje/tælling felt, to sites hvor kun den ene har skiftet, og låsen på at række, SSL-celle
+og resume-linje er uændrede.
+
+**Resultat: 585/585 grøn** (574 + 11), audit 0/0, `node --check` på alle JS og MJS,
+`matrix --check` exit 0, `git diff --check` rent. Node 26.7.0.
+`docs/cert-rotation.md` er opdateret, fordi den er specen rapporten bygges imod.
+**Ingen mutationstest** — over tidsbudgeten, samme ærlige notering som
+P1-47/49/50/51/52/61/62/63.
+
+**Næste:** ❓ 1–3 og ❓ 14, ellers en målt opgave. Uafslutnet fra denne iteration: (1)
+de to **gratis** lister (`status`, `watch --status`) siger stadig ikke hvem der udsteder
+— de har nu `readEntry` og samme ejere til rådighed, så det er den næste flade;
+(2) `cert_rotated`-alarmen i den betalte kanal nævner stadig ikke den nye udsteder, så
+et hijack er tyst i den kanal, der er den betalte; (3) rotationen tælles pr. time men
+ikke pr. *antal* (fund fra P1-63); (4) `lastCertSerial` er gemt siden P0-3 og læses
+stadig af ingen — `check` viser serienummeret, men ingen gemt flade gør.
+
 ## Status fra denne iteration (79, P1-63 — et certifikat der flapper mellem to servere alarmerede 2 880 gange om dagen)
 
 **Hvorfor denne flade:** ❓ 1–3 er stadig ubesvarede, så iterationen tog fund (2) fra

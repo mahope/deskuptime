@@ -1109,6 +1109,88 @@ export function certRotationStateNote({ rotated = false, ageDays = null, aheadMs
 }
 
 /**
+ * What a surface says about a certificate that now answers from a *different
+ * authority*, in one sentence.
+ *
+ * The word is *different*, never *unknown* or *rogue*: the same name renewed by
+ * the same CA is the ordinary case, and a customer who moved hosts sees a new
+ * issuer for entirely innocent reasons. Both names are in the sentence, because
+ * "the issuer changed" without saying from what to what leaves the reader to go
+ * and look it up in the one document that must not require it. The age rides
+ * along for the same reason as on the rotation: a report is read once, days after
+ * the pass that produced it.
+ */
+export function certIssuerChangeNote({ changed = false, ageDays = null, aheadMs = 0, previous = null, issuer = null } = {}) {
+  if (changed !== true) return '';
+  const from = typeof previous === 'string' && previous.trim() ? previous.trim() : 'an unnamed authority';
+  const to = typeof issuer === 'string' && issuer.trim() ? issuer.trim() : 'an unnamed authority';
+  const names = ` (${from} → ${to})`;
+  if (Number.isFinite(aheadMs) && aheadMs > 0) return `🏢 certificate answers from a different issuer${names} — ${clockAheadNote(aheadMs)}`;
+  const when = ageDays === null ? 'at an unreadable time' : ageDays === 0 ? 'today' : `${ageDays} d ago`;
+  return `🏢 certificate answers from a different issuer ${when}${names}`;
+}
+
+/**
+ * A *changed certificate issuer*, as a later surface reads it: the client's
+ * report, and any other document written for someone who was not there when the
+ * pass ran.
+ *
+ * `readSslIssuer` has answered "who issued this certificate?" since P1-53 — and
+ * only `check` ever asked. Nothing stored it, so the document a bureau forwards
+ * to a customer could not answer the first question a security questionnaire
+ * asks, and could not see the one signal that separates a routine renewal from a
+ * domain that changed hands: a *different authority*. Measured 2026-09-27, real
+ * passes, real state file, real CLI — a site whose certificate was replaced by
+ * one from another issuer:
+ *
+ *   | https://kunde.dk/ | UP (200) | 100% | … | 89 d | … |
+ *   **1 site has its certificate replaced …** https://kunde.dk/ (🔑 certificate replaced today)
+ *
+ * It named the rotation and nothing else. The state file had no issuer at all,
+ * so even a later `check` could not say from *which* authority the change came —
+ * and a hijack reads exactly like a renewal, because the new certificate is
+ * usually the healthier of the two.
+ *
+ * So the same shape as `readCertRotationState`, and the same rules: the fact
+ * ages and its age is asked of `passAge`, so a hand-written stamp cannot be aged
+ * into "today" here and something else there; a stamp ahead of this machine's
+ * clock is named as a clock problem rather than printed as a fact about the
+ * certificate; and `null` names are never invented — a certificate that reported
+ * no issuer stays unnamed instead of being given a placeholder authority.
+ *
+ * The change is only a fact when there *was* an earlier issuer to change from.
+ * The first reading establishes it, exactly as the first certificate reading
+ * establishes a baseline, so `changed` is `false` for every site whose issuer has
+ * never moved.
+ *
+ * @param {object} entry — one `state.urls[...]` entry
+ * @param {{now?: Date}} [options]
+ * @returns {{issuer: string|null, changed: boolean, changedAt: string|null,
+ *   previous: string|null, ageDays: number|null, aheadMs: number, note: string}}
+ */
+export function readCertIssuerState(entry, { now = new Date() } = {}) {
+  const value = entry && typeof entry === 'object' ? entry : {};
+  const name = field => (typeof field === 'string' && field.trim() ? field.trim() : null);
+  const issuer = name(value.sslIssuer);
+  const previous = name(value.certIssuerBefore);
+  // Both halves are needed for the claim: a stamp with no earlier authority
+  // cannot say *what* changed, and an earlier authority with no stamp says only
+  // what the last pass saw. Neither alone is a change.
+  const changed = previous !== null && typeof value.certIssuerChangedAt === 'string' && value.certIssuerChangedAt !== '';
+  const reading = passAge(changed ? value.certIssuerChangedAt : null, now);
+  const ageDays = reading.state === PASS_AGE.AGED ? reading.ageDays : null;
+  return {
+    issuer,
+    changed,
+    changedAt: changed ? value.certIssuerChangedAt : null,
+    previous,
+    ageDays,
+    aheadMs: reading.aheadMs,
+    note: certIssuerChangeNote({ changed, ageDays, aheadMs: reading.aheadMs, previous, issuer }),
+  };
+}
+
+/**
  * How long one site waits between two *sent* certificate-rotation alerts. One
  * hour — the same window as the content-change throttle, for the same reason.
  */

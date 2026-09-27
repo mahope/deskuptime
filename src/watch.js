@@ -17,7 +17,7 @@ import { readFileSync, writeFileSync, mkdirSync, existsSync, renameSync, unlinkS
 import { dirname, posix, win32 } from 'path';
 import { homedir } from 'os';
 import { createHash, randomUUID } from 'crypto';
-import { assertValidHttpUrls, expiredNote, findUrlKey, isNewerPass, partitionUsableUrls, readCertIdentity, readCertRotation, readCertRotationAlert, readContentChange, readContentChangeAlert, readEntry, readEvent, readRedirectTarget, readTransitionAlert, queuedAgeMs, readSslState, STALE_AFTER_DAYS, unusableUrlNote, urlIdentity, withoutCredentials } from './status.js';
+import { assertValidHttpUrls, expiredNote, findUrlKey, isNewerPass, partitionUsableUrls, readCertIdentity, readCertRotation, readCertRotationAlert, readContentChange, readContentChangeAlert, readEntry, readEvent, readRedirectTarget, readSslIssuer, readTransitionAlert, queuedAgeMs, readSslState, STALE_AFTER_DAYS, unusableUrlNote, urlIdentity, withoutCredentials } from './status.js';
 import { recordPass } from './report.js';
 import { formatMs, safeText } from './display.js';
 import { historyFileFrom, pruneHistory, readHistoryFile, recordHistoryPass, saveHistory, historyWriteErrorMessage } from './history.js';
@@ -540,6 +540,15 @@ export async function runPass(state, opts = {}) {
     // the one owner, and the alert is only for a real rotation: a first reading
     // is a baseline, not an event, exactly as a first reading of the page is.
     const identity = readCertIdentity(result.ssl);
+    // Who issued the certificate that answered. `readSslIssuer` has measured this
+    // since P1-53 and only `check` ever asked, so nothing stored it: the client's
+    // report could not answer "who issues my certificate?" — and could not see
+    // the one thing that separates a renewal from a domain that changed hands, an
+    // authority that is not the one the customer had. Measured 2026-09-27, real
+    // passes and a real report: the document said `🔑 certificate replaced` and
+    // had no idea where the new certificate came from. Stored below, next to the
+    // identity it belongs to; the comparison is made before it is overwritten.
+    const issuer = readSslIssuer(result.ssl);
     if (identity?.fingerprint) {
       const rotation = readCertRotation({
         fingerprint: identity.fingerprint,
@@ -582,9 +591,33 @@ export async function runPass(state, opts = {}) {
         // where P1-61 put it.
         entry.lastCertRotatedAt = measuredAt;
       }
+      // …and whether the certificate now answers from a *different* authority than
+      // the one the customer had. A routine renewal keeps its issuer, so this is
+      // the difference between "the certificate was replaced" and "something else
+      // vouches for this name now" — and it can only be seen against the issuer of
+      // the pass before, which is why it is stamped here and not derived later.
+      // No earlier issuer means no claim: the first reading establishes the
+      // baseline, exactly as the first certificate reading does.
+      //
+      // The comparison stands on its own rather than riding on the rotation above.
+      // A different authority does mean a different certificate in the real world,
+      // so the two almost always happen together — but a fact that is only written
+      // inside a branch is a fact that silently disappears when a reading takes the
+      // other path, and the price of the comparison is one string.
+      if (issuer && entry.sslIssuer && entry.sslIssuer !== issuer) {
+        entry.certIssuerBefore = entry.sslIssuer;
+        entry.certIssuerChangedAt = measuredAt;
+      }
       entry.lastCertFingerprint = identity.fingerprint;
       entry.lastCertSeenAt = measuredAt;
       if (identity.serial) entry.lastCertSerial = identity.serial;
+      // The issuer of the certificate that answered *now* — written on every pass,
+      // so the next one can compare against it and a later reader can name who
+      // issued what the report counts down from. A certificate that reported no
+      // issuer leaves the previous one alone rather than blanking it: an unnamed
+      // certificate is not an unnamed authority, and forgetting the last known
+      // one would destroy the comparison.
+      if (issuer) entry.sslIssuer = issuer;
     }
 
     if (result.content?.changed === true) {

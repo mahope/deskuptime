@@ -27,7 +27,7 @@
 import { PRODUCT } from './features.js';
 import { DEFAULT_WINDOW_DAYS, windowCoverage, windowSummary } from './history.js';
 import { markdownCell as cell } from './display.js';
-import { SSL_WARN_DAYS, STALE_AFTER_DAYS, clockAheadNote, expiredNote, isCheckStale, isCheckableUrl, passAge, readCertRotationState, readContentChangeState, readPassTime, readRedirectTarget, readResponseMs, readSslState, readStatusCode, sslLapsedNote, staleAgeNote, unknownNote, unusableUrlNote, verdictFor, withoutCredentials } from './status.js';
+import { SSL_WARN_DAYS, STALE_AFTER_DAYS, clockAheadNote, expiredNote, isCheckStale, isCheckableUrl, passAge, readCertIssuerState, readCertRotationState, readContentChangeState, readPassTime, readRedirectTarget, readResponseMs, readSslState, readStatusCode, sslLapsedNote, staleAgeNote, unknownNote, unusableUrlNote, verdictFor, withoutCredentials } from './status.js';
 
 export const DEFAULT_REPORT_TITLE = 'Website uptime report';
 const MAX_TITLE_LENGTH = 120;
@@ -192,6 +192,16 @@ export function buildReport(state, { title, now = new Date(), history, windowDay
       // replaced certificate is not a verdict — most hosts reissue every 90 days —
       // so it is a fact with an age, named under the table like the page change.
       const cert = readCertRotationState(entry, { now });
+      // …and who issued the certificate it counts down from. A rotation tells
+      // the recipient that something changed; it does not say whether the new
+      // certificate comes from the same authority as the one the customer had,
+      // and that is the difference between a renewal and a name that answers for
+      // someone else now. `readSslIssuer` measured this since P1-53 and only
+      // `check` asked, so the state file carried no issuer at all — measured
+      // 2026-09-27, the report over a hijacked-then-renewed site named the
+      // rotation and nothing about where the new certificate came from. Asked of
+      // the one owner, like every other reading in this document.
+      const certIssuer = readCertIssuerState(entry, { now });
       // The page itself, read by the one owner, the same way the certificate is.
       // The state file has kept the hash, the size and the title since P0-3, and
       // nothing in this document could read any of them: a page replaced with a
@@ -287,6 +297,15 @@ export function buildReport(state, { title, now = new Date(), history, windowDay
         certRotated: cert.rotated,
         certRotatedAt: cert.rotatedAt,
         certRotatedAgeDays: cert.ageDays,
+        // The authority behind that certificate, and whether it is the one the
+        // customer's site answered with before. Additive: the SSL cell above is
+        // untouched, so a report that was parsed for its day count still is.
+        sslIssuer: certIssuer.issuer,
+        certIssuerChanged: certIssuer.changed,
+        certIssuerChangedAt: certIssuer.changedAt,
+        certIssuerChangedPrevious: certIssuer.previous,
+        certIssuerChangedAgeDays: certIssuer.ageDays,
+        certIssuerChangedNote: certIssuer.note,
         // The same treatment for the page itself. `contentBytes` is the size the
         // last reading that *measured* the body saw — `content.js` skips a page
         // over 2 MiB and leaves the old number behind, so a report that printed
@@ -365,6 +384,12 @@ export function buildReport(state, { title, now = new Date(), history, windowDay
     // certificate replaces a 3-day-old warning — so this count is the only one
     // that can move the other way.
     certRotated: sites.filter(site => site.certRotated).length,
+    // Additive, and the strongest of the certificate counts: a certificate that
+    // now answers from an authority the customer never had. Disjoint from the
+    // ones above — a renewal keeps its issuer, and an expiry keeps it too — so
+    // this is the only count that can move when the *name* changed hands rather
+    // than the certificate.
+    certIssuerChanged: sites.filter(site => site.certIssuerChanged).length,
     // Additive, and disjoint from the two above: a window column that quotes a
     // share for a period shorter than the one it names. Measured: 28 recorded
     // days printed as `95.83%` next to "the last 30 days", with the shortfall
@@ -652,6 +677,22 @@ export function renderReportMarkdown(report) {
       `**${counted(rotated.length, 'site has its certificate replaced', 'sites have their certificate replaced')} since monitoring — the SSL column above counts down from the new certificate and does not show this:** ${rotated.map(site => cell(`${site.url} (${site.certRotatedNote})`)).join(', ')}`,
     ];
 
+  // The authority, and the one count in this document that means somebody else
+  // may be answering for the customer's name. Every other certificate line is a
+  // fact about a certificate that is still valid for the right name — this one is
+  // a fact about *who vouched for it*, and a hijack is exactly the case where
+  // every other column looks healthy: 100 % uptime, a fresh 90-day certificate
+  // and a site that answers. It is named out loud, with both authorities, so the
+  // reader does not have to go and look it up in the one document that must not
+  // require it.
+  const issuerChanged = report.sites.filter(site => site.certIssuerChanged);
+  const issuerLines = issuerChanged.length === 0
+    ? []
+    : [
+      '',
+      `**${counted(issuerChanged.length, 'site answers from a certificate authority other than the one', 'sites answer from a certificate authority other than the one')} the customer's site answered with when monitoring started — check this before the numbers above are read as healthy:** ${issuerChanged.map(site => cell(`${site.url} (${site.certIssuerChangedNote})`)).join(', ')}`,
+    ];
+
   // The page itself. A report that says `UP (200) | 100%` about a site whose
   // homepage was replaced is the same false all-clear an expired certificate
   // used to be, and the recipient is the one who has to act on it: a defaced or
@@ -725,18 +766,19 @@ export function renderReportMarkdown(report) {
     `|${' --- |'.repeat(HEADERS.length)}`,
     ...(rows.length > 0 ? rows : [`| ${['_no monitored sites_', '—', '—', '—', '—', '—', '—', '—'].join(' | ')} |`]),
     '',
-    `**${report.summary.sites} site(s) · ${buckets.up} up · ${buckets.down} down${unknownWords(buckets)} · ${counted(report.summary.checks, 'check')} · ${report.summary.failures} failed${expiring.length > 0 ? ` · ${expiring.length} SSL expiring soon` : ''}${expired.length > 0 ? ` · ${expired.length} SSL EXPIRED` : ''}${lapsed.length > 0 ? ` · ${lapsed.length} SSL may be expired` : ''}${rotated.length > 0 ? ` · ${rotated.length === 1 ? '1 certificate replaced' : `${rotated.length} certificates replaced`}` : ''}${changedContent.length > 0 ? ` · ${changedContent.length} content changed` : ''}${stale.length > 0 ? ` · ${stale.length} stale (no check in the last ${STALE_AFTER_DAYS} d)` : ''}${crossed.length > 0 ? ` · ${crossed.length} answered by another host` : ''}${gaps.length > 0 ? ` · ${gaps.length} with an incomplete window` : ''}${uncheckable.length > 0 ? ` · ${uncheckable.length} not a full address` : ''}**`,
+    `**${report.summary.sites} site(s) · ${buckets.up} up · ${buckets.down} down${unknownWords(buckets)} · ${counted(report.summary.checks, 'check')} · ${report.summary.failures} failed${expiring.length > 0 ? ` · ${expiring.length} SSL expiring soon` : ''}${expired.length > 0 ? ` · ${expired.length} SSL EXPIRED` : ''}${lapsed.length > 0 ? ` · ${lapsed.length} SSL may be expired` : ''}${rotated.length > 0 ? ` · ${rotated.length === 1 ? '1 certificate replaced' : `${rotated.length} certificates replaced`}` : ''}${issuerChanged.length > 0 ? ` · ${issuerChanged.length} from a new certificate authority` : ''}${changedContent.length > 0 ? ` · ${changedContent.length} content changed` : ''}${stale.length > 0 ? ` · ${stale.length} stale (no check in the last ${STALE_AFTER_DAYS} d)` : ''}${crossed.length > 0 ? ` · ${crossed.length} answered by another host` : ''}${gaps.length > 0 ? ` · ${gaps.length} with an incomplete window` : ''}${uncheckable.length > 0 ? ` · ${uncheckable.length} not a full address` : ''}**`,
     ...expiredLines,
     ...lapsedLines,
     ...attention,
     ...rotatedLines,
+    ...issuerLines,
     ...changedLines,
     ...staleLines,
     ...crossedLines,
     ...gapLines,
     ...uncheckableLines,
     '',
-    `Uptime is the share of completed monitoring passes that answered HTTP 200–399. "Uptime (all)" counts every pass since the site was added${since ? ` (earliest ${shortTime(since)})` : ''}; "Uptime (window)" counts the passes recorded in the last ${windowDays} days. A site with no completed pass yet shows — rather than 100%. "Uptime (window)" is counted from a separate daily history file, so a row can show a recent check with an empty window column; that column then names the file that is missing the pass rather than claiming the site was not monitored. A site that was already being monitored when the window opened, but has fewer recorded days than the window, is named below the table with both counts, so the share and the period are not read as covering days nobody watched. The counts in the summary line are a partition: every site is in exactly one of up, down, not checked, status unknown or stale. "Up" and "down" describe sites checked within the last ${STALE_AFTER_DAYS} days; a site whose monitoring stopped is counted as stale and keeps the status from its last pass in the table, named with the age of that pass. "Status unknown" means a pass ran but its result cannot be read from the state file. A listed URL that is not a full address can never be measured at all: it is named below the table and counted separately, so its empty row is never read as a site that was simply quiet. The SSL column is what the last pass read, so its day count is the deadline the certificate had at that moment. A reading less than a day old is shown as measured; one old enough that the certificate may have lapsed since is named as such and is not counted as a renewal to schedule — run \`deskuptime check <url>\` for a fresh reading. A certificate that was replaced since monitoring is named below the table with the age it had when this report was generated; the SSL column counts down from the certificate that answered last, so it cannot show that it is a different one from the client's. The Content column is what the last pass that actually read the page saw: a page over the content-check limit is never read, so it shows — rather than a size, and a size left by an earlier pass is never presented as this check's measurement. "Changed" is a change measured since the site was added, and it is named below the table with the age it had when this report was generated — a page that was altered and then left alone is still a page a customer should know about, and the uptime columns do not cover it.`,
+    `Uptime is the share of completed monitoring passes that answered HTTP 200–399. "Uptime (all)" counts every pass since the site was added${since ? ` (earliest ${shortTime(since)})` : ''}; "Uptime (window)" counts the passes recorded in the last ${windowDays} days. A site with no completed pass yet shows — rather than 100%. "Uptime (window)" is counted from a separate daily history file, so a row can show a recent check with an empty window column; that column then names the file that is missing the pass rather than claiming the site was not monitored. A site that was already being monitored when the window opened, but has fewer recorded days than the window, is named below the table with both counts, so the share and the period are not read as covering days nobody watched. The counts in the summary line are a partition: every site is in exactly one of up, down, not checked, status unknown or stale. "Up" and "down" describe sites checked within the last ${STALE_AFTER_DAYS} days; a site whose monitoring stopped is counted as stale and keeps the status from its last pass in the table, named with the age of that pass. "Status unknown" means a pass ran but its result cannot be read from the state file. A listed URL that is not a full address can never be measured at all: it is named below the table and counted separately, so its empty row is never read as a site that was simply quiet. The SSL column is what the last pass read, so its day count is the deadline the certificate had at that moment. A reading less than a day old is shown as measured; one old enough that the certificate may have lapsed since is named as such and is not counted as a renewal to schedule — run \`deskuptime check <url>\` for a fresh reading. A certificate that was replaced since monitoring is named below the table with the age it had when this report was generated; the SSL column counts down from the certificate that answered last, so it cannot show that it is a different one from the client's. A certificate that now answers from an authority other than the one the site answered with when monitoring started is named the same way, with both names: a renewal keeps its issuer, and a hijack keeps every number above looking healthy. \`sslIssuer\` in \`--json\` names the authority behind the certificate the SSL column counts down from. The Content column is what the last pass that actually read the page saw: a page over the content-check limit is never read, so it shows — rather than a size, and a size left by an earlier pass is never presented as this check's measurement. "Changed" is a change measured since the site was added, and it is named below the table with the age it had when this report was generated — a page that was altered and then left alone is still a page a customer should know about, and the uptime columns do not cover it.`,
     '',
     `Generated on one machine, without an account: no page content, response headers or license data is included, and nothing was uploaded.`,
   ].join('\n');
