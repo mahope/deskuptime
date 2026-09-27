@@ -2619,43 +2619,81 @@ export function isHealthyStatus(statusCode) {
 }
 
 /**
- * `undici`'s sentence for a request it refuses to *send*, and the only sign the
- * caller gets that a redirect pointed at an address with credentials in it.
+ * `undici`'s two sentences for a request it refuses to *send*, because the
+ * address has credentials in it — and the only sign the caller gets that a
+ * redirect pointed at one.
  *
- * Measured 2026-09-27 on Node 22.23.2 and 26.7.0, `fetch` has two different
- * failures for an address with credentials, and only one of them says so:
+ * Measured 2026-09-28 on Node 22.23.2 and 26.7.0, real CLI, two real local
+ * servers, nothing stubbed. `fetch` has **two** failures for the same fact, and
+ * which one you get is decided by *how the address was reached*, not by what is
+ * wrong with it:
  *
- *   - a URL the *caller* typed is refused outright —
+ *   - a URL handed to `fetch` directly — which is what `headers` does, walking
+ *     the chain by hand — is refused in the `Request` constructor:
  *     `Request cannot be constructed from a URL that includes credentials: <url>`,
- *     on `error.message`;
- *   - a URL we only reach by *following a redirect* never gets that sentence.
- *     `undici`'s cross-origin gate throws `fetch failed` with a cause reading
- *     `cross origin not allowed for request mode "cors"`.
+ *     on `error.message`, with no `cause`;
+ *   - a URL reached by *following* a redirect — which is what `check` does, and
+ *     what `content` does (`ping.js` and `content.js` both ask for
+ *     `redirect: 'follow'`) — never gets that sentence. `undici`'s cross-origin
+ *     gate throws `fetch failed` with a cause reading `cross origin not allowed
+ *     for request mode "cors"`.
  *
- * `check` follows redirects (`ping.js` asks for `redirect: 'follow'`), so it
- * always gets the second form; `headers` walks the chain by hand and hands the
- * credentialed address to `fetch` directly, so it gets the first. One fact, two
- * sentences — and the useless one is the one that reaches the most surfaces.
+ * So the two commands used to publish two sentences for one fact, and each was
+ * the other's only witness:
  *
- * In Node that sentence has exactly one cause, so it is safe to read. Eight
- * shapes were measured: a foreign `Access-Control-Allow-Origin`, no ACAO header
- * at all, `mode: 'no-cors'`, `mode: 'cors'`, a POST, a username with no
- * password, a typed credentialed URL, and a credentialed redirect. Only the
- * last one produced the sentence — Node's `fetch` does not enforce CORS
- * responses at all. So a site with no browser anywhere in the picture was never
- * refused a cross-origin request, and reading CORS here is P1-35's class: a
- * claim that does not describe what happened, in a customer document that says
- * `is DOWN`.
+ *   check     Redirected to an address with credentials in it — no request was sent
+ *   headers   Request cannot be constructed from a URL that includes credentials: <url>
  *
- * Saying so is a redirect claim, and it holds: P1-45 refuses a credentialed URL
- * the *user* typed on every command before any request is made (measured — exit
- * 1, `URL with a username and a password`), so an address with credentials can
- * only have arrived in a `Location` header.
+ * Neither shape is worth matching on its own; both are read here, and both answer
+ * with the one sentence below. Which address it was is not lost: `headers` shows
+ * the hop in its own `Final:` line, without the credentials, which is the address
+ * a bureau needs in order to go and fix the customer's proxy.
+ *
+ * The two are read from `undici`'s own source, not from a guess about English:
+ *
+ *   - `lib/web/fetch/request.js:122` — `if (parsedURL.username ||
+ *     parsedURL.password) throw new TypeError('Request cannot be constructed
+ *     from a URL that includes credentials: …')`
+ *   - `lib/web/fetch/index.js:1257` — `if (request.mode === 'cors' &&
+ *     (locationURL.username || locationURL.password) && !sameOrigin(...))` →
+ *     `makeNetworkError('cross origin not allowed for request mode "cors"')`
+ *
+ * Both are gated on the *same* condition — a username or a password in the
+ * address — so the pair is one fact twice, inside `undici` as well as here.
+ *
+ * Two things make reading them safe. In Node the CORS sentence has exactly one
+ * cause: eight shapes were measured (a foreign `Access-Control-Allow-Origin`, no
+ * ACAO header at all, `mode: 'no-cors'`, `mode: 'cors'`, a POST, a username with
+ * no password, a typed credentialed URL, a credentialed redirect), and only the
+ * last produced it — Node's `fetch` does not enforce CORS responses at all. So a
+ * site with no browser anywhere in the picture was never refused a cross-origin
+ * request, and reading CORS is P1-35's class: a claim that does not describe what
+ * happened, in a customer document that says `is DOWN`.
+ *
+ * And saying it is a *redirect* claim, because the other half is blocked before
+ * any request exists. P1-45 refuses a credentialed URL the user typed on every
+ * command that takes one; measured 2026-09-28 for `check`, `headers`, `watch` and
+ * `unwatch`, all four print `URL with a username and a password: …` and send
+ * nothing. So an address with credentials can only have arrived in a `Location`
+ * header, whichever of the two sentences `undici` picks for it. That sentence is a
+ * different fact with a different owner — the user's own mistake, caught before a
+ * password reaches the state file — and P1-45 locks it, untouched.
  */
-const CREDENTIALS_IN_URL = 'cross origin not allowed for request mode "cors"';
+const CREDENTIALS_REFUSALS = [
+  'cross origin not allowed for request mode "cors"',
+  // The tail of `Request cannot be constructed from a URL that includes
+  // credentials: <url>`, so a change to the words in front of it costs the match
+  // on the part that carries the meaning. Measured verbatim on both runtimes.
+  'URL that includes credentials',
+];
 
-/** The sentence we publish instead of `undici`'s, and why it is the true one. */
+/** The one sentence we publish instead of `undici`'s, for both of its refusals. */
 const CREDENTIALS_IN_URL_NOTE = 'Redirected to an address with credentials in it — no request was sent';
+
+/** Did the request never leave, because the address it was aimed at had credentials in it? */
+function refusedForCredentials(message) {
+  return CREDENTIALS_REFUSALS.some(phrase => message.includes(phrase));
+}
 
 export function describeFetchError(error) {
   const cause = error?.cause;
@@ -2689,14 +2727,20 @@ export function describeFetchError(error) {
     return { errorType: 'dns_error', error: scrubUrlCredentials(message || 'Host could not be resolved') };
   }
 
-  // The request was never sent because the address had credentials in it, and
-  // the sentence that says so is in a browser's vocabulary. The verdict stays
-  // where it is — the site is genuinely unmeasurable, so it is still DOWN, still
-  // exit 2, still `network_error` — and that last part is load-bearing rather
-  // than incidental: `canReadCertificate()` spends the certificate reading on a
-  // `network_error`, which is exactly what a customer whose proxy put HTTP Basic
-  // into a `Location` header still wants to know about the site in front of it.
-  if (message.includes(CREDENTIALS_IN_URL)) {
+  // The request was never sent because the address it was aimed at had
+  // credentials in it, and `undici` has two sentences for that fact — one per way
+  // of reaching the address. Both are read, so `check` (which follows redirects)
+  // and `headers` (which hands the address to `fetch` itself) cannot end up
+  // describing the same site in two different words. The sentence that used to be
+  // in a browser's vocabulary is the one that reached the most surfaces.
+  //
+  // The verdict stays where it is — the site is genuinely unmeasurable, so it is
+  // still DOWN, still exit 2, still `network_error` — and that last part is
+  // load-bearing rather than incidental: `canReadCertificate()` spends the
+  // certificate reading on a `network_error`, which is exactly what a customer
+  // whose proxy put HTTP Basic into a `Location` header still wants to know about
+  // the site in front of it.
+  if (refusedForCredentials(message)) {
     return { errorType: 'network_error', error: CREDENTIALS_IN_URL_NOTE };
   }
 

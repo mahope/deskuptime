@@ -178,8 +178,14 @@ test('et redirect med en adgangskode i er ikke en grund til at rydde dommen', as
   assert.equal(copies(out.stderr), 0, `adgangskoden nåede stderr:\n${out.stderr}`);
 
   // The reason is still named, and the hop is still shown: a bureau must be able
-  // to see that the site sent the client somewhere else.
-  assert.match(out.stdout, /includes credentials/, 'grunden for fejlen skal stadig stå i linjen');
+  // to see that the site sent the client somewhere else, and why we stopped
+  // there. The sentence is the one `check` publishes for the same site (P1-74);
+  // before that, `headers` reached the fact by a different route — `fetch`
+  // refuses a credentialed address in the `Request` constructor — and the two
+  // commands published two descriptions of one failure. `undici`'s own sentence
+  // is still scrubbed by the unit test above, so a shape that ever reached the
+  // terminal again could not bring the password with it.
+  assert.match(out.stdout, /credentials in it — no request was sent/, 'grunden for fejlen skal stadig stå i linjen');
   assert.match(out.stdout, new RegExp(`Final: ${finalUrl.replace(/[.]/g, '\\.')} \\(n/a\\)`), `hoppet skal stadig kunne læses:\n${out.stdout}`);
 
   const json = await runCli(['headers', url, '--json', '--timeout', REQUEST_TIMEOUT], env);

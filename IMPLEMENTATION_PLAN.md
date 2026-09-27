@@ -1,3 +1,76 @@
+## Status fra denne iteration (91, P1-74 — de to kommandoer beskrev ét site med to sætninger, og målingen fandt hvorfor i `undici`s kildekode)
+
+**Målt først, nul kode ændret.** Ren `main`, rigtig CLI, to rigtige lokale servere
+(den ene svarer 200 hele vejen, den anden sender `Location:
+http://demo:sup3rsecret@…/staging`), intet stubbet:
+
+```
+check     exit 2   ⚠️  Error:  Redirected to an address with credentials in it — no request was sent
+headers   exit 2   ⚠️  Error: Request cannot be constructed from a URL that includes credentials: http://127.0.0.1:57240/staging
+```
+
+P1-72 havde gjort `check` sand, men efterladt `headers` med sin *egen* sande
+sætning — så et bureau der kører begge kommandoer på ét kundesite fik to
+beskrivelser af én fejl og ingen mulighed for at se at de var samme fejl. Hvilken
+sætning man fik, afhang ikke af hvad der var galt, men af **hvordan adressen var
+nået**: `check` følger redirects, `headers` går kæden i hån.
+
+**Målingen gik dybere end opgaven bad om, fordi «to sætninger» er et symptom.**
+Ni former blev kørt på begge runtimes (Node 22.23.2 og 26.7.0) — typet URL med
+adgangskode, typet med kun brugernavn, `new Request`, typet med `redirect:
+'follow'`, typet med `redirect: 'manual'`, 302 med brugernavn+adgangskode i begge
+redirect-måder, 302 med kun brugernavn, og to hop hvor det **andet** var
+credentialed. Præcis to former, og ingen tredje:
+
+```
+error.message   "Request cannot be constructed from a URL that includes credentials: <url>"   (ingen cause)
+cause.message   "cross origin not allowed for request mode \"cors\""                          (error.message = "fetch failed")
+```
+
+**Og de to er dømt af samme betingelse i `undici`s egen kildekode:**
+`web/fetch/request.js:122` — `if (parsedURL.username || parsedURL.password) throw
+new TypeError('Request cannot be constructed from a URL that includes credentials:
+…')` — og `web/fetch/index.js:1257` — `if (request.mode === 'cors' &&
+(locationURL.username || locationURL.password) && !sameOrigin(…))` →
+`makeNetworkError('cross origin not allowed for request mode "cors"')`. Én
+kendsgerning to gange, først i `undici`, så i os. Det er derfor begge læses, og
+derfor er svaret ét.
+
+**At kalde det et redirect er ikke en antagelse.** P1-45's afvisning af *typede*
+credentialed URL'er blev målt i denne iteration på alle fire kommandoer der
+tager en — `check`, `headers`, `watch`, `unwatch` giver alle fire `URL with a
+username and a password: …` og sender intet. Så en adresse med credentials kan
+kun være kommet ind i et `Location`-header, uanset hvilken sætning `undici`
+vælger. P1-45's egen sætning er en **anden** kendsgerning med en anden ejer
+(brugerens fejl, fanget før et password når state-filen) og står urørt.
+
+**Rettelsen er ét sted:** `CREDENTIALS_REFUSALS` (de to målte sætninger) →
+`refusedForCredentials()` → **én** sætning fra `describeFetchError` på begge
+former. Matchet er på `'URL that includes credentials'`, halen af `undici`'s
+sætning, så en ændring i ordene foran koster kun matchet på den del der bærer
+betydningen. `headers` mister ikke oplysningen om *hvilken* adresse det var: den
+har sin egen `Final:`-linje med præcis det samme hop (målt uændret), og
+adgangskoden nåede ingen steder (målt: 0 forekomster i hele output).
+
+**Verificeret:** 1 ny test i `test/credentialsentence.test.js` → **654/654** (653 +
+1). Låsten på den målte kunderejse sammenligner nu de to kommandoers **sætninger
+som lige strenge**, ikke to regexer der tilfældigvis passerer i dag, og en test
+låser at `undici`'s to former er `deepEqual` som svar. Tre målte mutationer døde
+alle: kun CORS-formen læst (3 fejl), kun constructor-formen læst (4), ingen af dem
+læst (5 — præcis tilstanden før denne opgave). Audit 0/0, `matrix --check` exit 0,
+`node --check` ren på alle JS, `git diff --check` rent. Ingen ny påstand, intet
+krav ændret, ingen deploy-note (CLI-repoet deployer ikke). `ceo/one-credentials-sentence`.
+
+To låste assertions måtte ændres med vilje, fordi de låste *afvigelsen*:
+`credentialsentence.test.js` sagde at de to kommandoer måtte have hver sin
+sætning, og `redirectcredentials.test.js:182` krævede at `headers` skrev
+`includes credentials`. Begge sagde i virkeligheden det samme — at grunden skal
+stå i linjen — så det er den egenskab der er låst nu, hårdere.
+
+**Køen:** ❓ 1–3, ❓ 14 og ❓ 16 afventer Mads. Køen er ellers tømt for målbare
+opgaver; næste iteration må derfor enten finde en ny målt opgave eller svare på en
+af ❓-punkterne.
+
 ## Status fra denne iteration (90, P1-73 — `dns_error`-grenen læste sin sætning fra et sted, koden ikke kom fra)
 
 **Målt først, nul kode ændret.** P1-73 bad om ét spørgsmål besvaret målt: kan en
@@ -6010,28 +6083,69 @@ tilbage (3), `cause`-præcedensen væk (2), reserveringen væk (1).
 - 653/653 (649 + 4), audit 0/0, `matrix --check` exit 0, `node --check` ren,
   `git diff --check` rent. ✅
 
-### P1-74 — Ny — Én kendsgerning, to sætninger: `describeFetchError` ved ikke hvilket credentials-problem det er
+### P1-74 — FÆRDIG 2026-09-28 (`ceo/one-credentials-sentence`) — Én kendsgerning, to sætninger: `describeFetchError` vidste ikke hvilket credentials-problem det var
 
-**Målt 2026-09-27 under P1-72, nul kode ændret.** Efter P1-72 er der to steder i
-programmet, der siger «adressen havde credentials i, så requesten blev ikke sendt»:
+**Målt 2026-09-28 på ren `main`, nul kode ændret, rigtig CLI og to rigtige lokale
+servere.** Den ene svarer 200 hele vejen, den anden sender `Location:
+http://demo:sup3rsecret@…/staging`:
 
 ```
-check     Redirected to an address with credentials in it — no request was sent
-headers   Request cannot be constructed from a URL that includes credentials: <url>
+check     exit 2   ⚠️  Error:  Redirected to an address with credentials in it — no request was sent
+headers   exit 2   ⚠️  Error: Request cannot be constructed from a URL that includes credentials: http://127.0.0.1:57240/staging
 ```
 
-Det er **ikke** en modsigelse — de er hver især sande, og de vedrør hver sin flade.
-Men det er to sætninger om én kendsgerning, og de er skrevet på to forskellige steder:
-den nye i `describeFetchError`, den gamle i `undici`s egen. Det er præcis det mønster,
-P1-32/P1-33/P1-45/P1-71 blev skrevet for at slå ihjel: en kendsgerning med to ejere.
+To sætninger om **én** kendsgerning, og hvilken af dem man fik, var ikke afhængig
+af hvad der var galt — men af **hvordan adressen var nået**. Det er den målte
+klasse P1-32/P1-33/P1-45/P1-71 blev skrevet for at slå ihjel.
 
-**Mulige rettelser at måle:** (a) `describeFetchError` får ét begreb for det og ét
-udtryk, og `headers` bruger samme sætning plus sit eget `Final:`-hop som viser
-*hvilken* adresse det var; (b) ejerne samles i én funktion, så begge flader spørger
-den samme og ingen af dem kan glide fra hinanden. **Acceptkriterium:** de to
-kommandoers fejl-sætninger om credentials skal udledes af den samme kode, en test skal
-låse at de to ikke kan glide, og P1-45's afvisnings-sætning ved *typede* URL'er skal
-stå uændret (den er en anden kendsgerning: brugerens fejl, ikke sidens). Mål først.
+**Målingen fandt også *hvorfor*, i `undici`s egen kildekode — ikke i dens
+engelsk.** Ni former kørt på Node 22.23.2 og 26.7.0: typet URL med adgangskode,
+typet URL med kun brugernavn, `new Request`, typet med `redirect: 'follow'`, typet
+med `redirect: 'manual'`, 302 med brugernavn+adgangskode (`follow` og `manual`),
+302 med kun brugernavn, og to hop hvor det **andet** var credentialed. Præcis to
+former:
+
+```
+error.message     "Request cannot be constructed from a URL that includes credentials: <url>"   (ingen cause)
+cause.message     "cross origin not allowed for request mode \"cors\""                          (error.message = "fetch failed")
+```
+
+Og begge er dømt af **samme betingelse i kilden**: `web/fetch/request.js:122`
+(`if (parsedURL.username || parsedURL.password) throw …`) og
+`web/fetch/index.js:1257` (`if (request.mode === 'cors' && (locationURL.username
+|| locationURL.password) && !sameOrigin(…))`). Én kendsgerning to gange — først i
+`undici`, så i os. Derfor læses begge og derfor er svaret ét.
+
+**At kalde det et redirect er ikke en antagelse, og det er målt i denne
+iteration.** P1-45 afviser en *typet* credentialed URL på alle fire kommandoer der
+tager en, før nogen request findes — kørt med rigtig CLI: `check`, `headers`,
+`watch`, `unwatch` giver alle fire `URL with a username and a password: …` og
+sender intet. En adresse med credentials kan altså kun være kommet ind i et
+`Location`-header, uanset hvilken af `undici`'s to sætninger der vælger. P1-45's
+sætning ved typede URL'er er en **anden** kendsgerning med en anden ejer
+(brugerens egen fejl, fanget før et password når state-filen) og står urørt.
+
+**Rettelsen er ét sted, ikke to patches:** `CREDENTIALS_REFUSALS` er de to målte
+sætninger, `refusedForCredentials()` spørger dem, og `describeFetchError` svarer
+med **én** sætning på begge former. Matchet er på `'URL that includes
+credentials'` — halen af `undici`'s sætning, så en ændring i ordene foran koster
+kun matchet på den del, der bærer betydningen.
+
+**Ingen oplysning gik tabt ved at `headers` holdt op med at sige `undici`'s egen
+sætning:** den viste adressen, og `headers` har sin egen `Final:`-linje med præcis
+det samme hop — målt til at stå uændret (`Final: http://127.0.0.1:57755/staging
+(n/a)`). Bureauet kan stadig se hvilket hop det var og gå ned og fikse kundens
+proxy; den adgangskode er der ingen steder (målt: 0 forekomster i hele output).
+
+- Dommen, exit-koden, `errorType`, JSON-formen, `finalUrl`, `steps[]`: urørt. ✅
+- **654/654** (653 + 1). Tre målte mutationer døde alle: kun CORS-formen læst (3
+  fejl), kun constructor-formen læst (4), ingen af dem læst (5) — den sidste er
+  præcis tilstanden før denne opgave. Audit 0/0, `matrix --check` exit 0,
+  `node --check` ren på alle JS, `git diff --check` rent. ✅
+- **Én fejl fundet i mine egne tests** og rettet i testene: låsten sammenlignede
+  de to **paddede** linjer (`⚠️  Error: ` mod `⚠️  Error:  `), som er
+  kolonnejustering til site-headeren — en displaydetalje, ikke sætningen. Sætningen
+  var ens hele vejen. Hjælperen læser nu sætningen, ikke etiketten.
 
 ### P1-75 — FÆRDIG 2026-09-28 (`ceo/node-gate`, `a0e5511`) — Gaten skifter Node frem for at blive rød på maskinens
 
