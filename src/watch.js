@@ -549,6 +549,15 @@ export async function runPass(state, opts = {}) {
       });
       if (rotation.compared && rotation.rotated) {
         events.push(event('cert_rotated', `SSL certificate replaced — ${rotation.note}`));
+        // When the certificate last changed, and whether or not the alert could be
+        // delivered. The line above is the alarm; this is the *fact*, and it is
+        // the only copy that survives: the pass overwrites `lastCertFingerprint`
+        // with the new identity, so measured 2026-09-27, a state file 1 d after a
+        // domain changed owner was byte-for-byte indistinguishable from one
+        // where nothing had ever happened — and the client report, the document a
+        // bureau forwards, said `UP (200) | 100%` about both. Same rule as the
+        // page (`lastContentChangedAt`, P1-56).
+        entry.lastCertRotatedAt = measuredAt;
       }
       entry.lastCertFingerprint = identity.fingerprint;
       entry.lastCertSeenAt = measuredAt;

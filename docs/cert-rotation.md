@@ -50,8 +50,41 @@ afleveret tilbage mellem to pass har samme certifikat i begge ender.
 
 ## Udenfor scope
 
-- **Kundenrapporten** (`report`) får ingen kolonne. Den følger i en senere
-  iteration; køen har den som målt fund.
 - **Domæne-udløb** (missionens fokus) er ikke dette. Det er et andet sæt data.
 - **Fingerprints i rapporten** — et 64-tegns hash i et kundedokument er støj.
   Rapporten skal sige *at* det roterede, ikke hvad det hashed til.
+
+## Kundenrapporten (P1-61, 2026-09-27)
+
+Målt først, nul kode ændret: rigtig CLI, to state-filer skrevet af rigtige
+passer over et site der svarer 200 i begge, den eneste forskel det certifikat
+der svarede den anden dag.
+
+```
+uændret certifikat         ->  | kunde.dk | UP (200) | 100% | … | 88 d | …
+certifikatet byttet i dag  ->  | kunde.dk | UP (200) | 100% | … | 89 d | …
+```
+
+Ingen linje, ingen tælling, intet JSON-felt. Og nedtællingen er ikke engang et
+signal: et nyudstedt certifikat har typisk *flere* dage tilbage end det det
+erstattede, så et hijack læses som det sundeste af de to.
+
+Årsagen lå i skrivevejen, ikke læsevejen. `runPass` overskriver
+`lastCertFingerprint` med den nye identitet i det pass der så rotationen, så
+state-filen dagen efter kunne ikke kende de to tilfælde fra hinanden. Præcis
+som siden: `lastContentChangedAt` (P1-56) og nu `lastCertRotatedAt`, med
+`readCertRotationState` som den ene ejer.
+
+Rettelsen er additiv på alle flader: `summary.certRotated`, fire additive
+felter pr. site (`certRotated`, `certRotatedAt`, `certRotatedAgeDays`,
+`certRotatedNote`), tællingen i resumelinjen og én navngiven linje under
+tabellen med alderen. **Ingen status, exit-kode, uptime-tal eller SSL-celle
+ændrer sig** — et udstedt certifikat er en kendsgerning, ikke en dom, og de
+fleste værter udsteder nyt hver 90. dag. Ordet er derfor *replaced* og ikke
+*nyt*, *mistet* eller *mistænkeligt*; læseren ved, om sitets certifikat burde
+være skiftet.
+
+Uden for denne iteration: de to terminal-lister (`status`, `watch --status`)
+tier stadig, og et certifikat der flapper mellem to servere skriver
+`lastCertRotatedAt` på hvert pass — samme tæthed som `content_changed` fik
+(P1-47), umålt endnu.
