@@ -256,3 +256,66 @@ lade et certifikat male over vores egen terminal.
 **Listen er stadig ikke en skriver.** Ingen stempel, ingen hændelse, ingen gemt tælling:
 filen er byte for byte den samme efter begge kommandoer. Og der kommer ingen ny
 hændelsestype — den betalte kanal hører til passet, som før.
+
+## Den betalte kanal, anden gang (P1-66, 2026-09-27)
+
+P1-65 efterlod den **sidste** flade åben, og den er den der sælges. Målt først, nul
+kode ændret: rigtig `runPass`, rigtig state-fil, rigtig HTTP-modtager og det rigtige
+`sendWebhook`. To pass over et site der svarer 200 i begge, den eneste forskel
+hvilket certifikat — og hvilken udsteder — der svarede anden gang:
+
+```
+cert_rotated  SSL certificate replaced — certificate rotated since the certificate seen today
+state.json    sslIssuer=Rogue Cert BV  certIssuerBefore=Ganske Cloud A/S
+```
+
+Kundenapporten navngav begge autoriteter (P1-64), de to terminal-lister gjorde det
+samme (P1-65), og kanalen — den `POST` til kundens Slack, Discord eller Teams og
+desktop-notificationen bag den — sagde «certifikatet blev udskiftet» og stoppede.
+Nedtællingen taler imod opmærksomhed: et nyudstedt certifikat har typisk *flere*
+dage tilbage end det det erstattede, så et domæne i nye hænder ankommer i kanalen
+som det sundeste af de to.
+
+Ejeren var allerede skrevet. `readCertRotationAlert()` får nu udstederens **egen**
+sætning fra `readCertIssuerState()` — samme ejer kundenapporten og begge lister
+spørger — og placerer den som sit eget led efter rotationens:
+
+```
+SSL certificate replaced — certificate rotated since the certificate seen today · 🏢 certificate answers from a different issuer today (Ganske Cloud A/S → Rogue Cert BV)
+```
+
+**Ingen ny hændelsestype, intet nyt payload-felt, ingen ny state.** Den mindste
+rettelse der findes: en kanal der læser `message` ser det samme, en adapter der
+læser `type` og felterne ser præcis som før, og outboxens 500-tegns grænse er
+målt til ikke at bide (sætningen er ~170 tegn).
+
+**To kendsgerninger, to sætninger, og derfor er de to led.** En fornyelse fra samme
+udsteder roterer certifikatet og siger intet om udstederen; det er den normale gang og
+den må stadig læse `SSL certificate replaced — …` **byte for byte uændret**, ellers
+ville hver 90-dages fornyelse i enhver kanal blive en alarm om en udsteder der ikke
+skiftede. Rækkefølgen i sætningen er kendsgerning før leveringsnote: det holdte
+rotations-tal (P1-63) står altid sidst.
+
+**Rækkefølgen i `runPass` er bærende, ikke pæn.** Sammenligningen af udsteder står
+før rotationsgrinen og som dens søskende — ikke inde i den — fordi alarmen skal kunne
+spørge ejeren om netop den ændring passet målte, og det kan den kun, hvis
+`sslIssuer` er skrevet *før* spørgsmålet stilles. Målt på rettelsens første kørsel:
+`(Ganske Cloud A/S → Ganske Cloud A/S)` — kanalen sagde til en kunde, at
+udstederen havde skiftet til sig selv. Derfor står skrivningen af `sslIssuer` før
+læsningen, og derfor er der en test på «den nye er den nuværende».
+
+**Ejeren blev strammet undervejs, og det gælder alle fire flader.** `readCertIssuerState`
+regnede et stempel som et skift, når bare `certIssuerBefore` og `certIssuerChangedAt`
+var til stede — også når de to navne var *det samme*. Passet kan ikke skrive sådan en
+fil, men en håndskrevet, flettet eller gendannet kan, og så sagde rapporten og begge
+lister `answers from a different issuer 2 d ago (Ganske Cloud A/S → Ganske Cloud A/S)`.
+En autoritet der skifter til sig selv har ikke skiftet, så `changed` kræver nu at de to
+navne er forskellige.
+
+**Dæmpningen rører den ikke, og det er en ærlig pris.** En rotation der holdes tilbage
+holder kun *rotationen* tilbage; den næste sendte alarm bærer stadig begge navne, for
+ellers ville et hijack der lander i den stille time blive meldt én rotation for sent
+og uden autoriteten. Og en autoritet der skifter uden at certifikatet roterer sig
+hijacker intet alene — et CDN midt i en udrulding kan gøre det uskyldigt — så den
+gemmer kendsgerningen til rapporten og de to lister og rejser ingen hændelse. At opfinde
+en hændelsestype for den ville double antallet af POSTs på præcis den slags site.

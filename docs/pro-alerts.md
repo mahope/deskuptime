@@ -132,6 +132,27 @@ hændelser. Sætningen bærer alderen på den gemte læsning, fordi "samme
 certifikat" er sandt om to læsninger og siger intet om strækningen imellem dem.
 Spec: `docs/cert-rotation.md`.
 
+**Når udstederen også er skiftet, står det i samme sætning.** Er det nye
+certifikat udstedt af en **anden** autoritet end den kunden havde, kommer der et
+eget led til `message` med begge navne — de samme ord som i kundenapporten og på
+de to lister, fordi de har én ejer:
+
+```
+SSL certificate replaced — certificate rotated since the certificate seen today · 🏢 certificate answers from a different issuer today (Ganske Cloud A/S → Rogue Cert BV)
+```
+
+Det er de to hyppigste normale og onormale gange side om side: en fornyelse fra
+**samme** udsteder siger *kun* `SSL certificate replaced — …`, byte for byte som før,
+fordi det er 90 dages fornyelser der er det normale. En anden autoritet er derimod
+det eneste signal der skelner en fornyelse fra et navn der er kommet i nye hænder,
+og nedtællingen taler imod opmærksomhed — et nyudstedt certifikat har typisk
+*flere* dage tilbage end det det erstattede, så et domæne i nye hænder ankommer
+som det sundeste af de to. Ordet er *different issuer* og aldrig *rogue*: et site
+der flytter vært, eller en CA der overtages, giver det samme billede helt uskyldigt,
+så afgørelsen er kundens. **Der kommer intet nyt felt og ingen ny type til denne
+alarm** — en adapter skal derfor ikke vente på et `issuer`-felt; den skal vise
+`message`, og det er den eneste ændring en adapter skal håndtere.
+
 **`redirect` — oplysningen, ikke en fejl.** `type: "redirect"` betyder, at svaret
 kom fra en **anden vært** end den adresserede: et udløbet kunde-domæne der er blevet
 parkeret, et domæne der er hijacket og peger på en phishing-side, eller en

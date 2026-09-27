@@ -17,7 +17,7 @@ import { readFileSync, writeFileSync, mkdirSync, existsSync, renameSync, unlinkS
 import { dirname, posix, win32 } from 'path';
 import { homedir } from 'os';
 import { createHash, randomUUID } from 'crypto';
-import { assertValidHttpUrls, expiredNote, findUrlKey, isNewerPass, partitionUsableUrls, readCertIdentity, readCertRotation, readCertRotationAlert, readContentChange, readContentChangeAlert, readEntry, readEvent, readRedirectTarget, readSslIssuer, readTransitionAlert, queuedAgeMs, readSslState, STALE_AFTER_DAYS, unusableUrlNote, urlIdentity, withoutCredentials } from './status.js';
+import { assertValidHttpUrls, expiredNote, findUrlKey, isNewerPass, partitionUsableUrls, readCertIdentity, readCertIssuerState, readCertRotation, readCertRotationAlert, readContentChange, readContentChangeAlert, readEntry, readEvent, readRedirectTarget, readSslIssuer, readTransitionAlert, queuedAgeMs, readSslState, STALE_AFTER_DAYS, unusableUrlNote, urlIdentity, withoutCredentials } from './status.js';
 import { recordPass } from './report.js';
 import { formatMs, safeText } from './display.js';
 import { historyFileFrom, pruneHistory, readHistoryFile, recordHistoryPass, saveHistory, historyWriteErrorMessage } from './history.js';
@@ -550,6 +550,45 @@ export async function runPass(state, opts = {}) {
     // identity it belongs to; the comparison is made before it is overwritten.
     const issuer = readSslIssuer(result.ssl);
     if (identity?.fingerprint) {
+      // …and whether the certificate now answers from a *different* authority than
+      // the one the customer had. A routine renewal keeps its issuer, so this is
+      // the difference between "the certificate was replaced" and "something else
+      // vouches for this name now" — and it can only be seen against the issuer of
+      // the pass before, which is why it is stamped here and not derived later.
+      // No earlier issuer means no claim: the first reading establishes the
+      // baseline, exactly as the first certificate reading does.
+      //
+      // The comparison stands on its own rather than riding on the rotation below.
+      // A different authority does mean a different certificate in the real world,
+      // so the two almost always happen together — but a fact that is only written
+      // inside a branch is a fact that silently disappears when a reading takes the
+      // other path, and the price of the comparison is one string.
+      //
+      // It runs *before* the rotation, and as its sibling rather than inside it,
+      // for the same reason it is not inside it: the alert below has to be able to
+      // ask `readCertIssuerState` about the change this very pass measured. Asked
+      // after the stamp is written, that is the only place it can be seen — and the
+      // alert is the one surface where a hijack was silent while the report and both
+      // lists named both authorities (P1-66).
+      if (issuer && entry.sslIssuer && entry.sslIssuer !== issuer) {
+        entry.certIssuerBefore = entry.sslIssuer;
+        entry.certIssuerChangedAt = measuredAt;
+      }
+      // The issuer of the certificate that answered *now* — written on every pass,
+      // so the next one can compare against it and a later reader can name who
+      // issued what the report counts down from. A certificate that reported no
+      // issuer leaves the previous one alone rather than blanking it: an unnamed
+      // certificate is not an unnamed authority, and forgetting the last known
+      // one would destroy the comparison.
+      //
+      // It is written *before* the reading below, not after the whole block, and
+      // that order is the sentence's correctness rather than its tidiness:
+      // `readCertIssuerState` names the change as "before → now", and it reads
+      // `sslIssuer` for the "now". Asked before the write it names the change as
+      // `Ganske Cloud A/S → Ganske Cloud A/S` — measured here, on the fix's own
+      // first run, a channel told a customer the authority had changed to itself.
+      if (issuer) entry.sslIssuer = issuer;
+      const issuerState = readCertIssuerState(entry, { now });
       const rotation = readCertRotation({
         fingerprint: identity.fingerprint,
         baselineFingerprint: entry.lastCertFingerprint,
@@ -567,6 +606,7 @@ export async function runPass(state, opts = {}) {
         // this decides what a customer *hears*, not what is true.
         const alert = readCertRotationAlert({
           rotation,
+          issuerNote: issuerState.note,
           previousAlertedAt: entry.certAlertedAt,
           counted: entry.certRotationsHeld,
           now,
@@ -591,33 +631,9 @@ export async function runPass(state, opts = {}) {
         // where P1-61 put it.
         entry.lastCertRotatedAt = measuredAt;
       }
-      // …and whether the certificate now answers from a *different* authority than
-      // the one the customer had. A routine renewal keeps its issuer, so this is
-      // the difference between "the certificate was replaced" and "something else
-      // vouches for this name now" — and it can only be seen against the issuer of
-      // the pass before, which is why it is stamped here and not derived later.
-      // No earlier issuer means no claim: the first reading establishes the
-      // baseline, exactly as the first certificate reading does.
-      //
-      // The comparison stands on its own rather than riding on the rotation above.
-      // A different authority does mean a different certificate in the real world,
-      // so the two almost always happen together — but a fact that is only written
-      // inside a branch is a fact that silently disappears when a reading takes the
-      // other path, and the price of the comparison is one string.
-      if (issuer && entry.sslIssuer && entry.sslIssuer !== issuer) {
-        entry.certIssuerBefore = entry.sslIssuer;
-        entry.certIssuerChangedAt = measuredAt;
-      }
       entry.lastCertFingerprint = identity.fingerprint;
       entry.lastCertSeenAt = measuredAt;
       if (identity.serial) entry.lastCertSerial = identity.serial;
-      // The issuer of the certificate that answered *now* — written on every pass,
-      // so the next one can compare against it and a later reader can name who
-      // issued what the report counts down from. A certificate that reported no
-      // issuer leaves the previous one alone rather than blanking it: an unnamed
-      // certificate is not an unnamed authority, and forgetting the last known
-      // one would destroy the comparison.
-      if (issuer) entry.sslIssuer = issuer;
     }
 
     if (result.content?.changed === true) {

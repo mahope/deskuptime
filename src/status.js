@@ -1163,6 +1163,14 @@ export function certIssuerChangeNote({ changed = false, ageDays = null, aheadMs 
  * establishes a baseline, so `changed` is `false` for every site whose issuer has
  * never moved.
  *
+ * Nor is it a fact when the two names are the same one. The pass only stamps a
+ * change when the authority it just read differs from the one it had, so a real
+ * state file cannot hold that — but a hand-written, merged or restored one can,
+ * and then every surface named a change to nothing: `🏢 certificate answers from a
+ * different issuer 2 d ago (Ganske Cloud A/S → Ganske Cloud A/S)`. Measured
+ * 2026-09-27 while giving the same sentence to the alert channel, where the
+ * channel told a customer the authority had changed to itself.
+ *
  * @param {object} entry — one `state.urls[...]` entry
  * @param {{now?: Date}} [options]
  * @returns {{issuer: string|null, changed: boolean, changedAt: string|null,
@@ -1175,8 +1183,9 @@ export function readCertIssuerState(entry, { now = new Date() } = {}) {
   const previous = name(value.certIssuerBefore);
   // Both halves are needed for the claim: a stamp with no earlier authority
   // cannot say *what* changed, and an earlier authority with no stamp says only
-  // what the last pass saw. Neither alone is a change.
-  const changed = previous !== null && typeof value.certIssuerChangedAt === 'string' && value.certIssuerChangedAt !== '';
+  // what the last pass saw. Neither alone is a change — and an authority that
+  // changed to itself did not change.
+  const changed = previous !== null && previous !== issuer && typeof value.certIssuerChangedAt === 'string' && value.certIssuerChangedAt !== '';
   const reading = passAge(changed ? value.certIssuerChangedAt : null, now);
   const ageDays = reading.state === PASS_AGE.AGED ? reading.ageDays : null;
   return {
@@ -1225,8 +1234,16 @@ export const CERT_ALERT_MIN_GAP_MS = 60 * 60 * 1000;
  * A clock that jumped backwards does not suppress anything: this reads elapsed
  * time, and a negative span is the same clock problem the pass already names
  * (`clockAhead`), not evidence about a certificate.
+ *
+ * What the alert *says* is the caller's to hand over, never this one's to invent:
+ * the rotation's wording from `readCertRotation`, and — when the authority
+ * changed too — the issuer's own sentence from `readCertIssuerState`, as a
+ * separate clause. Both are facts about the same pass, and neither is derivable
+ * from the other: a routine 90-day renewal rotates the certificate from the same
+ * authority, and a domain that changed hands rotates it from one that is not
+ * the customer's, and only the second sentence tells those apart.
  */
-export function readCertRotationAlert({ rotation, previousAlertedAt = null, counted = 0, now = new Date(), minGapMs = CERT_ALERT_MIN_GAP_MS } = {}) {
+export function readCertRotationAlert({ rotation, issuerNote = '', previousAlertedAt = null, counted = 0, now = new Date(), minGapMs = CERT_ALERT_MIN_GAP_MS } = {}) {
   const last = typeof previousAlertedAt === 'string' ? Date.parse(previousAlertedAt) : Number.NaN;
   const elapsed = now.getTime() - last;
   if (Number.isFinite(elapsed) && elapsed >= 0 && elapsed < minGapMs) return null;
@@ -1234,8 +1251,30 @@ export function readCertRotationAlert({ rotation, previousAlertedAt = null, coun
   // The sentence is the rotation's own, so this cannot announce a rotation with
   // another rotation's wording.
   const said = typeof rotation?.note === 'string' && rotation.note !== '' ? rotation.note : 'certificate replaced';
+  // And the authority's sentence is the authority's own — `readCertIssuerState`'s,
+  // asked of the same entry the report and the two lists ask, so the words in a
+  // customer's channel are the words in the document the bureau forwards. It
+  // rides here as its own clause rather than inside `said`, because it is a
+  // different fact: a renewal from the same authority rotates the certificate and
+  // says nothing about who vouches for the name, and a different authority is
+  // exactly the case where every other number on the line still reads healthy.
+  //
+  // Measured 2026-09-27, real passes and a real receiver — a site whose
+  // certificate was replaced by one from another authority:
+  //
+  //   cert_rotated  SSL certificate replaced — certificate rotated since the
+  //                 certificate seen today
+  //   state.json    sslIssuer=Rogue Cert BV  certIssuerBefore=Ganske Cloud A/S
+  //
+  // The report named both authorities and both lists did, and the one channel a
+  // *paying* customer reads said "the certificate was replaced" and stopped — so
+  // a domain that changed hands read as routine maintenance in the channel where
+  // a bureau is watching. An empty string is not a claim and adds nothing; the
+  // caller passes the owner's note or nothing at all. Trimmed too, so a caller
+  // that hands over whitespace cannot leave a separator standing on its own.
+  const issuer = typeof issuerNote === 'string' ? issuerNote.trim() : '';
   return {
-    message: `SSL certificate replaced — ${said}${held > 0 ? ` (${held} earlier rotation${held === 1 ? '' : 's'} since the last alert, not sent)` : ''}`,
+    message: `SSL certificate replaced — ${said}${issuer ? ` · ${issuer}` : ''}${held > 0 ? ` (${held} earlier rotation${held === 1 ? '' : 's'} since the last alert, not sent)` : ''}`,
     held,
   };
 }

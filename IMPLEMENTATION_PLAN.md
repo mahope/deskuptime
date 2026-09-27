@@ -1,3 +1,94 @@
+## Status fra denne iteration (82, P1-66 — den betalte kanal sagde «certifikatet blev udskiftet» om et domæne der var kommet i nye hænder)
+
+**Hvorfor denne flade:** ❓ 1–3 og ❓ 14 er stadig ubesvarede, så iterationen tog
+P1-65's første uafsluttede fund, som P1-64 og P1-65 begge navngav: `cert_rotated` —
+`POST'en` til kundens Slack/Discord/Teams og desktop-notificationen bag den. Den
+er den eneste flade der er *solgt*, og den var den eneste af de fire der ikke
+nævnte udstederen.
+
+**Målt først, nul kode ændret.** Rigtig `runPass`, rigtig state-fil, rigtig
+HTTP-modtager, det rigtige `sendWebhook`, temp-HOME. To pass over et site der
+svarer 200 i begge; den eneste forskel er hvilket certifikat — og hvilken
+udsteder — der svarede anden gang (`Ganske Cloud A/S` → `Rogue Cert BV`):
+
+```
+cert_rotated  SSL certificate replaced — certificate rotated since the certificate seen today
+state.json    sslIssuer=Rogue Cert BV  certIssuerBefore=Ganske Cloud A/S
+```
+
+State-filen kendte begge navne. Kundenapporten (P1-64) og begge lister (P1-65)
+navngav dem. **Kanalen sagde «udskiftet» og stoppede.** Og nedtællingen taler
+imod opmærksomhed: et nyudstedt certifikat har typisk *flere* dage tilbage end
+det det erstattede, så et hijack ankommer som det sundeste af de to.
+
+**Rettelsen er det mindste der findes: intet nytes, intet gemmes, ingen ny
+hændelsestype, intet nyt payload-felt.** `readCertRotationAlert` får udstederens
+**egen** sætning fra `readCertIssuerState` — samme ejer rapporten og begge lister
+spørger — og placerer den som sit eget led. Efter:
+
+```
+SSL certificate replaced — certificate rotated since the certificate seen today · 🏢 certificate answers from a different issuer today (Ganske Cloud A/S → Rogue Cert BV)
+```
+
+**To kendsgerninger, to led.** En fornyelse fra *samme* udsteder siger fortsat kun
+`SSL certificate replaced — …` **byte for byte uændret** (locked i en test over 7
+former af `issuerNote`): det er 90-dages fornyelser, den normale gang, og hver
+eneste af dem må ikke blive en alarm om en udsteder der ikke skiftede.
+
+**To fejl fundet i min egen rettelse, begge af målingen, ikke af læsningen.**
+
+1. **Rækkefølgen er bærende, ikke pæn.** Første kørsel efter flytningen sendte
+   `(Ganske Cloud A/S → Ganske Cloud A/S)` — kanalen sagde til en kunde at udstederen
+   havde skiftet *til sig selv*. `readCertIssuerState` læser `sslIssuer` som det
+   «nu», og den var endnu ikke skrevet. Skrivningen af `sslIssuer` står derfor før
+   læsningen nu, og der er en test på «den nye er den nuværende» — låst på
+   *rækkefølgen i kilden*, ikke bare på resultatet.
+2. **Ejeren regnede et skift som et skift, når de to navne var det samme.**
+   `changed` krævede bare `certIssuerBefore` + `certIssuerChangedAt`. Passet kan
+   ikke skrive sådan en fil, men en håndskrevet, flettet eller gendannet kan — og
+   så sagde rapporten og begge lister `answers from a different issuer 2 d ago
+   (A → A)`. Det er rettet i `readCertIssuerState`, så det gælder **alle fire
+   flader**, ikke kun alarmen.
+
+**Dæmpningen rører den ikke, og det er en ærlig pris.** En rotation der holdes
+tilbage holder kun *rotationen* tilbage; næste sendte alarm bærer stadig begge
+navne, ellers ville et hijack i den stille time blive meldt én rotation for sent og
+uden autoriteten. Og en autoritet der skifter uden at certifikatet roterer sig
+hijacker intet alene (et CDN midt i en udrulding gør det uskyldigt), så den gemmer
+kendsgerningen til rapporten og listerne og rejser **ingen** hændelse — en ny type
+ville double POSTs på præcis den slags site.
+
+**Test (14 nye i `test/certissueralert.test.js`, auto i `npm test`):** de 7 former
+af en manglende/ugyldig `issuerNote` giver den gamle sætning byte for byte,
+fornyelse fra samme udsteder tier om udstederen, hijacket nævner begge navne med
+den nye som den nuværende (og *ikke* som sig selv), ejerskabslåsen (2 forekomster
+af sætningen i `status.js`, 0 i `watch.js`/`report.js`/`cli.js`,og at passen
+spørger ejeren), ur-skævt stempel, ulæseligt stempel, de to halve påstande, navnløs
+autoritet, fem rigtige pass (baseline → uændret → fornyelse → autoritetsskift uden
+rotation → senere rotation der stadig navngiver, state-filen læst fra disk efter
+hvert), autoritetsskift uden rotation der gemmer faktum men ikke rejser hændelse,
+dæmpningen med begge navne på den sendte alarm og rækkefølgen kendsgerning-før-note,
+payload-kontrakten uændret i 10 nøgler + outbox-rundtur på den lange sætning, og
+et fjendtligt autoritetsnavn med `ESC[2J` der flades i den trykte linje.
+
+**Resultat: 611/611 grøn** (597 + 14), audit 0/0, `node --check` på alle JS og
+MJS, `matrix --check` exit 0, `git diff --check` rent. **Node 26.7.0** — maskinens
+`node` i PATH er 22.23.2, som de 20 install/action-tests korrekt afviser med
+«Node.js 24+ is required»; gaten skal derfor køres med
+`PATH="/opt/homebrew/opt/node@26/bin:$PATH"`, ellers er de 20 fejl ikke ens mine.
+`docs/cert-rotation.md` og `docs/pro-alerts.md` er opdaterede — den sidste er den
+kontrakt en adapter skrives imod. **Ingen mutationstest** — over tidsbudgeten,
+samme ærlige notering som P1-47/49/50/51/52/61/62/63/64/65.
+
+**Næste:** ❓ 1–3 og ❓ 14, ellers en målt opgave. Uafslutnet fra denne iteration:
+(1) rotationen tælles pr. time men ikke pr. *antal* (fund fra P1-63) — det er den
+sidste halvdel af samme klasse; (2) `lastCertSerial` er gemt siden P0-3 og læses
+stadig af ingen — `check` viser serienummeret, men ingen gemt flade gør, så
+spørgsmålet «er det samme certifikat» kan ikke stilles af en kunde, der ikke har
+fingreaftrykket; (3) kanalen får **intet struktureret** om udstederen, kun prose i
+`message` — en adapter der vil farve sin besked efter udstederen skal parse' en
+sætning. Under `❓`.
+
 ## Status fra denne iteration (81, P1-65 — de to gratis lister kunne ikke sige hvem der udsteder, så et hijack læs som en fornyelse i de to kommandoer enhver kører)
 
 **Hvorfor denne flade:** P1-64 lod den ligge og navngav den: de to **gratis** lister
@@ -4528,6 +4619,18 @@ for selv. Ingen gemt nøgle er omskrevet, ingen eksisterende adgangsd tilstand
 
 ## ❓ Til Mads
 
+16. **Skal kanalen få et struktureret udsteder-felt på `cert_rotated`?** P1-66 lagde
+    udstederens sætning ind i `message` på den betalte webhook, fordi det er den
+    mindste rettelse og fordi en Slack-/Discord-/Teams-adapter renderer `message`.
+    Det betyder, at en adapter som vil **farve** beskeden efter om autoriteten er
+    skiftet, må parse' en sætning — noget ingen adapter bør gøre. Alternativet er
+    to additive felter, `sslIssuer` og `certIssuerChanged` (pr. samme mønster som
+    `finalUrl`/`offHostRedirect` fra P1-26/27), plus en linje i `docs/pro-alerts.md`
+    og et par felter i `test/webhook.test.js`s kontraktlås. Jeg har **ikke** gjort
+    det, fordi det udvider den betalte kontrakt uden at flere kunder når den værre,
+    og fordi rækkefølgeligheden i `message` allerede virker. Sig til hvis du vil
+    have felterne; det er en time, ikke et projekt.
+
 15. **Må jeg rense din `~/.deskuptime/state.json`?** En fejl i en test, jeg skrev i
     denne iteration, kørte `watch --once` mod den rigtige fil på din maskine, så
     den indeholder passets resultater for de nøgler, den allerede havde — blandt
@@ -4627,6 +4730,7 @@ for selv. Ingen gemt nøgle er omskrevet, ingen eksisterende adgangsd tilstand
 
 - **Iteration 81 (P1-65, målt + fix):** ❓ 1–3 ubesvarede, så fladen var den P1-64 lod ligge: de to **gratis** lister. Ikke en manglende måling men en manglende læsning — state-filen har ført `sslIssuer`/`certIssuerBefore`/`certIssuerChangedAt` siden P1-64, og ingen læste dem. Målt først med rigtig `runPass`, rigtig state-fil, rigtig CLI, temp-HOME: begge lister skrev `🔑 certificate replaced today` og sagde hverken `Ganske Cloud A/S`, `Rogue Cert BV` eller *issuer*; `readEntry` havde nul `issuer`-felter; rapporten over samme fil navngavnede begge. Fix: `readEntry` spørger `readCertIssuerState` og eksponerer `certIssuer` + `certIssuerNote`; begge lister placerer sætningen, gennem `safeText` fordi begge navne er certifikatets egen tekst. Rækken bæder begge sætninger — to kendsgerninger, ikke to formuleringer af én — mens en fornyelse fra samme udsteder tier om udstederen. 12 nye tests → **597/597** (585 + 12); audit 0/0; `node --check`, `matrix --check`, `git diff --check` grønne på Node 26.7.0. **Ingen status, exit-kode, uptime-tal eller SSL-celle flytter sig**, og listerne skriver stadig ikke — låst i en test som læser filen byte for byte. `ceo/cert-issuer-lists`. **Ingen mutationstest** — over tidsbudgeten. **Næste:** ❓ 1–3 og ❓ 14, ellers en målt opgave; bl.a. `cert_rotated`-alarmen, rotation pr. antal og `lastCertSerial`.
 
+- **Iteration 82 (P1-66, målt + fix):** den betalte kanal var den sidste af de fire flader der ikke navngav udstederen — `cert_rotated`, `POST'en` til kundens Slack/Discord/Teams og notificationen bag den. Målt først med rigtig `runPass`, rigtig state-fil, rigtig HTTP-modtager og det rigtige `sendWebhook`: state-filen kendte `Ganske Cloud A/S → Rogue Cert BV`, kundenapporten og begge lister navngav dem, og kanalen sagde `SSL certificate replaced — certificate rotated since the certificate seen today` og stoppede. Fix: `readCertRotationAlert()` får udstederens *egne* ord fra `readCertIssuerState()` som sit eget led — ingen ny hændelsestype, intet nyt payload-felt, ingen ny state, og en fornyelse fra samme udsteder er byte for byte uændret. To fejl fundet i min egen rettelse, begge af målingen: (1) første kørsel sendte `(Ganske Cloud A/S → Ganske Cloud A/S)`, fordi ejeren læser `sslIssuer` som «nu» og den var ikke skrevet endnu — skrivningen står nu før læsningen, låst på rækkefølgen i kilden; (2) `readCertIssuerState` regnede et stempel som et skift, selv når de to navne var ens, så en håndskrevet/flettet/gendannet fil fik `A → A` på alle fire flader — `changed` kræver nu at navnene er forskellige. 14 nye tests → **611/611** (597 + 14); audit 0/0; `node --check`, `matrix --check`, `git diff --check` grønne på **Node 26.7.0**. `docs/cert-rotation.md` + `docs/pro-alerts.md` opdaterede. `ceo/cert-issuer-alert`. **Ingen mutationstest** — over tidsbudgeten. **Næste:** ❓ 1–3 og ❓ 14, ellers en målt opgave; bl.a. rotation pr. *antal* (P1-63) og `lastCertSerial`, gemt siden P0-3 men læst af ingen.
 - **Iteration 80 (P1-64, målt + fix):** sidste spørgsmål i `docs/cert-rotation.md`s egen tabel — *hvem udstedte det?* `readSslIssuer` måler det siden P1-53, kun `check` spurgte, ingen gemte det. Målt først med rigtig `runPass`, rigtig state-fil, rigtig CLI, temp-HOME: rapporten sagde `🔑 certificate replaced` og vidste intet om `Ganske Cloud A/S → Rogue Cert BV` — hverken i tabellen, i en linje, i `--json` eller i state-filen. Fix: `runPass` gemmer `sslIssuer` pr. pass og stempler `certIssuerBefore` + `certIssuerChangedAt`; `readCertIssuerState()` + `certIssuerChangeNote()` i `src/status.js` er ejeren; rapporten får én linje med begge navne, `· 1 from a new certificate authority` i resumelinjen, `summary.certIssuerChanged` og otte additive felter. Sammenligningen står *uden for* rotationsgrenen efter en fejl i min egen test: en kendsgerning kun inde i en branche forsvinder, når en læsning tager den anden vej. 11 nye tests → **585/585** (574 + 11); audit 0/0; `node --check`, `matrix --check`, `git diff --check` grønne på Node 26.7.0. **Ingen status, exit-kode, uptime-tal eller SSL-celle flytter sig** — låst i en test. `ceo/cert-issuer-change`. **Ingen mutationstest** — over tidsbudgeten. **Næste:** ❓ 1–3 og ❓ 14, ellers en målt opgave; bl.a. de to gratis lister, `cert_rotated`-alarmen, rotation pr. antal og `lastCertSerial`.
 
 - **Iteration 79 (P1-63, målt + fix):** P1-60-fund (2): rotationens tæthed. Målt først med rigtig `runPass` over et navn der svarer med to certifikater: `cert_rotated` på 5 af 6 pass = 2 880 POST/døgn/site i den betalte kanal, og dæmpningen af kanalen er det der så skjuler `is DOWN`. Fix: `readCertRotationAlert()` + `CERT_ALERT_MIN_GAP_MS` (1 time) som den nye ejer, samme form som de to andre dæmpninger; efter de samme seks pass 1 alarm. **Kendsgerningen skrives stadig på hvert pass** — det er forskellen på P1-49's tyngede `down`, fordi `lastCertRotatedAt` er det eneste spor der overlever passet (P1-61). 11 nye tests → **574/574**; audit 0/0; `node --check`, `matrix --check`, `git diff --check` grønne på Node 26.7.0. Matrix-claim for webhook-rækken var falsk (nævnte kun transition-reglen) og siger nu begge. `ceo/cert-rotation-density`. **Ingen mutationstest** — over tidsbudgeten (42 min). **Næste:** ❓ 1–3 og ❓ 14, ellers en målt opgave; bl.a. `serialNumber`, gemt siden P0-3 men læst af ingen.
