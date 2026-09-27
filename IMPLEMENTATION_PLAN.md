@@ -1,3 +1,93 @@
+## Status fra denne iteration (73, P1-57 — de to gratis-lister sagde `✅ up (200)` om den hackede side)
+
+**Hvorfor denne flade:** ❓ 1–3 er stadig ubesvarede. P1-56 efterlod fire målte
+fund; dette var nummer 1 og 2, og de ramte **fladerne gratis-brugeren kører**.
+Rapporten (betalt) vidste det efter P1-56, passen vidste det hele tiden — listerne
+vidste intet.
+
+**Målt først, nul kode ændret.** Rigtig CLI, **gratis-maskine** (ingen licens,
+temp-HOME), rigtig state-fil, rigtig lokal side hvis markup blev skrevet om til
+`<title>Free iPhone!!</title>`:
+
+```
+pass            ->  🔄 http://kunde.dk/ content changed (92 → 77 bytes)
+watch --status  ->  ✅ up  http://kunde.dk/ (200) @ 2026-09-27T07:43:09.796Z
+status          ->  ✅ http://kunde.dk/ (200)
+```
+
+**Fundet er det samme som P1-56, en flade lavere.** Ikke en måling, der manglede:
+`content.js` hasher, `runPass` rejste hændelsen, `state.json` holdt
+`lastContentChangedAt` + `lastTitle` + `lastContentLength`. De to lister læste
+ingen af dem. Det er **gratis**-fladerne — den betalte rapport var altså ikke det
+eneste sted, hvor en kunde kan møde et tavst svar, hvilket P1-56's egen note
+forudsatte.
+
+**Rettelsen:** `readEntry` (den ene ejer af, hvad en række må sige) spørger nu
+`readContentChangeState` — samme funktion rapporten bruger — og giver to felter
+tilbage: `contentNote` (sætningen med sin egen `🔄`, alder og titel) og
+`contentSize` (størrelsen). **Sætningen er den samme som rapportens**, ikke en
+tredje sætning; listerne tilføjer kun tegn. Titlen går gennem `safeText`, for
+det er første gang et `<title>` fra et overvåget site når en terminalrække.
+
+**Alderen på størrelsen er den interessante del, og den kom fra målingen.** Første
+forsøg var "hvis `lastContentReadAt` er lig med `lastChecked`", fordi `watch`
+stempler begge med passets tid. Målingen modbeviste det i samme sekund:
+`lastContentReadAt 07:47:03.000Z` mod `lastChecked 07:47:03.292Z` — læsningen er
+**ældre** end passet, så reglen ville skjule størrelsen på netop de sider, der var
+læst. I stedet bærer tallet sin egen alder, spurgt af `passAge` (den ene ejer af
+en registreret tid): `· 92 bytes` i dag, `· 92 bytes, read 2 d ago` for en side der
+voksede over 2 MiB-grænsen, `· 92 bytes, read at an unknown time` for en
+håndskrevet fil. Samme fejltype som P1-21's `contentChecked` og P1-36's
+`sslValidDays`: **en måling uden sin alder.**
+
+**Valgt, og hvorfor:** en ændret side får sætningen *uden* størrelse, fordi en
+størrelse læst før ændringen ikke er størrelsen af det der ændrede sig — samme
+grund som rapportens Content-celle skriver `🔄 changed` **eller** `stable · N
+bytes`. En ulæst side får hverken tal eller sætning: `—` er til celler, en række
+er ikke en tabel.
+
+**Verdikt, exit-kode, uptime-tal, matrix-rækker og al JSON uændret.** En side med
+HTTP 200 er UP, også når indholdet er nogens. De to nye felter er additive på
+`readEntry` (mellemstads-API) — ingen konsument læser dem endnu.
+
+**Test (4 nye, `test/contentchange.test.js`, samme fil som P1-56 og allerede i
+`npm test`):** ejeren på alle fire tilstande plus tre ur-tilstande for læsningen,
+fuld kunderejse gennem den rigtige CLI på en **gratis** maskine med to lister,
+den læste side med sin størrelse, den **springne** side der bærer `read 2 d ago` og
+ikke et nøgent tal, og en `<title>` med escape-sekvens i begge lister.
+
+**Fem mutationer målt.** Første fire døde med 5/5/7 fejl. **Den femte overlevede
+og afslørede en vakuum-test:** at fjerne `safeText` omkring sætningen gav **0
+fejl**, fordi min tidsstempel lå 11 minutter i fremtiden — og en fremtidig
+ændring tager ur-grenen af sætningen, som dropper titlen. Beviset fra den muterede
+kode var `page title: "^[[2JOWNED"` på en række. Rettet: stemplet er en time
+gammelt, og testen hævder nu både at **teksten** overlever (`OWNED-BY-PAGE`) og at
+**kontrolbytene** er væk, så den ikke kan bestå på en række, der aldrig nævner
+titlen.
+
+**To fejl i min egen måling, begge fundet af målingen:** (1) `execFileSync` i samme
+proces som HTTP-fixturen igen blokerede event loopet (første fejl efter at have
+undgået den i P1-56 — samme fælde, samme grund); (2) **en destruktureringsfejl i
+min egen test kørte `watch --once` mod den rigtige `~/.deskuptime/state.json` på
+Mads' maskine** og skrev sit resultat der. Det er min fejl, filen er genskrevet
+med `watch`-passets resultater for de nøgler, den allerede havde, og jeg har ikke
+adgang til at rense den (ekstern mappe nægtet). **Fælden er nu permanent lukket
+i denne fil:** `cli()` i `test/contentchange.test.js` kaster, hvis `HOME` ikke er
+et temp-mappe, så en test aldrig kan nå Mads' state-fil igen. Resten af suiten er
+**ikke** dækket af denne lås — se `❓ 15`.
+
+- **Release-note P1-57:** `deskuptime status` og `deskuptime watch --status` kan nu
+  se forskel på et site der svarer, og et hvis side er blevet skrevet om. Før skrev
+  de to lister `✅ up (200)` om en kunde, hvis hjemmeside var hacket og erstattet
+  af en falsk formular — fordi det **ikke** er et uptime-problem, så alle
+  uptime-tal stod perfekt. Nu står der `🔄 content changed 3 d ago — page title:
+  "Free iPhone!!"` med alder og titel, og en side der er læst og uændret skriver
+  sin størrelse med læsningens alder (`· 92 bytes`, eller `· 92 bytes, read 2 d
+  ago` hvis siden siden har voksset over grænsen, så vi ikke læser den). **Verdikt,
+  exit-kode, uptime-tal og al JSON er uændrede** — en side med HTTP 200 er stadig
+  UP, og en defacement er en note om indholdet, aldrig en dom om sitet. Titlen er
+  tekst fra sitet selv og flades gennem `safeText` som URL'en ved siden af.
+
 ## Status fra denne iteration (72, P1-56 — en side, der blev skjult, stod som `UP (200) | 100 %` i det dokument kunden modtager)
 
 **Hvorfor denne flade:** ❓ 1–3 er stadig ubesvarede. P1-55 lod fire målte
@@ -3907,6 +3997,20 @@ for selv. Ingen gemt nøgle er omskrevet, ingen eksisterende adgangsd tilstand
 
 ## ❓ Til Mads
 
+15. **Må jeg rense din `~/.deskuptime/state.json`?** En fejl i en test, jeg skrev i
+    denne iteration, kørte `watch --once` mod den rigtige fil på din maskine, så
+    den indeholder passets resultater for de nøgler, den allerede havde — blandt
+    andet `http://kunde.dk/`, som er et fixture-navn fra P1-26/27 og ikke en
+    kunde. Jeg har ikke adgang til mappen (den ligger uden for repoet, og
+    læsning/ skrivning er nægtet), så jeg kan ikke selv rense den. Det er
+    *kun* en liste overvågede nøgler med tællere og tidsstempler: **ingen
+    licensnøgle, ingen webhook-URL og ingen kundedata** kom i output. Hvis du vil
+    have den hel: `deskuptime unwatch 'http://kunde.dk/'` (eller slet filen, hvis
+    den kun er test-rester — overvågning af rigtige sites ligger i din egen
+    konfiguration). **Mere vigtigt end oprydningen:** de 32 andre testfiler har
+    stadig ingen lås mod det (P1-58), så det kan ske igen; denne iterations fil er
+    låst.
+
 14. **Skal en flappende site have sin egen alarm?** P1-49 dæmper en flappende
     sides `is DOWN`/`is UP` til én besked pr. art pr. 15 minutter, når den har
     vist fire skift i timen, og prisen er at et rigtigt nedbrud på *den slags
@@ -3989,6 +4093,8 @@ for selv. Ingen gemt nøgle er omskrevet, ingen eksisterende adgangsd tilstand
 - **Iteration 63 (P1-47, målt + fix):** ❓ 1–3 ubesvarede, så målingen gik på den betalte kanals *hyppighed* — den eneste del af alarmeringen ingen måling dækkede. Rigtig CLI, temp-HOME, rigtig lokal side med et token pr. forespørgsel: 3 pass → 3 `content changed`-alarmer, ingen af dem handlingsværdige; hver er en POST + en notifikation, så 2 880/dag ved 30 s. **Fix:** `readContentChangeAlert()` i `src/status.js` (1 time, pr. site, ur-baglæns undertrykker intet, intet kasseres) + brug i `runPass`; matrix-claim og §2 opdateret, så påstanden matcher leveringen. 10 nye tests → **431/431**; audit 0/0; `node --check`, `matrix --check`, `git diff --check` grønne på Node 26.7.0. Én ældre test opdateret (lagt krav på den gamle adfærd) og femte pass efter en time tilføjet, så dens eget formål er stærkere. To fejl i mine egne tests fundet (stub sendte `changed` på baseline; tabt `contentHash`-argument gjorde én test grøn af forkert grund). **Ingen mutationstest** — over tidsbudgeten. `ceo/content-alert-flood`, `54e8f54`.
 
 ## Iterationslog
+
+- **Iteration 73 (P1-57, målt + fix):** ❓ 1–3 ubesvarede, så målingen gik på P1-56's egen fund 1 og 2 — de to terminal-lister. Rigtig CLI, **gratis** maskine (temp-HOME, ingen licens), rigtig lokal side skrevet om til `<title>Free iPhone!!</title>`: `pass -> 🔄 content changed (92 → 77 bytes)`, `watch --status -> ✅ up (200) @ …`, `status -> ✅ (200)`. Samme måling som P1-56, en flade lavere, og på **gratis**-fladerne. **Fix:** `readEntry` spørger nu `readContentChangeState` og giver `contentNote` + `contentSize`; sætningen er rapportens egen, kun tegnene er listernes, og titlen går gennem `safeText` (første gang et `<title>` fra et overvåget site når en terminalrække). **Målingen rettede min egen design-antagelse:** "læsningen og passet er stemplet samme tid" er forkert — `lastContentReadAt 07:47:03.000Z` mod `lastChecked 07:47:03.292Z` — så reglen ville have skjult størrelsen på præcis de sider, der var læst. I stedet bærer tallet sin egen algering, spurgt af `passAge`. 4 nye tests i `test/contentchange.test.js` (allerede i `npm test`) → **518/518** (514 + 4); audit 0/0; `node --check`, `matrix --check`, `git diff --check` grønne på Node 26.7.0. **Fem mutationer: fire døde (5/5/7/1 fejl), den femte overlevede** — `safeText` omkring sætningen fjernet gav 0 fejl, fordi mit stempel lå i fremtiden og sætningen så tog ur-grenen uden titel; beviset fra den muterede kode var `page title: "^[[2JOWNED"`. Testen hævder nu både at teksten overlever og at kontrolbytene er væk. **To målefejl i min egen måling:** `execFileSync` i samme proces som HTTP-fixturen (igen), og en **destruktureringsfejl i min egen test, som kørte `watch --once` mod den rigtige `~/.deskuptime/state.json` på Mads' maskine** og skrev resultatet der (jeg har ikke adgang til at rense filen; ingen licensnøgle i output). Fælden er lukket permanent i denne fil — `cli()` kaster på en ikke-temp `HOME` — og **P1-58 er lagt i køen for de 32 andre testfiler**, der stadig ingen lås har. `ceo/content-in-lists`, `b3fc25f`, fast-forward-merget til `main` og pushet 2026-09-27. **Næste:** P1-58 (målt, lille) eller ❓ 1–3 / ❓ 14, ellers en målt opgave. **Uafsluttede fund fra denne måling:** (1) matrix-rækken `terminal-alerts` siger "content change" — nu sand på alle tre terminalflader; (2) `check` skriver stadig `— Content: 77 bytes` uden at sige hvornår læsningen skete, selv om `contentReadAt` kan svare på det.
 
 - **Iteration 67 (P1-51, målt + fix):** ❓ 1–3 ubesvarede, så målingen gik på det sidste lag i det betalte produkt, ingen måling havde rørt: **selve dokumentet** og om et tal og dets navneord var enige. Rigtig CLI, Pro-stub (aldrig et kald til mahope.tools), rigtig `state.json` + `history.json` med ét site overvåget én gang — tilstanden for et bureau, der tilføjede en kundes site i går: `100% (1 checks)`, `100% (1 recorded d, 1 checks)`, `· 1 checks ·`. **Målingen fandt samtidig, at intet andet var forkert** — partitionen, vinduesdækningen, JSON'en og alle flertalformer for rigtig-tallede sites var korrekte; der var ingen skjult sandhedsfejl i denne rapport, kun engelsk, på præcis den række en kunde læser når et site er nyt. **Fix:** `counted(count, singular, plural)` i `src/report.js` som den ene ejer, brugt af `uptimeCell`, `windowCell` og resumelinjen. Første test er om det der *ikke* må ændre sig (alle flertalformer, `1 failed`, det testlåste `site(s)`, hele JSON-kontrakten); **sidste test er låsen** der forbyder `1 checks`/`1 faileds`/`1 recorded days` overalt i den renderede rapport, fordi et nyt talt navneord er en fjerde plads at lave det samme på. **En fejl i min egen rettelse, fundet og taget tilbage:** jeg skrev først `1 failed` til `failed passed`, hvilket var en ny fejl og ikke en rettelse. 7 nye tests i `test/grammar.test.js` (lagt til i `npm test`) → **462/462** (455 + 7); audit 0/0; `node --check` alle JS-filer, `matrix --check`, `git diff --check` grønne på Node 26.7.0. **To målefejl i egen måling, begge fundet af den måling der skulle lade mig lukke den:** en håndlavet state-fil skrevet med `lastCheck` i stedet for `lastChecked` fik resumelinjen til at sige `2 up · 1 down · 3 not checked` = 6 sites ud af 3, som så ud som P1-13's partition-fejl igen (den var min fejl), og første testkørsel kaldte `buildReport` med ét objektargument i stedet for to. Den sjette sådanne fejl efter de fem i P1-41/P1-50 — **målingsværktøjet fejler oftere end koden.** Ingen exit-kode, intet nyt JSON-felt, ingen matrix-række, ingen state-filnøgle, ingen deploy-note nødvendig. `ceo/report-grammar`. **Næste:** ❓ 1–3 og ❓ 14, ellers en målt opgave.
 
@@ -4122,3 +4228,36 @@ En hacket kundes side læste som `UP (200) | 100 %` for modtageren, fordi en def
 **Næste:** ❓ 1–3 og ❓ 14, ellers en målt opgave. De fire uafsluttede fund fra målingen står øverst i afsnittet; den stærkeste er, at **`watch --status` og `status` heller ikke kan se en ændret side** — de er gratisfladerne, så det er ikke kun den betalte rapport, der kan møde et tavst svar.
 
 - **Iteration 72 (P1-56, målt + fix):** ❓ 1–3 stadig ubesvarede, så iterationen tog den eneste af P1-55's fire målte kandidater, der endnu var uundersøgt: matrixens `content-ændringsdetektion`. Den ramte **kundenrapporten**. Målt med rigtig CLI, rigtig Pro-record og en rigtig side skrevet om til `<title>Free iPhone!!</title>`: passen skrev `🔄 content changed (70 → 91 bytes)`, terminalen og den betalte webhook-kanal sagde det, og `report` skrev `UP (200) | 100%` i det dokument kunden modtager — fordi en defacement ikke er et uptime-problem, så alle uptime-kolonnerne står perfekt og netop derfor så sunde ud. Målingen var intakt hele vejen: `content.js` hasher siden P0-3, `state.json` holdt `lastHash`, `lastContentLength` og `lastTitle`. Det eneste stadium der manglede, var det betalte. Anden halvdel: `contentBytes` skrev stadig størrelsen fra et tidligere pass, når et pass sprang siden over 2 MiB over (målt). Rettelsen er `readContentChangeState` i `src/status.js` som den ene ejer (samme form som `readSslState`, spørger `passAge` om tiden), to additive state-felter hvor `lastContentChangedAt` stemples på **hver målt** ændring uanset om alarmen blev sendt, `Content`-kolonne, resumetæller, navngiven linje med alder og titel, seks additive JSON-felter. **Verdikt, exit-kode og uptime-tal uændrede.** 7 nye tests i `test/contentchange.test.js` → **514/514** (507 + 7); audit 0/0; `node --check`, `matrix --check`, `git diff --check` grønne på Node 26.7.0. **Fem mutationer målt, alle døde** (3/4/3/3/1 fejl). **To eksisterende tests læste rigtigt** (kolonnetæller 7→8, ejerskabstæller 2→3) og blev opdateret, ikke slækket. **To målefejl i min egen måling**, begge rettet: `execFileSync` i samme proces som HTTP-fixturen blokerede event loopet (sitte svarede `Request timed out` — sjette gang i mit arbejde), og den navngiven linje rendte som `https://kunde.dk/ ()` fordi rapporten rakte et *site*-objekt ind i en funktion der læste *ejerens* feltnavne. Næste: ❓ 1–3/❓ 14, ellers en målt opgave — stærkeste fund er, at `watch --status` og `status` heller ikke kan se en ændret side.
+
+### P1-57 — FÆRDIG 2026-09-27 (`ceo/content-in-lists`) — En ændret side må ikke se ud som et sundt `✅ up (200)` på de to lister
+
+**Begrundelse (målt, ikke formodet):** P1-56's egen måling efterlod fire fund, og dette er punkt 1 og 2: de to terminal-lister læste hverken `lastTitle` eller størrelsen. Målt med rigtig CLI på en **gratis** maskine (temp-HOME, ingen licens) mod en rigtig side skrevet om til `<title>Free iPhone!!</title>`:
+
+```
+pass            ->  🔄 http://kunde.dk/ content changed (92 → 77 bytes)
+watch --status  ->  ✅ up  http://kunde.dk/ (200) @ 2026-09-27T07:43:09.796Z
+status          ->  ✅ http://kunde.dk/ (200)
+```
+
+Den betalte rapport sagde det efter P1-56; listerne sagde intet. Det er **gratis**-fladerne, så P1-56's antagelse om, at rapporten var det eneste sted med et tavst svar, holdt ikke.
+
+**Acceptkriterier:**
+
+1. Begge lister skriver den ændrede side med alder og `<title>`, spurgt af `readContentChangeState` — samme sætning som rapporten, ikke en tredje.
+2. `readEntry` er den ene ejer; ingen liste bygger sin egen sætning, og de to lister kan ikke komme i strid.
+3. Størrelsen på en række bærer læsningens alder (`· 92 bytes`, `· 92 bytes, read 2 d ago`, `read at an unknown time`), så et tal fra et springet pass ikke lægger sig ud som dette pass' måling.
+4. En ændret side får sætningen uden størrelse; en ulæst side får hverken sætning eller tal.
+5. Et `<title>` fra et overvåget site kan ikke skrive kontrolbytter i en terminal (`safeText`), og det overlever som tekst.
+6. **Verdikt, exit-kode, uptime-tal, matrix-rækker og al JSON uændrede.**
+
+**Status 2026-09-27:** 4 nye tests i `test/contentchange.test.js` (samme fil som P1-56, allerede i `npm test`) → **518/518** (514 + 4); audit 0/0; `node --check`, `matrix --check` grønne på Node 26.7.0. **Fem mutationer målt: fire døde (5/5/7/1 fejl), den femte overlevede** og afslørede en vakuum-test (et fremtidigt stempel får sætningen til at droppe titlen) — rettet, se afsnittet øverst. **Fælden fra min egen test lukket permanent i denne fil:** `cli()` kaster hvis `HOME` ikke er et temp-mappe, efter at en destruktureringsfejl kørte `watch --once` mod den rigtige `~/.deskuptime/state.json` på Mads' maskine. Ingen matrix-række, claim, exit-kode eller payload-felt ændret; ingen deploy-note nødvendig (offentlig npm-udgivelse er Mads').
+
+### P1-58 — ÅBEN — Sikr hele suiten mod den rigtige `HOME` (fund fra P1-57)
+
+**Begrundelse:** `test/contentchange.test.js` har nu en lås, fordi en test dér skrev til Mads' rigtige `~/.deskuptime/state.json` (`watch --once` målte de nøgler, filen allerede havde, og skrev resultatet tilbage — ingen licensnøgle i output, ingen skade ud over det). De **32 andre** testfiler har hver deres egen `run()`/`cli()` og ingen lås, og mindst ét par har allerede gjort det samme tidligere (filens `kunde.dk`-nøgle med `kunde-co.com` er et test-fixture-navn fra P1-26/27, ikke en kunde).
+
+**Acceptkriterier:**
+
+1. Ét fælles test-hjælpe-modul (fx `test/helpers/env.mjs`) med den temp-HOME-fabrik og låsen, og **alle** testfixtures bruger det — ingen test kan kalde CLI'en med den rigtige `HOME`.
+2. En test, der beviser låsen: en `cli()`-kald med en ikke-temp `HOME` kaster, og ingen fil i `~/.deskuptime` røres.
+3. Hele suiten grøn, samme testantal som i dag.
