@@ -632,6 +632,41 @@ function readSslReadingAge(days, { measuredAt, now = new Date(), expired }) {
 }
 
 /**
+ * Who issued the certificate, as one line of text — or `null` when no
+ * certificate was read.
+ *
+ * `src/checkers/ssl.js` has measured `issuer` on every SSL check since P0-3 and
+ * **no surface could read it**: not `check`, not `check --json`, not either
+ * status list, not the client report. Meanwhile the feature matrix — the source
+ * of truth behind the README table, `--help`, the npm description and
+ * `docs/pro-alerts.md` — promises "issuer" in *both* tiers, so the claim was
+ * locked by `test/claims.test.js` while nothing delivered it. "Who issued this
+ * certificate?" is the first question an agency is asked about a customer's
+ * site, and the answer was in the data the whole time.
+ *
+ * `O` before `CN`, because a modern public certificate puts the authority in
+ * `O` and leaves `CN` as a rotating short code (`R11`), which is not a name. A
+ * self-signed or private certificate often has no `O` at all and only `CN`.
+ * A string is kept as it came: older Node hands back the flattened
+ * `C=…, O=…, CN=…` form, and inventing a second spelling of that would be a
+ * second owner of the same fact.
+ *
+ * The value is chosen by whoever issued the certificate, so a terminal surface
+ * must pass it through `safeText()` — see src/display.js.
+ */
+export function readSslIssuer(ssl) {
+  const value = ssl && typeof ssl === 'object' ? ssl : null;
+  const issuer = value?.issuer;
+  if (typeof issuer === 'string') return issuer.trim() || null;
+  if (!issuer || typeof issuer !== 'object') return null;
+  for (const key of ['O', 'CN']) {
+    const name = issuer[key];
+    if (typeof name === 'string' && name.trim()) return name.trim();
+  }
+  return null;
+}
+
+/**
  * The fixed wording for a certificate whose reading is too old to renew against.
  *
  * One sentence for every surface, and it carries the two numbers a reader needs

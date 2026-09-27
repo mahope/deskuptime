@@ -1,3 +1,95 @@
+## Status fra denne iteration (68, P1-52 — matrixen lovede "issuer", og ingen flade kunne sige hvem der udstedte certifikatet)
+
+**Hvorfor denne flade:** ❓ 1–3 er stadig ubesvarede, så iterationen gik på den
+flade missionen prioriterer som nr. 2 — konvertering — og som 67 iterationers
+målinger aldrig havde rørt: **den første linje en ny bruger ser.** README'ens
+første eksempel, `--help`'s EXAMPLES og de features, de to overflader læses
+sammen, før nogen har kørt noget.
+
+**Målt først, nul kode ændret.** Rigtig `check` mod `https://example.com` og mod
+en lokal fixture:
+
+```
+README:  ✅ Status: 200 OK | Response: 85ms | 🔒 SSL: 63 days remaining
+faktisk: 🔍 Checking 1 URL(s)… / ✅ https://example.com / Status: 200 — UP /
+         Response: 90ms / 🔒 SSL: 90d ✅ / — Content: 559 bytes
+```
+
+**Fire af fem ting i løftet var opdigtede:** formatet (én linje mod en blok),
+`200 OK` (verdiktet hedder `UP`), `63 days remaining` (det hedder `90d ✅`), og
+`Content:`-linjen manglede helt, selv om content-ændringsdetektion er en
+headline-feature. Det er den første kommando på npm-siden og i repoet.
+
+**Målingen fandt det større fund under den:** `src/checkers/ssl.js` har læst
+`issuer` (samt `subject`, `cipher`, `fingerprint`, `serialNumber`,
+`subjectAltName`) på **hvert** SSL-tjek siden P0-3, og ingen flade kunne læse
+det: `check` skrev `🔒 SSL: 90d ✅`, `check --json` havde intet issuer-felt, og
+ikke statuslisterne, rapporten eller Action-summary'en. Mens **matrixen i
+`src/features.js` lovede "SSL expiry countdown, **issuer** og
+content-ændringsdetektion" i begge tiers** — og `test/claims.test.js` låser den
+række mod README, `--help`, npm-beskrivelsen og `docs/pro-alerts.md`. **Den ene
+påstand i matrixen, intet implementerede, var den en test beskyttede.** "Hvem
+udstedte dette certifikat?" er det første spørgsmål et bureau får om en kundes
+site, og svaret lå i data hele vejen.
+
+**Én ejer, `readSslIssuer(ssl)` i `src/status.js`,** ved siden af
+`readSslState`. `O` før `CN`: et moderne offentligt certifikat har
+udstederen i `O` og en roterende kode i `CN` (`R11`), som ikke er et navn — på
+`example.com` giver det `SSL Corporation`, ikke `R11`. Et selvsigneret certifikat
+har ofte kun `CN`, og den strengeform (`C=…, O=…, CN=…`) fra ældre Node beholdes
+som den kommer, fordi en ny stavning ville være en anden ejer. `null` for enhver
+form der ikke er et læst certifikat — samme ærlighed som `sslChecked: false`.
+
+**To overflader, additivt:** `   🏷️ Issuer: SSL Corporation` i `check`'s
+menneske-output (gennem `safeText`, fordi en udsteder vælges af den der udstedte
+certifikatet — samme regel som P2-1 del C), og `sslIssuer` i `check --json`,
+`null` når intet certifikat blev læst. **Ingen exit-kode, ingen matrix-række,
+intet eksisterende felt, ingen state-filnøgle ændret.**
+
+**README rettet på den målte måde:** det opdigtede output er erstattet af en
+ægte kørsel, pastet som den kom (med en note om at dages-tallet falder med
+certifikatet), og feature-bulletten siger nu det der vises — "expiry countdown
+and issuer, in the terminal and in `--json`" — i stedet for "issuer, cipher
+info", fordi cipher'en stadig kun er råt materiale i `ssl.js` og ingen flade
+læser den. ASCII-diagrammets `issuer` i `ssl.js`-boksen er nu sandt.
+
+**Test (10 nye, `test/sslissuer.test.js`, lagt i `npm test` — samme fælde som
+P1-10):** 6 enhedstests af ejeren (O før CN, CN-fallback, strengformen uændret,
+`null` for 11 ikke-certifikat-former, trim, `summarize` bærer den) og 4
+end-to-end med rigtig `openssl`-fixture, hvis `O=DeskUptime Test CA/CN=ca-code-42`
+gør `O` og `CN` adskilelige: `Issuer:`-linjen gennem den rigtige CLI, ingen
+issuer-linje og `sslIssuer: null` for ren HTTP, hele JSON-kontrakten additive,
+og låsen der siger at matrixens "lovede ord" og det faktiske felt hænger sammen.
+**Ingen mutationstest** — over tidsbudgeten, samme ærlige notering som P1-47,
+P1-49, P1-50 og P1-51. `ceo/ssl-issuer`.
+
+**To fejl i min egen måling, begge fundet af den måling der skulle lade mig lukke
+den** — den syvende og ottende målefejl i mit arbejde, der så ud som et
+produktfund:
+
+1. Min TLS-fixture brugte `tls.createServer`, som er en `net.Server` uden
+   `closeAllConnections()`. `server.close()` ventede derfor på en keep-alive
+   socket, og hele filen hang i 3 minutter. Rettet til `https.createServer`,
+   som er `test/test.js`'s mønster — samme fælde som display-testens rå socket
+   i P2-1 del C.
+2. Jeg hævdede `🔒 SSL: 2d` for et 2-dages certifikat, men 2 dage er **inde i**
+   14-dages vinduet, så linjen læser `⚠️ SSL: 2d ⚠️`. Min assertion var forkert,
+   ikke koden. Samme forkerthed som P1-51's `1 failed`.
+
+**Målt og grønt:** 472/472 (462 + 10 nye), audit 0/0, `node --check` alle
+JS-filer, `matrix --check` og `git diff --check` på **Node 26.7.0**. Matrixen
+urørt, så ingen ny claim og ingen regenerering. Ingen deploy-note nødvendig
+(koden ligger i npm-pakken og actionen, ikke i et live-site).
+
+**Næste:** ❓ 1–3 og ❓ 14, ellers en målt opgave. Uafsluttede, målte fund fra
+denne måling, der bør være næste iterations kø: (1) `ssl.js` måler
+`subjectAltName`, `cipher`, `protocol`, `fingerprint` og `serialNumber`, og
+**ingen** flade læser dem — samme mønster som `issuer` lige blev; (2) matrixens
+påstand om `content-ændringsdetektion` er den næste linje, der bør måles på
+`watch`-fladen; (3) `check --json` **udelader** `errorType`/`error` helt på et
+sundt tjek (undefined forsvinder i `JSON.stringify`) — låst nu somObserveret
+adfærd, ikke rettet, fordi det er en JSON-kontraktafgørelse.
+
 ## Status fra denne iteration (67, P1-51 — kundenrapporten talte i flertal, hvor der var ét)
 
 **Hvorfor denne flade:** ❓ 1–3 er stadig ubesvarede, så iterationen gik på det

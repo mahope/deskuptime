@@ -18,7 +18,7 @@ import { buildReport, renderReportJson, renderReportMarkdown } from './report.js
 import { readFileSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
-import { invalidHttpUrls, invalidUrlMessage, partitionUsableUrls, readChain, readContentState, readDisclosure, readEntry, readRedirectTarget, readSecurityHeaders, readSslState, contentSkipNote, unusableUrlNote, withoutCredentials, SECURITY_HEADER, STALE_AFTER_DAYS } from './status.js';
+import { invalidHttpUrls, invalidUrlMessage, partitionUsableUrls, readChain, readContentState, readDisclosure, readEntry, readRedirectTarget, readSecurityHeaders, readSslIssuer, readSslState, contentSkipNote, unusableUrlNote, withoutCredentials, SECURITY_HEADER, STALE_AFTER_DAYS } from './status.js';
 import { formatMs, machinesInUse, safeText } from './display.js';
 import { DEFAULT_WINDOW_DAYS, HISTORY_DAYS, historyReadErrorMessage, readHistoryFile } from './history.js';
 import { FREE, PRODUCT, proExtras, renderHelpPro } from './features.js';
@@ -162,6 +162,13 @@ if (command === 'check') {
         sslExpiringSoon: ssl.expiringSoon,
         sslChecked: ssl.measured,
         sslError: r.ssl?.error ?? null,
+        // Who signed the certificate, from the one owner. The checker measured
+        // this on every SSL check and no consumer could read it, while the
+        // matrix — the source of truth behind the README table, `--help` and the
+        // npm description — promises "issuer" in both tiers. `null` means no
+        // certificate was read, exactly like `sslChecked: false` above, so a
+        // plain-HTTP or unreachable URL is never read as "issued by nobody".
+        sslIssuer: readSslIssuer(r.ssl),
         // The content facts, from the one owner. `contentLength` was the byte
         // count our own reader had reached when it gave up on an oversized page
         // — a number no server sent, and a different one on every run — so it
@@ -201,6 +208,15 @@ if (command === 'check') {
       }
       console.log(`   Response: ${formatMs(result.responseTimeMs)}`);
       console.log(`   ${sslEmoji} SSL:     ${safeText(summary.ssl, { max: 0 })}`);
+      // The authority behind the same certificate, on the surface that decides
+      // the exit code. The checker has measured it since P0-3 and the matrix has
+      // promised it in both tiers, but `check` could not answer the first
+      // question an agency is asked about a customer's site. A certificate
+      // authority is chosen by whoever issued the certificate, so it goes
+      // through safeText like every other value on these lines.
+      if (summary.sslIssuer) {
+        console.log(`   🏷️ Issuer: ${safeText(summary.sslIssuer, { max: 0 })}`);
+      }
       if (content.measured) {
         const bytes = content.length === null ? 'size unknown' : `${content.length.toLocaleString('en-US')} bytes`;
         console.log(`   ${changedEmoji} Content: ${bytes}`);

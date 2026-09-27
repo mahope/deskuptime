@@ -8,7 +8,7 @@
 import { checkReachability } from './checkers/ping.js';
 import { checkSSL, SSL_TIMEOUT_MS } from './checkers/ssl.js';
 import { checkContentChange, CONTENT_TIMEOUT_MS } from './checkers/content.js';
-import { assertValidHttpUrls, expectsCertificate, isHealthyStatus, readSslState, expiredNote } from './status.js';
+import { assertValidHttpUrls, expectsCertificate, isHealthyStatus, readSslIssuer, readSslState, expiredNote } from './status.js';
 import { formatMs } from './display.js';
 
 /**
@@ -149,6 +149,8 @@ export function summarize(result) {
     ssl: sslStatus,
     /** The icon `check` prints next to the same line, decided by the same call. */
     sslIcon: ssl.expired ? '🔴' : ssl.expiringSoon ? '⚠️' : ssl.days !== null ? '🔒' : result.ssl?.error ? '🔓' : '—',
+    /** Who issued the certificate, read through the one owner. `null` is a fact too. */
+    sslIssuer: readSslIssuer(result.ssl),
     lastChecked: result.timestamp,
   };
 }

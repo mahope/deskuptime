@@ -6,12 +6,23 @@
 npx @mahope/deskuptime check https://example.com
 ```
 
-✅ Status: 200 OK | Response: 85ms | 🔒 SSL: 63 days remaining
+```
+🔍 Checking 1 URL(s)...
+
+✅ https://example.com
+   Status:   200 — UP
+   Response: 69ms
+   🔒 SSL:     90d ✅
+   🏷️ Issuer: SSL Corporation
+   — Content: 559 bytes
+```
+
+<sub>A real run, pasted as it came. The day count falls as the certificate does.</sub>
 
 ## Features
 
 - **Uptime checking** — HTTP status code + response time measurement
-- **SSL certificate validation** — expiry countdown, issuer, cipher info
+- **SSL certificate validation** — expiry countdown and issuer, in the terminal and in `--json`
 - **Content change detection** — SHA-256 hash comparison between checks
 - **Cross-platform** — CLI (npm) + desktop app (Tauri, Mac/Windows)
 - **Universal** — works on any website, any CMS, any stack
