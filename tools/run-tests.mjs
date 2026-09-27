@@ -19,18 +19,86 @@
  *   node tools/run-tests.mjs test/foo.js …   # a subset (CI does this on Windows)
  *
  * `DU_KEEP_TEST_HOME=1` keeps the throwaway HOME and prints its path.
+ *
+ * P1-75 — this is also where the gate decides whether it may run at all. The
+ * `node` first on PATH was measured at v22.23.2 on a machine with v26.7.0
+ * installed, and a Node below `engines` used to return 20 failures, every one
+ * of them the installer or the Action refusing to run. `tools/node-gate.mjs`
+ * owns that decision; here it is acted on: switch to a Node that satisfies
+ * `engines`, or say once why the suite does not start.
  */
 
-import { spawn } from 'node:child_process';
-import { readdirSync, rmSync, statSync } from 'node:fs';
+import { spawn, spawnSync } from 'node:child_process';
+import { readFileSync, readdirSync, rmSync, statSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { delimiter, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { isTempHome } from '../test/helpers/env.mjs';
+import {
+  candidateNodePaths,
+  maySwitchNode,
+  nodeSatisfies,
+  pickSatisfyingNode,
+  requiredNodeMajor,
+  unusableNodeMessage,
+} from './node-gate.mjs';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const TEST_DIR = join(ROOT, 'test');
+
+/**
+ * Run the suite under a Node that satisfies `engines`, or explain that it
+ * cannot. Returns the exit code when the suite must not start, and `null` when
+ * it may — the caller owns every process after that.
+ *
+ * The switch prepends the chosen Node's directory to `PATH`, and that is the
+ * load-bearing half: the 20 measured failures come from tests that run
+ * `tools/install.sh` and `action.yml` in a shell, and a shell resolves `node`
+ * from `PATH` rather than from `process.execPath`. Re-executing this runner
+ * alone would have left 13 of them failing.
+ */
+function resolveRuntime() {
+  const required = requiredNodeMajor(JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')));
+  if (nodeSatisfies(process.versions.node, required)) return null;
+
+  if (!maySwitchNode(process.env)) {
+    console.error(unusableNodeMessage({ version: process.version, required }));
+    console.error(
+      '(Already switched once, and this is still the same result — so there is no newer ' +
+      'Node on this machine. Set DESKUPTIME_NODE to a working one.)',
+    );
+    return 1;
+  }
+
+  const chosen = pickSatisfyingNode(candidateNodePaths({ env: process.env }), required);
+  if (!chosen) {
+    console.error(unusableNodeMessage({ version: process.version, required }));
+    return 1;
+  }
+
+  // Announced, never silent: a gate that quietly runs on a different runtime
+  // than the one that started it is a gate nobody can reason about.
+  console.log(
+    `node ${process.version} is older than this project requires (>=${required}); ` +
+    `running the suite under ${chosen} instead.`,
+  );
+
+  const child = spawnSync(chosen, process.argv.slice(1), {
+    cwd: ROOT,
+    stdio: 'inherit',
+    env: {
+      ...process.env,
+      DESKUPTIME_NODE_SWITCHED: '1',
+      PATH: `${dirname(chosen)}${delimiter}${process.env.PATH ?? ''}`,
+    },
+  });
+  if (child.error) {
+    console.error(`found ${chosen} but could not run it: ${child.error.message}`);
+    return 1;
+  }
+  return child.status ?? 1;
+}
 
 /**
  * The suite, from the directory rather than from a list in `package.json`: a new
@@ -59,6 +127,9 @@ function realStateStamp() {
 }
 
 async function main() {
+  const refused = resolveRuntime();
+  if (refused !== null) process.exit(refused);
+
   const files = process.argv.slice(2);
   const suite = files.length > 0 ? files : allTestFiles();
   const home = join(tmpdir(), `deskuptime-suite-${process.pid}-${Date.now().toString(36)}`);
