@@ -1796,6 +1796,18 @@ export function readEntry(entry, { now = new Date(), url = '' } = {}) {
   // below printed `✅ up (200)` about the same file, and these two are the free
   // surfaces a user actually runs.
   const content = readContentChangeState(value, { now });
+  // …and the same reading for the certificate, from the owner the client report
+  // asks (P1-61). Measured 2026-09-27: a site whose certificate had been
+  // replaced two days earlier printed `✅ up (200, SSL 89d)` on both lists below
+  // while the report named it in its own line — and these two are the free
+  // surfaces a user actually runs, so the replacement existed only in the paid
+  // document. The day count is not a signal either way (a reissued certificate
+  // has *more* days left than the one it replaced), so the row that says `SSL
+  // 89d` is the row that has to name it. The sentence carries its own `🔑`, like
+  // the page's `🔄`, so a list places it as it is instead of stacking a second
+  // marker on top, and it is empty when nothing was replaced — the ordinary
+  // case, because a pass writes the stamp only when it saw a different one.
+  const cert = readCertRotationState(value, { now });
   // A key that is not an address has no verdict to report. Its stored `wasUp`
   // is whatever a hand-edited file, a botched restore or an old script left
   // behind, and a monitoring pass skips the key entirely (P1-40) — so printing
@@ -1864,6 +1876,12 @@ export function readEntry(entry, { now = new Date(), url = '' } = {}) {
     content,
     contentNote: content.note,
     contentSize: content.changed || content.bytes === null ? '' : byteCountNote(content.bytes, content.bytesReadAt, now),
+    // The certificate, in the one shape a row needs. Same rule as the page above:
+    // the fact and its age travel together, so "replaced" never reads as
+    // "this morning" on a list that is opened days after the pass. Fixed words
+    // plus a checked day count, so a row can place it as it is.
+    cert,
+    certNote: cert.note,
   };
 }
 

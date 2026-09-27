@@ -84,7 +84,53 @@ fleste værter udsteder nyt hver 90. dag. Ordet er derfor *replaced* og ikke
 *nyt*, *mistet* eller *mistænkeligt*; læseren ved, om sitets certifikat burde
 være skiftet.
 
-Uden for denne iteration: de to terminal-lister (`status`, `watch --status`)
-tier stadig, og et certifikat der flapper mellem to servere skriver
+Uden for denne iteration: et certifikat der flapper mellem to servere skriver
 `lastCertRotatedAt` på hvert pass — samme tæthed som `content_changed` fik
 (P1-47), umålt endnu.
+
+## De to terminal-lister (P1-62, 2026-09-27)
+
+Samme måling, de sidste to flader der var tilbage. Rigtig CLI, rigtige passer, to
+state-filer der adskiller sig kun i hvilket certifikat der svarede den anden
+dag:
+
+```
+uændret certifikat         ->  ✅ https://kunde.dk/ (200) — SSL 89d
+certifikatet byttet i dag  ->  ✅ https://kunde.dk/ (200) — SSL 89d
+```
+
+To rækker, tegn for tegn ens — og en rapport over den *samme* fil, der sagde
+`**1 site has its certificate replaced since monitoring …**`. Kendsgerningen
+fandt altså kun dér, hvor den sælges. Og nedtællingen kan ikke stå i for: et
+nyudstedt certifikat har typisk *flere* dage tilbage end det det erstattede, så
+et hijack læses som det sundeste af de to.
+
+Ejeren var allerede skrevet (P1-61): `readCertRotationState`. `readEntry` spørger
+den nu, lige ved siden af sidelæsningen (P1-57), og hver liste placerer sætningen.
+Efter:
+
+```
+  ✅ https://kunde.dk/ (200) — SSL 89d 🔑 certificate replaced 2 d ago
+```
+
+Alderen rejser med kendsgerningen, fordi en liste tit læses dage efter passet, så
+"byttet" ikke må læses som "i morges". Et ulæseligt stempel siger det og opfinder
+ingen alder, og et stempel foran dette ur kaldes et ur, ikke en kendsgerning om
+certifikatet — samme tre tilstande som overalt ellers.
+
+**Ingen status, exit-kode, uptime-tal eller SSL-celle flytter sig.** Et udstedt
+certifikat er stadig gyldigt for det rette navn, og de fleste værter udsteder nyt
+hver 90. dag, så ordet er *replaced* og ikke *nyt*, *mistet* eller
+*mistænkeligt*. Rækker uden stempel tier stadig: stemplet skrives kun når et pass
+så et andet certifikat, så dets fravær er det normale tilfælde, og en note der
+stod på hver række ville træne læseren i at rulle forbi den der betyder noget.
+
+**Listen er ikke en skriver.** `status` og `watch --status` læser filen og gør
+ikke andet: ingen hændelse, ingen ny tælling, ingen gemt stempel. Hændelsen
+`cert_rotated` tilhører passet (P1-60), fordi den er en betingelse om *at noget
+skete*, ikke en læsning af en gemt fil.
+
+Uden for denne iteration: **flapperen**. Et certifikat der skifter mellem to
+servere skriver `lastCertRotatedAt` på hvert pass, så rapporten og listerne siger
+"replaced" hver gang. Samme klasse som `content_changed` fik sin tæthed for
+(P1-47) og den er umålt.

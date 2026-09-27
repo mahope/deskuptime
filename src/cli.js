@@ -837,10 +837,18 @@ if (command === 'status') {
     const content = e.contentNote
       ? ` ${safeText(e.contentNote, { max: 0 })}`
       : e.contentSize ? ` · ${e.contentSize}` : '';
+    // And the certificate, read by the same owner the client report asks. Without
+    // it a domain that changed hands answered `✅ (200) — SSL 89d` here — a
+    // reissued certificate has *more* days left than the one it replaced, so the
+    // row looked healthier than before the change — while the paid report named
+    // the same state file's rotation in a line of its own. The sentence is fixed
+    // words and a checked day count, so it needs no flattening, and it is empty
+    // when no certificate has been replaced.
+    const cert = e.certNote ? ` ${e.certNote}` : '';
     // A key we never could check is shown without its credentials, like every
     // other surface: a password in a hand-edited or restored key must not be
     // printed on the list a user reads to see whether monitoring works (P1-45).
-    console.log(`  ${up} ${safeText(withoutCredentials(u), { max: 0 })}${code}${ssl}${unknown}${stale}${redirect}${ahead}${content}`);
+    console.log(`  ${up} ${safeText(withoutCredentials(u), { max: 0 })}${code}${ssl}${unknown}${stale}${redirect}${ahead}${content}${cert}`);
   }
   // A key that is not an address prints above like any other row — as a site
   // whose verdict is merely unknown — although it was never measured and never

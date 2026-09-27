@@ -1,3 +1,64 @@
+## Status fra denne iteration (78, P1-62 — de to gratis-lister var tavse om et byttet certifikat, mens den betalte rapport navngavnede det)
+
+**Hvorfor denne flade:** ❓ 1–3 er stadig ubesvarede, så iterationen tog det
+tredje fund fra P1-60, og det der lå i *betalt* kode. `status` og
+`watch --status` er de to kommandoer en bruger faktisk kører for at finde ud af, om
+overvågningen virker — de er gratis, og efter P1-61 var det eneste sted
+kendsgerningen fandtes den betalte rapport.
+
+**Målt først, nul kode ændret.** Rigtig CLI, rigtige `runPass`, to state-filer
+skrevet af rigtige passer over et site der svarer 200 i begge. Den eneste forskel
+er hvilket certifikat der svarede den anden dag:
+
+```
+uændret certifikat         ->  ✅ https://kunde.dk/ (200) — SSL 89d
+certifikatet byttet i dag  ->  ✅ https://kunde.dk/ (200) — SSL 89d
+```
+
+To rækker, tegn for tegn ens. Og rapporten over den **samme** fil sagde
+`**1 site has its certificate replaced since monitoring …**`. Nedtællingen kan
+ikke stå i for: et nyudstedt certifikat har typisk *flere* dage tilbage end det det
+erstattede, så et hijack læses som det sundeste af de to.
+
+**Rettelsen er to steder plus to rækker.** Ejeren var allerede skrevet:
+`readCertRotationState` (P1-61). `readEntry` — den ene ejer af, hvad en række på
+de to lister må sige — spørger den nu lige ved siden af sidelæsningen (P1-57), og
+hver liste placerer `certNote` med sit eget tegn. Efter:
+
+```
+  ✅ https://kunde.dk/ (200) — SSL 89d 🔑 certificate replaced 2 d ago
+```
+
+**Ingen status, exit-kode, uptime-tal eller SSL-celle flytter sig**, fordi et udstedt
+certifikat stadig er gyldigt for det rette navn, og de fleste værter udsteder nyt
+hver 90. dag. Ordet er derfor *replaced* og ikke *nyt*, *mistet* eller
+*mistænkeligt*; læseren ved om sitets certifikat burde være skiftet. Rækker uden
+stempel tier stadig — stemplet skrives kun når et pass så et andet certifikat, så
+dets fravær er det normale tilfælde, og en note på hver række ville træne læseren i
+at rulle forbi den der betyder noget. **Og listen er ikke en skriver:** ingen
+hændelse, intet gemt, filen byte for byte uændret efter begge kommandoer.
+
+**Test (10 nye i `test/certrotationlists.test.js`, auto i `npm test`):** ejeren på
+de fire tilstande gennem `readEntry` (rotation med alder / ingen stempel / aldrig
+læst / ulæseligt stempel) + ur-skæv, begge lister gennem **rigtig CLI** på en
+temp-HOME, tavshed når intet er byttet, to sites hvor kun den ene tier, listerne og
+rapporten på den samme fil, ulæseligt stempel uden opdigtet alder, passets tre
+faser med state-filen læst tilbage fra disk, og tre låse: sætningen med sit `🔑`
+findes kun hos ejeren (og kun i sine to former — passets egen hændelsestekst er
+noget andet), `readEntry` er deepEqual uden for de to additive felter, og listerne
+giver hverken hændelse eller skrivning.
+
+**Resultat: 563/563 grøn** (553 + 10), audit 0/0, `node --check` på alle JS og
+MJS, `matrix --check` exit 0 på Node 26.7.0. `docs/cert-rotation.md` er opdateret,
+fordi den er specen de tre flader er bygget imod. **Ingen mutationstest** — over
+tidsbudgeten, samme ærlige notering som P1-47/49/50/51/52/61.
+
+**Næste:** ❓ 1–3 og ❓ 14, ellers en målt opgave. Uafsluttede fund fra P1-60: (1)
+~~statuslisterne tier om rotation~~ lukket i denne iteration; (2) et certifikat der
+**flapper** mellem to servere skriver `lastCertRotatedAt` på hvert pass, så alle
+tre flader siger "replaced" hvert pass — samme klasse som `content_changed` fik sin
+tæthed for (P1-47) og den er umålt; (3) `serialNumber` er gemt men læst af ingen.
+
 ## Status fra denne iteration (77, P1-61 — kundenapporten vidste ikke, at et kundes certifikat var blevet byttet, og state-filen havde smidt kendsgerningen væk)
 
 **Hvorfor denne flade:** ❓ 1–3 er stadig ubesvarede, så iterationen tog det første
@@ -4350,6 +4411,8 @@ for selv. Ingen gemt nøgle er omskrevet, ingen eksisterende adgangsd tilstand
 
 ## Iterationslog
 
+- **Iteration 78 (P1-62, målt + fix):** P1-60-fund (1): de to terminal-lister var tavse om et byttet certifikat, så kendsgerningen fandtes kun i den betalte rapport. Målt først med rigtig CLI og rigtige passer: to rækker tegn for tegn ens, `✅ … (200) — SSL 89d`, mens rapporten over samme fil sagde `1 site has its certificate replaced`; SSL-dagstalet var større efter et hijack end før. Fix: `readEntry` spørger `readCertRotationState` (P1-61's ejer) og begge lister placerer `certNote` med sit `🔑`; alderen rejser med, fordi en liste læses dage efter passet. Rækker uden stempel tier (det er det normale tilfælde), listerne er læsere — filen er byte for byte uændret efter begge kommandoer, og `cert_rotated` tilhører stadig passet. 10 nye tests → **563/563**; audit 0/0; `node --check`, `matrix --check`, `git diff --check` grønne på Node 26.7.0. **Ingen mutationstest** — over tidsbudgeten (38 min). `ceo/cert-rotation-lists`. **Næste:** ❓ 1–3 og ❓ 14, ellers en målt opgave; bl.a. rotationens tæthed (et flappende certifikat), P1-63.
+
 - **Iteration 77 (P1-61, målt + fix):** P1-60 fund (1): kundenapporten vidste ikke at et certifikat var byttet, og state-filen havde kendsgerningen væk — `runPass` overskriver `lastCertFingerprint` i samme pass der ser rotationen. Målt først med rigtig CLI og rigtige passer: to rapporter ens i alt, og SSL-dagstalet større efter et hijack end før det. Fix: `lastCertRotatedAt` (P1-56s `lastContentChangedAt`) + `readCertRotationState` som ene ejer + additivt i rapporten (tælling, fire felter, navngiven linje med alderen). Ordet *replaced*, aldrig *mistænkeligt* — de fleste værter udsteder nyt hver 90. dag. 10 nye tests → **553/553**; audit 0/0; `node --check`, `matrix --check`, `git diff --check` grønne på Node 26.7.0. **Ingen mutationstest** — over tidsbudgeten (43 min). `ceo/report-cert-rotation`. **Næste:** ❓ 1–3 og ❓ 14, ellers en målt opgave; bl.a. de to statuslister, der stadig tier om rotation (P1-62).
 
 - **Iteration 75 (P1-59, målt + fix):** ❓ 1–3 ubesvarede, så målingen gik på
@@ -4706,3 +4769,45 @@ sammenligning er urørt.
 rotation — P1-62, samme læsning og samme ejer, den anden flade til. Derefter
 rotationens tæthed (et certifikat der flapper) og `serialNumber`, der gemmes men
 læses af ingen.
+
+### P1-62 — FÆRDIG 2026-09-27 (`ceo/cert-rotation-lists`) — De to terminal-lister skal kunne se et certifikat, der er blevet byttet
+
+**Begrundelse:** fund (1) fra P1-60, som P1-61 lod ligge. P1-60 gjorde rotationen
+synlig i `check`, i passets hændelser og i den betalte webhook; P1-61 lukkede
+`report`. Disse to lister var de sidste, og de er de **gratis** — efter P1-61
+fandtes kendsgerningen kun i det dokument der sælges. `status` og
+`watch --status` er kommandoerne en bruger kører for at se om overvågningen virker,
+så en kunde- eller bureau-ejet flade der tier er dyrere end den betalte.
+
+**Målt først** (rigtig CLI, rigtig `runPass`, to state-filer fra rigtige passer): de
+to rækker var ens i alt, og rapporten over den samme fil sagde
+`1 site has its certificate replaced`. SSL-dagstalet var *større* efter et hijack
+end før det.
+
+**Rettelsen:** `readEntry` spørger `readCertRotationState` (P1-61's ejer) og
+eksponerer `certNote`; `cli.js`'s statusliste og `watch.js`'s `printStatus`
+placerer den med sit eget `🔑`, lige som sidens `🔄`. Ingen ny sætning, ingen ny
+læsning, ingen ny lyd: `readEntry` var allerede den ene ejer.
+
+**Acceptkriterier (alle målte, se afsnittet øverst):**
+- Begge lister skriver `🔑 certificate replaced 2 d ago` for et site med stempel. ✅
+- Rækker uden stempel tier, også når `lastCertFingerprint` findes (et site der
+  aldrig er læst tier også). ✅
+- To sites hvor kun den ene er byttet: præcis én sætning pr. liste. ✅
+- Ulæseligt stempel → `at an unreadable time`, aldrig `today`; ur-skæv →
+  clock-vej. ✅
+- Listerne og rapporten siger det samme om den samme fil. ✅
+- `readEntry` deepEqual uden for `cert`/`certNote`; status, `SSL 89d` og exit 0
+  uændrede. ✅
+- Listerne skriver ikke: state-filen er byte for byte uændret efter begge
+  kommandoer, og `printStatus` kan hverken rejse `cert_rotated` eller gemme. ✅
+- Sætningen med sit `🔑` findes kun hos ejeren, i to former. ✅
+- `npm test` **563/563** (553 + 10), audit 0/0, `matrix --check` 0, `node --check`
+  ren. Node 26.7.0. ✅
+- `docs/cert-rotation.md` beskriver de to lister. ✅
+
+**Næste:** rotationens **tæthed** — et certifikat der flapper mellem to servere
+skriver `lastCertRotatedAt` på hvert pass, så rapporten og listerne siger
+"replaced" hver gang. Samme klasse som `content_changed` fik sin tæthed for
+(P1-47, `readContentChangeAlert`), umålt endnu. Derefter `serialNumber`, der gemmes
+siden P0-3 men læses af ingen.

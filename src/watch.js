@@ -764,7 +764,14 @@ export function printStatus(options = {}) {
     const content = row.contentNote
       ? ` ${safeText(row.contentNote, { max: 0 })}`
       : row.contentSize ? ` · ${row.contentSize}` : '';
-    console.log(`  ${VERDICT_ICON[row.verdict]}  ${safeText(row.url, { max: 0 })} (${code}${ssl})${checked}${ahead}${unknown}${stale}${redirect}${content}`);
+    // …and the certificate, from the same owner the client report asks, for the
+    // same reason: this is the command a user runs to find out whether their
+    // monitoring works, and a domain that changed hands kept answering `✅ up
+    // (200, SSL 89d)` here — the new certificate counts *down* from more days
+    // than the old one had, so the row never moved — while the report named the
+    // replacement. The sentence is fixed words and a checked day count.
+    const cert = row.certNote ? ` ${row.certNote}` : '';
+    console.log(`  ${VERDICT_ICON[row.verdict]}  ${safeText(row.url, { max: 0 })} (${code}${ssl})${checked}${ahead}${unknown}${stale}${redirect}${content}${cert}`);
   }
 
   // A stale site is the reader's most consequential line and a per-row marker
