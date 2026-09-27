@@ -1,3 +1,71 @@
+## Status fra denne iteration (67, P1-51 — kundenrapporten talte i flertal, hvor der var ét)
+
+**Hvorfor denne flade:** ❓ 1–3 er stadig ubesvarede, så iterationen gik på det
+sidste lag i det betalte produkt, ingen måling havde rørt: **selve dokumentet**.
+P1-48 kaldte det "produktet her", fordi det er det bureauet sender videre — og
+de 66 iterationer før har målt hvert tal i det og hver fejl, der gjorde et tal
+falskt. Ingen havde målt, om et tal og dets navneord var enige.
+
+**Målt først, nul kode ændret.** Rigtig CLI, rigtig licens-stub (aldrig et kald
+til mahope.tools), rigtig `state.json` + `history.json` med **ét site overvåget
+én gang** — tilstanden for et bureau, der tilføjede en kundes site i går og
+sender den første rapport i morges:
+
+```
+| http://one.test/ | UP | 100% (1 checks) | 100% (1 recorded d, 1 checks) | … |
+**1 site(s) · 1 up · 0 down · 1 checks · 0 failed**
+```
+
+Tallet var rigtigt, og engelsken var det ikke, i tre af de otte kolonners
+prosa — på præcis den række en kunde læser, når et site er nyt. **Og det er den
+første rapport et bureau sender**, fordi den typiske kunde tilføjes i går.
+
+Målingen fandt samtidig, at **intet andet var forkert**: partitionen er rigtig
+(2 up + 1 ned = 3 sites), vinduesdækningen er rigtig, JSON'en er rigtig, og det
+samme dokument for et site med fire tjekker skrev allerede `4 checks`. Der var
+ingen skjult sandhedsfejl i denne rapport — kun engelsk.
+
+**Én ejer, `counted(count, singular, plural)` i `src/report.js`,** brugt af de
+tre steder der tæller: `uptimeCell`, `windowCell` og resumelinjen. Første test
+i filen er derfor om det der *ikke* må ændre sig: alle flertalformer, `1 failed`
+(den er korrekt som etiket — jeg skrev den til `failed passed` i første
+forsøg, hvilket var en ny fejl, ikke en rettelse, og blev taget tilbage), det
+bevidst uinflekterede `site(s)` — det er en eksisterende, testlåst valg — og hele
+JSON-kontrakten.
+
+**Låsen er den sidste test,** fordi den er den eneste der ser på dokumentet som
+hele: `1 checks`, `1 faileds` og `1 recorded days` er alle forbudt overalt i
+rapporten. Et nyt talt navneord i rapporten senere er en fjerde plads at lave
+det samme på, og intet andet ville fange det.
+
+**Målt og grønt:** 462/462 (455 + 7 nye i `test/grammar.test.js`, lagt i
+`npm test` — samme fælde som P1-10), audit 0/0, `node --check` alle JS-filer,
+`matrix --check` og `git diff --check` på **Node 26.7.0**. Ingen exit-kode,
+intet nyt JSON-felt, ingen matrix-række, ingen state-filnøgle, ingen
+deploy-note nødvendig. Ingen mutationstest — over tidsbudgeten, samme ærlige
+notering som P1-47/P1-49/P1-50. `ceo/report-grammar`.
+
+**To fejl i min egen måling, begge fundet af den måling der skulle lade mig
+lukke den** — den fjerde og femte målefejl i mit arbejde, der så ud som et
+produktfund:
+
+1. Jeg skrev en håndlavet `state.json` med `lastCheck` i stedet for `lastChecked`,
+   så alle tre sites læste som "aldrig tjekket" og resumelinjen sagde
+   `3 site(s) · 2 up · 1 down · 3 not checked` — **6 sites ud af 3**, som så ud
+   som den ulæselige-partition fra P1-13 igen. Det var min fejl: `buildReport`
+   læser `lastChecked`. Skrev jegegenskaberne i den form `watch` skriver dem, og
+   partitionen er rigtig.
+2. Første testkørsel havde `buildReport(state, options)` kaldt med én
+   objektargument, så den så nul checks. Signaturen er to argumenter.
+
+Den anden er den sjette samme slags fejl efter de tre mutationstest-gendannelsser
+i P1-41 og de to i P1-50. **Målingsværktøjet fejler oftere end koden**, og hver
+gang er det målingen der ligner fundet.
+
+**Næste:** ❓ 1–3 og ❓ 14, ellers en målt opgave.
+
+- **Release-note P1-51:** Den første kundenrapport et bureau sender skrev **"1 checks"** — tre steder i dokumentet. Før hed en rapport over et site, der var overvåaget én gang, `100% (1 checks)`, `100% (1 recorded d, 1 checks)` og `· 1 checks ·` i resumelinjen: tallene var rigtige, engelsken var ikke, på præcis den række en kunde læser når et site er nyt. Nu hedder det `1 check`, og et site med fire tjekker skriver stadig `4 checks`. **Alt andet er uændret:** samme tal, samme procenttal, samme partition, samme `1 failed`, samme `site(s)` (det er en eksisterende, testlåst valg), og **hele JSON-kontrakten er urørt** — et script læser `checks: 1`, aldrig en sætningsregel. En ny lås forbyder `1 checks` overalt i rapporten, så et nyt talt navneord ikke kan glide tilbage i samme fejl.
+
 ## Status fra denne iteration (66, P1-50 — `--interval 30` var den eneste Pro-grænse der svarede i stilhed)
 
 **Hvorfor denne flade:** ❓ 1–3 er stadig ubesvarede, så iterationen gik på den
@@ -3287,6 +3355,41 @@ review-agent — over 30-minutters grænse.
 
 **Næste:** ❓ 1–3, ellers en målt opgave.
 
+### P1-51 — FÆRDIG 2026-09-27 (`ceo/report-grammar`) — Kundenrapporten skal tælle i rigtigt flertal
+
+**Begrundelse (målt, ikke formodet):** Den betalte kundenrapport er det dokument
+et bureau sender videre, og P1-48 kaldte det "produktet her". 66 iterationers
+målinger havde dækket hvert tal i det og hver måde et tal kunne være falskt på.
+Ingen havde målt, om et tal og dets navneord var enige. Målt med rigtig CLI,
+rigtig Pro-stub (aldrig et kald til mahope.tools) og rigtig `state.json` +
+`history.json` med ét site overvåget én gang:
+
+```
+| http://one.test/ | UP | 100% (1 checks) | 100% (1 recorded d, 1 checks) | … |
+**1 site(s) · 1 up · 0 down · 1 checks · 0 failed**
+```
+
+**Omfang:** `counted(count, singular, plural)` i `src/report.js` som den ene
+ejer, brugt af `uptimeCell`, `windowCell` og resumelinjen.
+
+**Acceptkriterier:**
+
+1. Ét tjek læses `1 check` i alle tre kolonner der tæller; `1 recorded d` er
+   uændret (kortformen er dokumentets egen).
+2. Alle flertalformer er tegn for tegn uændrede, `1 failed` er uændret, og det
+   bevidst uinflekterede `site(s)` er uændret (eksisterende, testlåst valg).
+3. `report --json` er urørt: `summary.checks`, `summary.failures`,
+   `sites[].checks` og `partition` er de samme tal som før.
+4. En lås forbyder `1 checks`, `1 faileds` og `1 recorded days` overalt i den
+   renderede rapport, så et nyt talt navneord ikke kan glide tilbage.
+5. Exit-koder, matrix-rækker og claims uændrede.
+
+**Status 2026-09-27:** 7 nye tests i `test/grammar.test.js` (lagt i `npm test` —
+samme fælde som P1-10) → **462/462** (455 + 7); audit 0/0; `node --check` alle
+JS-filer, `matrix --check`, `git diff --check` grønne på Node 26.7.0. **To
+målefejl i egen måling, begge rettet** (jf. afsnittet øverst). Ingen mutationstest
+— over tidsbudgeten, samme ærlige notering som P1-47/P1-49/P1-50.
+
 ### P1-46 — FÆRDIG 2026-09-26 (`ceo/one-site-one-slot`) — Ét site skal ikke tage to af de tre gratis-pladser
 
 **Begrundelse (målt, ikke formodet):** `watch https://kunde.dk` og
@@ -3412,6 +3515,8 @@ for selv. Ingen gemt nøgle er omskrevet, ingen eksisterende adgangsd tilstand
 - **Iteration 63 (P1-47, målt + fix):** ❓ 1–3 ubesvarede, så målingen gik på den betalte kanals *hyppighed* — den eneste del af alarmeringen ingen måling dækkede. Rigtig CLI, temp-HOME, rigtig lokal side med et token pr. forespørgsel: 3 pass → 3 `content changed`-alarmer, ingen af dem handlingsværdige; hver er en POST + en notifikation, så 2 880/dag ved 30 s. **Fix:** `readContentChangeAlert()` i `src/status.js` (1 time, pr. site, ur-baglæns undertrykker intet, intet kasseres) + brug i `runPass`; matrix-claim og §2 opdateret, så påstanden matcher leveringen. 10 nye tests → **431/431**; audit 0/0; `node --check`, `matrix --check`, `git diff --check` grønne på Node 26.7.0. Én ældre test opdateret (lagt krav på den gamle adfærd) og femte pass efter en time tilføjet, så dens eget formål er stærkere. To fejl i mine egne tests fundet (stub sendte `changed` på baseline; tabt `contentHash`-argument gjorde én test grøn af forkert grund). **Ingen mutationstest** — over tidsbudgeten. `ceo/content-alert-flood`, `54e8f54`.
 
 ## Iterationslog
+
+- **Iteration 67 (P1-51, målt + fix):** ❓ 1–3 ubesvarede, så målingen gik på det sidste lag i det betalte produkt, ingen måling havde rørt: **selve dokumentet** og om et tal og dets navneord var enige. Rigtig CLI, Pro-stub (aldrig et kald til mahope.tools), rigtig `state.json` + `history.json` med ét site overvåget én gang — tilstanden for et bureau, der tilføjede en kundes site i går: `100% (1 checks)`, `100% (1 recorded d, 1 checks)`, `· 1 checks ·`. **Målingen fandt samtidig, at intet andet var forkert** — partitionen, vinduesdækningen, JSON'en og alle flertalformer for rigtig-tallede sites var korrekte; der var ingen skjult sandhedsfejl i denne rapport, kun engelsk, på præcis den række en kunde læser når et site er nyt. **Fix:** `counted(count, singular, plural)` i `src/report.js` som den ene ejer, brugt af `uptimeCell`, `windowCell` og resumelinjen. Første test er om det der *ikke* må ændre sig (alle flertalformer, `1 failed`, det testlåste `site(s)`, hele JSON-kontrakten); **sidste test er låsen** der forbyder `1 checks`/`1 faileds`/`1 recorded days` overalt i den renderede rapport, fordi et nyt talt navneord er en fjerde plads at lave det samme på. **En fejl i min egen rettelse, fundet og taget tilbage:** jeg skrev først `1 failed` til `failed passed`, hvilket var en ny fejl og ikke en rettelse. 7 nye tests i `test/grammar.test.js` (lagt til i `npm test`) → **462/462** (455 + 7); audit 0/0; `node --check` alle JS-filer, `matrix --check`, `git diff --check` grønne på Node 26.7.0. **To målefejl i egen måling, begge fundet af den måling der skulle lade mig lukke den:** en håndlavet state-fil skrevet med `lastCheck` i stedet for `lastChecked` fik resumelinjen til at sige `2 up · 1 down · 3 not checked` = 6 sites ud af 3, som så ud som P1-13's partition-fejl igen (den var min fejl), og første testkørsel kaldte `buildReport` med ét objektargument i stedet for to. Den sjette sådanne fejl efter de fem i P1-41/P1-50 — **målingsværktøjet fejler oftere end koden.** Ingen exit-kode, intet nyt JSON-felt, ingen matrix-række, ingen state-filnøgle, ingen deploy-note nødvendig. `ceo/report-grammar`. **Næste:** ❓ 1–3 og ❓ 14, ellers en målt opgave.
 
 - **Iteration 62 (P1-46, målt + fix):** ❓ 1–3 ubesvarede, så målingen gik på de to former den samme adresse kan skrives i — den femte valgfri kandidat efter P1-42/43/44/45. Rigtig CLI, temp-HOME, lokalt site der svarer 200, Pro i staten for at få den rigtige kundenrapport. Før: `watch http://…:PORT` + `watch http://…:PORT/` → to nøgler, `Monitored URLs (2)`, to rækker i rapporten med hver sit tal under `**2 site(s) · 2 up · 0 down · 3 checks**`, og `unwatch http://…:PORT/` → `❌ Error: not monitored`. **Fix:** `urlIdentity()`/`sameUrl()`/`findUrlKey()` i `src/status.js` som den ene beslutning, bygget på `new URL()` — parseren `isHttpUrl()` allerede bruger; `addMonitoredUrls()` lægger ikke samme site ind to gange (og siger hvilken nøgle den ligger under), `monitoredCount()` tæller pr. identitet, `unwatchUrls()` sletter den nøgle brugeren mener med eksakt-match prioritet. **Ingen gemt nøgle omskrevet** — brugerens egen tekst er filens sandhed, og Site-kolonnen i et kundedokument er uændret. **To grænser målt:** `/a` vs `/a/` vs `/a?x=1` er tre sites (skråstregen fylder kun en *tom* sti ud), og P1-40s `kunde.dk`-klasse er urørt, fordi en nøgle uden adresse er sig selv. 10 nye tests i ny fil `test/onesite.test.js` (lagt til i `npm test` — samme fælde som P1-10) → **421/421** (411 + 10); audit 0/0; `node --check` alle JS-filer, `matrix --check`, `git diff --check` grønne på Node 26.7.0. **Fem mutationer målt, alle døde** (5/1/1/2/1 fejl) — `urlIdentity` uden normalisering, `findUrlKey` uden eksakt-match først, `monitoredCount` uden tælling pr. identitet, `addMonitoredUrls` uden duplikattjek, `unwatchUrls` med eksakt nøgle. **Ingen exit-kode ændret for en eksisterende kommando** (den præcis samme streng er stadig stille som før), intet nyt JSON-felt, ingen matrix-række, ingen claim, ingen deploy-note nødvendig. `ceo/one-site-one-slot`, `8531c27`, fast-forward-merget til `main` og pushet 2026-09-26. **Åbent og bevidst:** en fil med begge former fra før rettelsen viser begge rækker i rapporten, men er nu reparabel med to `unwatch` og uden håndredigering. Ingen review-agent — over 30-minutters grænse.
 

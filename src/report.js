@@ -362,10 +362,27 @@ export function renderReportJson(report) {
   return JSON.stringify(report, null, 2);
 }
 
+/**
+ * A counted thing, with the count and the noun agreeing.
+ *
+ * Measured 2026-09-27, this report is the document a bureau forwards to a
+ * paying customer, and it wrote `100% (1 checks)`, `0% (1 checks, 1 failed)` and
+ * `1 recorded d, 1 checks` for a site that had been monitored once. The number
+ * was right and the English was not, in three of the seven columns' worth of
+ * prose, on the exact row a client reads when the site is new — the first
+ * report a bureau sends is the one a site added yesterday produces.
+ *
+ * `site(s)` in the summary line is deliberately left alone: it is an existing,
+ * test-locked choice, and the count beside it already reads correctly.
+ */
+function counted(count, singular, plural = `${singular}s`) {
+  return `${count} ${count === 1 ? singular : plural}`;
+}
+
 function uptimeCell(site) {
   if (site.uptimePercent === null) return '— (no completed pass)';
   const failures = site.failures > 0 ? `, ${site.failures} failed` : '';
-  return `${site.uptimePercent}% (${site.checks} checks${failures})`;
+  return `${site.uptimePercent}% (${counted(site.checks, 'check')}${failures})`;
 }
 
 /**
@@ -462,7 +479,7 @@ function windowCell(site, windowDays) {
   // fix for an observed line.
   if (window.uptimePercent === null || window.uptimePercent === undefined) return `— (no share in the last ${windowDays} d)`;
   const failures = window.failures > 0 ? `, ${window.failures} failed` : '';
-  return `${window.uptimePercent}% (${window.days} recorded d, ${window.checks} checks${failures})`;
+  return `${window.uptimePercent}% (${window.days} recorded d, ${counted(window.checks, 'check')}${failures})`;
 }
 
 function sslCell(site) {
@@ -607,7 +624,7 @@ export function renderReportMarkdown(report) {
     `|${' --- |'.repeat(HEADERS.length)}`,
     ...(rows.length > 0 ? rows : [`| ${['_no monitored sites_', '—', '—', '—', '—', '—', '—'].join(' | ')} |`]),
     '',
-    `**${report.summary.sites} site(s) · ${buckets.up} up · ${buckets.down} down${unknownWords(buckets)} · ${report.summary.checks} checks · ${report.summary.failures} failed${expiring.length > 0 ? ` · ${expiring.length} SSL expiring soon` : ''}${expired.length > 0 ? ` · ${expired.length} SSL EXPIRED` : ''}${lapsed.length > 0 ? ` · ${lapsed.length} SSL may be expired` : ''}${stale.length > 0 ? ` · ${stale.length} stale (no check in the last ${STALE_AFTER_DAYS} d)` : ''}${crossed.length > 0 ? ` · ${crossed.length} answered by another host` : ''}${gaps.length > 0 ? ` · ${gaps.length} with an incomplete window` : ''}${uncheckable.length > 0 ? ` · ${uncheckable.length} not a full address` : ''}**`,
+    `**${report.summary.sites} site(s) · ${buckets.up} up · ${buckets.down} down${unknownWords(buckets)} · ${counted(report.summary.checks, 'check')} · ${report.summary.failures} failed${expiring.length > 0 ? ` · ${expiring.length} SSL expiring soon` : ''}${expired.length > 0 ? ` · ${expired.length} SSL EXPIRED` : ''}${lapsed.length > 0 ? ` · ${lapsed.length} SSL may be expired` : ''}${stale.length > 0 ? ` · ${stale.length} stale (no check in the last ${STALE_AFTER_DAYS} d)` : ''}${crossed.length > 0 ? ` · ${crossed.length} answered by another host` : ''}${gaps.length > 0 ? ` · ${gaps.length} with an incomplete window` : ''}${uncheckable.length > 0 ? ` · ${uncheckable.length} not a full address` : ''}**`,
     ...expiredLines,
     ...lapsedLines,
     ...attention,
