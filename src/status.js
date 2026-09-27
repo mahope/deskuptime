@@ -936,6 +936,108 @@ export function readCertCoverage(ssl, url) {
 }
 
 /**
+ * The identity of a certificate: the serial number the issuer assigned, and the
+ * hash of the certificate itself.
+ *
+ * `checkSSL` has read both since P0-3 and no surface could read them, so the two
+ * fields that answer "is this still *my customer's* certificate?" were measured
+ * on every check and thrown away. Together with `readSslIssuer` (who issued it)
+ * and `readCertCoverage` (does it cover the host), identity is the third leg of
+ * the same question, and it is the leg a bureau asks about after a hijack: a
+ * parked domain answers 200 with *someone else's* certificate.
+ *
+ * The hash is `fingerprint256`, not the legacy `fingerprint`. SHA-1 is
+ * collision-broken and this is a security tool; the SHA-1 field is left exactly
+ * as Node produced it so nothing that read it silently changes meaning.
+ *
+ * Both are normalised to lower-case hex without separators, because they are
+ * compared against a stored value and the stored value was written by a person
+ * or an older build: `89:9C:…` and `899c…` are the same certificate, and a
+ * comparison that failed on punctuation would report a rotation that never
+ * happened. `null` per field, never a made-up value — `readCertIdentity({})` on
+ * a site with no certificate is `null`, which is a fact.
+ *
+ * @param {object} ssl — the checker's result, or nothing at all
+ * @returns {{serial: string|null, fingerprint: string|null}|null}
+ */
+export function readCertIdentity(ssl) {
+  const value = ssl && typeof ssl === 'object' ? ssl : null;
+  if (!value) return null;
+  const hex = input => (typeof input === 'string' ? input.replace(/[^0-9a-fA-F]/g, '').toLowerCase() : null) || null;
+  const serial = hex(value.serialNumber);
+  const fingerprint = hex(value.fingerprint256);
+  if (serial === null && fingerprint === null) return null;
+  return { serial, fingerprint };
+}
+
+/** The three things a comparison against a stored certificate can conclude. */
+export const CERT_VERDICT = {
+  /** A stored certificate was compared with, and this is a different one. */
+  ROTATED: 'rotated',
+  /** A stored certificate was compared with, and this is the same one. */
+  SAME: 'same',
+  /** There was no stored certificate, so nothing was concluded. */
+  NO_BASELINE: 'no-baseline',
+};
+
+/**
+ * What a certificate comparison concluded, and how old the certificate it was
+ * compared with is. One owner, so `check`, the watch loop and every future
+ * surface cannot answer the same question two ways.
+ *
+ * The age is the second half of the claim, for the same reason it is on
+ * `readContentComparison`: "the same certificate" is true of two readings and
+ * says nothing about the span between them. A domain that was hijacked and
+ * handed back between two passes presents the same certificate at both ends.
+ * So an unchanged verdict names the reading it was compared with, and a stored
+ * certificate whose time cannot be placed says so instead of being rounded into
+ * "today" — the same rule as the certificate countdown (P1-36), the page size
+ * on the lists (P1-57) and the content comparison (P1-59).
+ *
+ * The baseline is the watch loop's certificate, never `check`'s own: `check`
+ * stays read-only, so a one-off command never becomes a writer.
+ *
+ * @param {object} [input] — `{ fingerprint, seenAt, now }`
+ * @param {string|null} [input.fingerprint] — the certificate just read
+ * @param {unknown} [input.baselineFingerprint] — the state's `lastCertFingerprint`
+ * @param {unknown} [input.seenAt] — when that stored certificate was read
+ * @param {Date} [input.now]
+ * @returns {{verdict: string, compared: boolean, rotated: boolean|null,
+ *   ageDays: number|null, aheadMs: number, note: string}}
+ */
+export function readCertRotation({ fingerprint = null, baselineFingerprint = null, seenAt = null, now = new Date() } = {}) {
+  const current = typeof fingerprint === 'string' && fingerprint !== '' ? fingerprint : null;
+  const baseline = typeof baselineFingerprint === 'string' && baselineFingerprint !== ''
+    ? baselineFingerprint.replace(/[^0-9a-fA-F]/g, '').toLowerCase()
+    : null;
+  if (current === null || baseline === null) {
+    return {
+      verdict: CERT_VERDICT.NO_BASELINE,
+      compared: false,
+      rotated: null,
+      ageDays: null,
+      aheadMs: 0,
+      note: 'no earlier certificate to compare against',
+    };
+  }
+  const reading = passAge(seenAt, now);
+  const rotated = current !== baseline;
+  const when = reading.state === PASS_AGE.AHEAD
+    ? `a certificate seen ${clockAheadNote(reading.aheadMs)}`
+    : reading.state === PASS_AGE.AGED
+      ? `the certificate seen ${reading.ageDays === 0 ? 'today' : `${reading.ageDays} d ago`}`
+      : 'a certificate of unknown age';
+  return {
+    verdict: rotated ? CERT_VERDICT.ROTATED : CERT_VERDICT.SAME,
+    compared: true,
+    rotated,
+    ageDays: reading.state === PASS_AGE.AGED ? reading.ageDays : null,
+    aheadMs: reading.aheadMs,
+    note: rotated ? `certificate rotated since ${when}` : `same certificate as ${when}`,
+  };
+}
+
+/**
  * The fixed wording for a certificate whose reading is too old to renew against.
  *
  * One sentence for every surface, and it carries the two numbers a reader needs

@@ -86,6 +86,10 @@ export function checkSSL(url, { timeoutMs = SSL_TIMEOUT_MS } = {}) {
           expiresSoon: isSslExpiringSoon(Math.max(0, validDays)),
           serialNumber: cert.serialNumber,
           fingerprint: cert.fingerprint,
+          // The identity hash. `fingerprint` above is SHA-1 and collision-broken;
+          // nothing compared it, so it stays exactly as Node produced it, and
+          // the hash a comparison is allowed to trust is this one.
+          fingerprint256: cert.fingerprint256,
           cipher: cipher.name,
           protocol: cipher.version,
           subjectAltName: cert.subjectaltname?.split(', ').filter(Boolean) || [],

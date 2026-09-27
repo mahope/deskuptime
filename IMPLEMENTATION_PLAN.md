@@ -1,3 +1,83 @@
+## Status fra denne iteration (76, P1-60 — et domæne, der ikke længere var kundens, svarede 200 med et gyldigt certifikat, og alle flader kaldte det sundt)
+
+**Hvorfor denne flade:** ❓ 1–3 er stadig ubesvarede, så iterationen tog det
+sidste fund i den række, der har ligget målt siden P1-52: `serialNumber` og
+`fingerprint` er læst på **hvert** SSL-tjek siden P0-3, og ingen flade kunne
+læse dem. Fire målinger i træk (P1-52/53/54/55) skrev samme ord om det:
+*"kræver spec først"*.
+
+**Målt først, nul kode ændret.** Rigtig CLI, temp-HOME, rigtig state-fil med et
+gemt `lastCertFingerprint` der var **forkert**, og `https://example.com`:
+
+```
+check          ->  🔒 SSL: 89d ✅ / 🏷️ Issuer: SSL Corporation
+                   📜 Certificate covers example.com / 🔐 TLS: TLSv1.3
+check --json   ->  (intet cert-felt)
+pass -> skriver lastCertFingerprint: 0 steder i src/
+```
+
+**Fundet er det tredje certifikat-spørgsmål, og de to andre er ikke nok.**
+Hvem udstedte det (P1-53) og dækker det værten (P1-54) er begge **om**
+certifikatet; ingen af dem kan se om det **er det samme**. Et domæne der udløber
+og bliver købt, eller hijackes, svarer normalt 200 med en anden autoritets
+gyldige certifikat — nedtællingen tæller ned, udstederen navngives og dækningen
+matcher, fordi det nye certifikat dækker sitets eget navn. Det er præcis det
+spørgsmål et bureau får efter et hijack.
+
+**Rettelsen er to ejere i `src/status.js`.** `readCertIdentity(ssl)` er den ene
+beslutning om hvad et certifikats identitet er, og den bruger **`fingerprint256`**,
+ikke `fingerprint`: SHA-1 er kollisionsbrudt, og dette er et sikkerhedsværktøj.
+SHA-1-feltet står **urørt** i `checkSSL`, så intet der læste det ændrer mening i
+stilhed. Begge normaliseres til lille hex uden kolonner, fordi en gemt værdi kan
+være skrevet af en person eller en ældre build — `89:9C:…` og `899c…` er samme
+certifikat, og en sammenligning der fejlede på tegnsætning ville melde en rotation
+der aldrig skete. `readCertRotation()` + `CERT_VERDICT` ejer **verdikt og alder**,
+præcis som P1-59 gjorde for indholdet, og uret læses gennem `passAge`, så et
+håndskrevet stempel ikke alderes til "i dag".
+
+**To flader + den betalte kanal, additivt:** `   🔑 Cert:    certificate
+rotated since the certificate seen 7 d ago — serial 01eee6aabb52…` i `check`
+(gennem `safeText` — serienummeret er udstederens), fire additive JSON-felter
+(`certSerial`, `certFingerprint`, `certRotated` hvor `null` er "intet at
+sammenligne med", `certBaselineSeenAt`), og **én ny hændelsestype** `cert_rotated`
+i den betalte webhook — den kanal der sælges. Første læsning er en baseline og
+ikke en hændelse, så en nybruger ikke alarmeres om et certifikat han aldrig så.
+`docs/cert-rotation.md` er skrevet (planens egen forudsætning), og
+`docs/pro-alerts.md` §2 er rettet, fordi den er kontrakten en adapter skrives imod.
+
+**Målt, alle tre tilstande gennem den rigtige CLI:** `⏸️ same certificate as the
+certificate seen 7 d ago` / `🔑 certificate rotated since …` / `— no earlier
+certificate to compare against`. **Verdikt, exit-kode, uptime-tal, matrix-rækker
+og alle øvrige felter uændrede** — et nyt certifikat er ikke et nedet site, så
+en rotation er en *kendsgerning om certifikatet*, aldrig en dom.
+
+**Test (10 nye i `test/certrotation.test.js`, auto i `npm test`):** ejeren på alle
+tre verdikter + null-ikke-false, normalisering (koloner/store bogstaver er samme
+certifikat), de tre ur-tilstande, **målt på et rigtigt certifikat** (SHA-256 er 64
+tegn og ikke SHA-1), passets tre faser (baseline → samme → rotation) med state
+filen læst tilbage, at en rotation ikke rører `healthy`/`wasUp`/`lastStatus`, og
+to låse: hændelsestypen findes i koden, i specen og i den sendte liste, og
+sætningen findes kun hos ejeren (passen og `check` spørger, ingen af dem skriver
+den selv). **Ingen mutationstest** — over tidsbudgeten (43 min), samme ærlige
+notering som P1-47/49/50/51/52.
+
+**Resultat: 543/543 grøn** (533 + 10), audit 0/0, `node --check` på alle
+JS-filer, `matrix --check` exit 0 på Node 26.7.0.
+
+**Måle-notits:** de 20 røde tests i baseline var **ikke** et produktproblem —
+`node` på denne maskine var 22.23.2, og `engines` siger `>=24` (`.nvmrc`: 24).
+Hele gaten er grøn på `/opt/homebrew/opt/node@26/bin/node` (26.7.0), som er den
+planen har brugt hele vejen.
+
+**Næste:** ❓ 1–3 og ❓ 14, ellers en målt opgave. Uafsluttede fund fra denne
+iteration: (1) **kundenrapporten ved det ikke** — `report` får ingen linje om
+rotation, så betaltefladen stadig tier om den tredje del af spørgsmålet, selv om
+alle målinger nu findes i state (`lastCertFingerprint` + `lastCertSeenAt` er der);
+(2) de to statuslister (`status`, `watch --status`) tier også; (3) et certifikat
+der **flapper** mellem to servere ville sende `cert_rotated` hvert pass — samme
+klasse som `content_changed` fik sin tæthed for (P1-47), og der er ingen endnu;
+(4) `serialNumber` er nu gemt men læst af ingen.
+
 ## Status fra denne iteration (75, P1-59 — `check` sammenlignede aldrig siden med noget, så den gratis flade lovede en evne den ikke havde)
 
 **Hvorfor denne flade:** ❓ 1–3 er stadig ubesvarede, og P1-57 efterlod to

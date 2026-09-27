@@ -18,7 +18,7 @@ import { buildReport, renderReportJson, renderReportMarkdown } from './report.js
 import { readFileSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
-import { invalidHttpUrls, invalidUrlMessage, partitionUsableUrls, readCertCoverage, readChain, readContentComparison, readContentState, readDisclosure, readEntry, readRedirectTarget, readSecurityHeaders, readSslIssuer, readSslState, readSslTls, contentSkipNote, unusableUrlNote, withoutCredentials, CONTENT_VERDICT, SECURITY_HEADER, STALE_AFTER_DAYS } from './status.js';
+import { invalidHttpUrls, invalidUrlMessage, partitionUsableUrls, readCertCoverage, readCertIdentity, readCertRotation, readChain, readContentComparison, readContentState, readDisclosure, readEntry, readRedirectTarget, readSecurityHeaders, readSslIssuer, readSslState, readSslTls, contentSkipNote, unusableUrlNote, withoutCredentials, CERT_VERDICT, CONTENT_VERDICT, SECURITY_HEADER, STALE_AFTER_DAYS } from './status.js';
 import { formatMs, machinesInUse, safeText } from './display.js';
 import { DEFAULT_WINDOW_DAYS, HISTORY_DAYS, historyReadErrorMessage, readHistoryFile } from './history.js';
 import { FREE, PRODUCT, proExtras, renderHelpPro } from './features.js';
@@ -130,11 +130,13 @@ if (command === 'check') {
   const stored = readStateFile().state;
   const contentHashes = new Map();
   const baselineReadAt = new Map();
+  const baselineCerts = new Map();
   for (const url of urls) {
     const entry = stored.urls[url];
     if (!entry || typeof entry !== 'object') continue;
     if (typeof entry.lastHash === 'string' && entry.lastHash !== '') contentHashes.set(url, entry.lastHash);
     if (typeof entry.lastContentReadAt === 'string' && entry.lastContentReadAt !== '') baselineReadAt.set(url, entry.lastContentReadAt);
+    if (typeof entry.lastCertFingerprint === 'string' && entry.lastCertFingerprint !== '') baselineCerts.set(url, { fingerprint: entry.lastCertFingerprint, seenAt: entry.lastCertSeenAt ?? null });
   }
   const results = await checkUrls(urls, { timeoutMs, contentHashes });
 
@@ -144,6 +146,17 @@ if (command === 'check') {
     changed: r.content?.changed ?? null,
     readAt: baselineReadAt.get(r.url) ?? null,
   });
+
+  // The same for the certificate: the one owner of the rotation verdict, asked
+  // once per result, so `check`'s line and its JSON cannot disagree.
+  const certRotation = r => {
+    const baseline = baselineCerts.get(r.url) ?? null;
+    return readCertRotation({
+      fingerprint: readCertIdentity(r.ssl)?.fingerprint ?? null,
+      baselineFingerprint: baseline?.fingerprint ?? null,
+      seenAt: baseline?.seenAt ?? null,
+    });
+  };
 
   if (json) {
     // Machine-readable output: stdout is pure JSON for piping into jq/CI
@@ -229,6 +242,18 @@ if (command === 'check') {
         // for `contentChanged` means "no reading to compare with", not `false`.
         contentChanged: contentVerdict(r).compared ? contentVerdict(r).verdict === CONTENT_VERDICT.CHANGED : null,
         contentBaselineReadAt: baselineReadAt.get(r.url) ?? null,
+        // The certificate's own identity, and whether this is still the one the
+        // watch loop last saw. `sslIssuer` says who issued it, `sslCoversHost`
+        // says whether it covers the host, and neither says whether it is *the
+        // same one*: a domain handed to a new owner answers 200 with a valid
+        // certificate from a different authority, and the two fields above look
+        // healthy. `certRotated` is `null` — not `false` — when there is no
+        // stored certificate to compare with, which is every site the user has
+        // never watched.
+        certSerial: readCertIdentity(r.ssl)?.serial ?? null,
+        certFingerprint: readCertIdentity(r.ssl)?.fingerprint ?? null,
+        certRotated: certRotation(r).compared ? certRotation(r).verdict === CERT_VERDICT.ROTATED : null,
+        certBaselineSeenAt: baselineCerts.get(r.url)?.seenAt ?? null,
         errorType: r.errorType,
         error: r.error,
       };
@@ -241,6 +266,7 @@ if (command === 'check') {
     for (const result of results) {
       const summary = summarize(result);
       const content = readContentState(result.content);
+      const identity = readCertIdentity(result.ssl);
       const redirect = readRedirectTarget({ url: result.url, finalUrl: result.finalUrl });
       const statusSymbol = result.healthy ? '✅' : '❌';
       const sslEmoji = summary.sslIcon;
@@ -295,6 +321,23 @@ if (command === 'check') {
       const tlsLine = [summary.sslTls.protocol, summary.sslTls.cipher].filter(Boolean).join(' — ');
       if (tlsLine) {
         console.log(`   🔐 TLS: ${safeText(tlsLine, { max: 0 })}`);
+      }
+      // Is this still the customer's certificate? The checker has measured the
+      // serial number and the certificate hash since P0-3 and nothing could read
+      // them, so the question "the domain answers 200, is it still *mine*?" had
+      // no answer on any surface. It is asked against the certificate the watch
+      // loop last stored, never against `check`'s own — this command stays
+      // read-only — and the sentence names how old that stored certificate is,
+      // because "the same certificate" is true of two readings and says nothing
+      // about the span between them. Owner's sentence, and the values it is
+      // built from are the certificate's, so the serial goes through safeText.
+      if (identity) {
+        const rotation = certRotation(result);
+        const rotationEmoji = rotation.verdict === CERT_VERDICT.ROTATED
+          ? '🔑'
+          : rotation.verdict === CERT_VERDICT.SAME ? '⏸️' : '—';
+        const serialText = identity.serial ? ` — serial ${identity.serial.slice(0, 12)}…` : '';
+        console.log(`   ${rotationEmoji} Cert:    ${safeText(rotation.note + serialText, { max: 0 })}`);
       }
       if (content.measured) {
         const bytes = content.length === null ? 'size unknown' : `${content.length.toLocaleString('en-US')} bytes`;

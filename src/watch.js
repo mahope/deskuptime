@@ -17,7 +17,7 @@ import { readFileSync, writeFileSync, mkdirSync, existsSync, renameSync, unlinkS
 import { dirname, posix, win32 } from 'path';
 import { homedir } from 'os';
 import { createHash, randomUUID } from 'crypto';
-import { assertValidHttpUrls, expiredNote, findUrlKey, isNewerPass, partitionUsableUrls, readContentChange, readContentChangeAlert, readEntry, readEvent, readRedirectTarget, readTransitionAlert, queuedAgeMs, readSslState, STALE_AFTER_DAYS, unusableUrlNote, urlIdentity, withoutCredentials } from './status.js';
+import { assertValidHttpUrls, expiredNote, findUrlKey, isNewerPass, partitionUsableUrls, readCertIdentity, readCertRotation, readContentChange, readContentChangeAlert, readEntry, readEvent, readRedirectTarget, readTransitionAlert, queuedAgeMs, readSslState, STALE_AFTER_DAYS, unusableUrlNote, urlIdentity, withoutCredentials } from './status.js';
 import { recordPass } from './report.js';
 import { formatMs, safeText } from './display.js';
 import { historyFileFrom, pruneHistory, readHistoryFile, recordHistoryPass, saveHistory, historyWriteErrorMessage } from './history.js';
@@ -530,6 +530,31 @@ export async function runPass(state, opts = {}) {
       entry.sslExpiredWarned = false;
     }
 
+    // Is this still the certificate the customer had? The serial number and the
+    // certificate hash have been measured on every SSL check since P0-3 and
+    // nothing could read them, so a domain handed to a new owner — a hijack, an
+    // expired domain that got bought — answered 200 with a valid certificate and
+    // every surface called it healthy: the countdown counted down, the issuer
+    // was named, the coverage matched. None of those three can see that the
+    // certificate is a different one. The comparison and its sentence come from
+    // the one owner, and the alert is only for a real rotation: a first reading
+    // is a baseline, not an event, exactly as a first reading of the page is.
+    const identity = readCertIdentity(result.ssl);
+    if (identity?.fingerprint) {
+      const rotation = readCertRotation({
+        fingerprint: identity.fingerprint,
+        baselineFingerprint: entry.lastCertFingerprint,
+        seenAt: entry.lastCertSeenAt,
+        now,
+      });
+      if (rotation.compared && rotation.rotated) {
+        events.push(event('cert_rotated', `SSL certificate replaced — ${rotation.note}`));
+      }
+      entry.lastCertFingerprint = identity.fingerprint;
+      entry.lastCertSeenAt = measuredAt;
+      if (identity.serial) entry.lastCertSerial = identity.serial;
+    }
+
     if (result.content?.changed === true) {
       // The sentence, the title and the size are all one decision, asked of the
       // one owner. This used to be built here from two numbers, which printed
@@ -639,6 +664,7 @@ const EVENT_ICONS = {
   ssl_warning: '⚠️ ',
   ssl_expired: '🔴 ',
   content_changed: '🔄',
+  cert_rotated: '🔑 ',
 };
 
 export const EVENT_TYPES = Object.freeze(Object.keys(EVENT_ICONS));

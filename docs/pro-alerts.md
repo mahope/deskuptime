@@ -96,7 +96,7 @@ Payload:
 ```json
 {
   "product": "deskuptime",
-  "type": "down | up | redirect | ssl_warning | ssl_expired | content_changed",
+  "type": "down | up | redirect | ssl_warning | ssl_expired | content_changed | cert_rotated",
   "url": "https://yoursite.com",
   "message": "is DOWN — HTTP 503",
   "timestamp": "2026-09-25T14:26:12.000Z",
@@ -113,6 +113,18 @@ Listen er den **ene** type-værdi, loopet sender, og de er låst til
 tilføjes i koden uden at stå her, eller en der står her uden at blive sendt, giver
 en rød gate. `baseline` er den eneste type der *findes* i koden og ikke sendes —
 den er en første iagttagelse, ikke en hændelse.
+
+**`cert_rotated` — domænet er måske ikke længere kundens.** `type:
+"cert_rotated"` betyder, at det certifikat værten serverer **ikke er det
+certifikat, overvågningen så ved sidens sidste læsning**. Et domæne der udløber
+og bliver købt, eller hijackes, svarer helt normalt `200` med et gyldigt
+certifikat fra en anden autoritet — nedtællingen tæller ned, udstederen navngives
+og dækningen matcher, fordi det nye certifikat dækker sitets eget navn. Ingen af
+de tre kan se det. Kanalen skal derfor vise det, **ikke** behandle det som et
+nedbrud. Første læsning er en baseline og sendes ikke, som for alle andre
+hændelser. Sætningen bærer alderen på den gemte læsning, fordi "samme
+certifikat" er sandt om to læsninger og siger intet om strækningen imellem dem.
+Spec: `docs/cert-rotation.md`.
 
 **`redirect` — oplysningen, ikke en fejl.** `type: "redirect"` betyder, at svaret
 kom fra en **anden vært** end den adresserede: et udløbet kunde-domæne der er blevet
@@ -139,7 +151,8 @@ DeskUptime faktisk så skiftet: det forudgående pass er til stede og nyere end
 staleness-vinduet. `unobserved` betyder, at hændelsen er en sammenligning med en
 måling, der mangler, er ulæselig eller er ældre end vinduet — typisk fordi
 overvågningsloopet har været dødt. `none` er alt, der ikke er en tilstandsovergang
-(`ssl_warning`, `ssl_expired`, `content_changed`, `redirect`, `baseline`).
+(`ssl_warning`, `ssl_expired`, `content_changed`, `cert_rotated`,
+`redirect`, `baseline`).
 
 Målt 26/9, før dette blev skrevet: en state-fil med et pass fra 41 dage siden —
 loopet var dødt, og sitet var aldrig nede — gav
