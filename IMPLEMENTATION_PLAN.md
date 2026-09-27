@@ -1,3 +1,84 @@
+## Status fra denne iteration (83, P1-67 — gaten har været rød siden P1-58: 11 merges er kommet gennem uden at blive testet på den maskine de udgives på)
+
+**Hvad der blev fundet, først og fremmest.** Denne iteration skulle have valgt ❓
+1–3, som er stadig ubesvarede, eller en målt opgave fra P1-66's `Næste`. I stedet
+for at vælge holdt jeg op med at se på den røde pind, fordi ét kald `gh run list`
+fortalte sandheden om hele historikken:
+
+```
+36335323175  failure  Merge branch 'ceo/cert-issuer-alert'      ← P1-66
+36331815136  failure  Merge branch 'ceo/cert-issuer-lists'     ← P1-65
+b646220      failure  Lad de to lister se den udsteder ...
+… 11 i træk, helt tilbage til
+             failure  Lås hele suiten mod den rigtige HOME …    ← P1-58
+```
+
+**Elleve merges er lagt på `main` med en rød gaten.** Lokalt er gaten grøn
+(611/611), og det er netop derfor ingen har set det: kørslen sker på macOS, CI
+kører på Linux og Windows, og intet i kontrakten bad nogen sammenligne de to.
+Siden P1-58 blev hele suitemens lås til `HOME` skrevet, og de antagelser den
+gav sig selv holder kun på den maskine den blev skrevet på.
+
+**De fire rødder, målt — ikke gættet.** Hver eneste fejl i CI-loggen, sorteret
+efter årsag:
+
+1. **4 tests — `openssl -not_before`/`-not_after` findes kun i OpenSSL 3.5+.**
+   `test/ssltruth.test.js` og `test/certondown.test.js` byggede deres udløbne
+   certifikater med de to flag, fordi det er den korteste vej til et certifikat
+   i fortiden. På runneren: `req: Use -help for summary.` De to åbenlyse
+   alternativer er begge døde, målt i OpenSSL 3.6.3: `req -x509 -days -1` →
+   *"Non-positive number"*, og `openssl x509 -req -days -1` bygger certifikatet
+   og kasserer det med *"end date before start date"*.
+2. **1 test — `'/tmp'` stod på listen over «ikke et temp-katalog».** På Linux
+   *er* `tmpdir()` `/tmp`, så linjen ovenfor siger `isTempHome(tmpdir()) === true`
+   og linjen nedenfor siger `isTempHome('/tmp') === false`. Testen modsagde sig
+   selv, og kun på den platform hvor den var skrevet holdt den.
+3. **1 test — tre pass i samme millisekund.** `certrotationflood.test.js`
+   hævdede at det er *nyeste pass* der stempler rotationen, men et stub-resultat
+   uden `timestamp` får `runPass` til at stemple med maskinens rigtige ur. På
+   runnerne nåede alle tre pass samme millisekund, så påstanden var sand og
+   målingen falsk. Samme klasse som de «to tidsbomber» P1-58 selv ville lukke.
+4. **1 test (Windows) — `os.homedir()` læser `USERPROFILE`, ikke `HOME`.**
+   Testen satte kun `HOME` til en fremmed sti og hævdede så at fallback'en
+   fulgte den. Det er POSIX-antagelsen i fuld størrelse, i det test der findes
+   for at *netop ikke* antager platformen.
+
+**Rettelsen.** Ny `test/helpers/certs.mjs` er den ene ejer af «et certifikat
+der allerede er udløbet», bygget med `openssl ca -selfsign -startdate … -enddate …`.
+De to flag har eksisteret siden OpenSSL 1.0, så ingen dato-aritmetik er vores
+egen, og prisen er en CA-database i samme temp-mappe, der fjernes med den. De
+to fixtures kalder nu den ene ejer i stedet for hver at have en kopi.
+`flappingCheck()` får et ur som anden parameter (default uændret, så ingen af
+de 15 andre tests i filen røres), og `SOMEONE_ELSES_HOME` — som filen allerede
+havde — afløser `'/tmp'` på listen.
+
+**Verificeret på Linux, ikke håbet.** Jeg kørte ikke bare den grønne macOS-gate
+og skubbede. Alpine 3.19 installerer OpenSSL **3.1.8**, som er ældre end
+flagene, og den gamle kode fejler der med præcis CI's fejl:
+
+```
+OpenSSL 3.1.8 ·  -not_before:  req: Use -help for summary.
+```
+
+Helperens kommandorække kørt i den samme container giver præcis de datoer den
+fejlede på: `notBefore=Aug 17 … 2026`, `notAfter=Aug 18 … 2026`. Rødderne 2 og
+3 er deterministiske og kræver ingen kørsel: rød 2 var en selvf modsigelse, og
+rød 3 er nu et ur testen ejer, så stemplerne kan ikke være ens. **Rød 4 er
+Windows og kan ikke køres her** den er rettet efter den dokumenterede
+adfærd, ikke efter en måling, og næste iterations ene `gh run`-kald bekræfter
+eller modsiger den.
+
+**Resultat: 611/611 grøn** (uændret testantal — fire fejl rettet, nul tilføjet,
+fordi de fire tests alle faldt *på* den rigtige påstand), audit 0/0,
+`matrix --check` exit 0, `node --check` ren på alle JS og MJS inkl. den nye
+helper, `git diff --check` rent. Node 26.7.0.
+
+**Næste:** (1) ❓ 1–3 og ❓ 14 er stadig ubesvarede og afgør om næste iteration
+bygger features overhovedet; (2) det her er en **harness**-opgave, ikke en
+produktopgave, og den næste bør være målt i `❓ 1–3`'s retning; (3) fund fra
+P1-66 ligger stadig: `lastCertSerial` læses af ingen, rotationen tælles pr.
+time men ikke pr. antal, og kanalen får intet struktureret om udstederen (❓ 16).
+
 ## Status fra denne iteration (82, P1-66 — den betalte kanal sagde «certifikatet blev udskiftet» om et domæne der var kommet i nye hænder)
 
 **Hvorfor denne flade:** ❓ 1–3 og ❓ 14 er stadig ubesvarede, så iterationen tog

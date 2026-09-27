@@ -60,8 +60,17 @@ const FINGERPRINT_B = 'bb'.repeat(32);
 
 const rotated = event => event?.type === 'cert_rotated';
 
-/** An UP site whose certificate alternates between two identities. */
-function flappingCheck(fingerprints = [FINGERPRINT_A, FINGERPRINT_B]) {
+/**
+ * An UP site whose certificate alternates between two identities.
+ *
+ * `clock` is a second argument because a result without a `timestamp` makes
+ * `runPass` stamp with the *machine's* clock, and one test here claims two
+ * passes carry different stamps. On the Linux runner all three passes landed
+ * inside the same millisecond, so the claim failed on a test that was right
+ * about the code and wrong about the clock. Everything else keeps the default,
+ * so no other test in this file changes.
+ */
+function flappingCheck(fingerprints = [FINGERPRINT_A, FINGERPRINT_B], clock = () => new Date().toISOString()) {
   let n = 0;
   return url => {
     n += 1;
@@ -72,6 +81,7 @@ function flappingCheck(fingerprints = [FINGERPRINT_A, FINGERPRINT_B]) {
       statusCode: 200,
       responseTimeMs: 12,
       finalUrl: url,
+      timestamp: clock(n),
       content: { fetched: true, contentLength: 132, hash: `hash-${n}`, changed: null, title: 'Kunde' },
       ssl: {
         valid: true,
@@ -112,7 +122,9 @@ test('seks pass over et flappende certifikat giver én alarm', async t => {
 test('kendsgerningen skrives på hvert pass, også de der holdes tilbage', async t => {
   const home = tempHome(t);
   const state = { urls: { [URL]: {} } };
-  const check = flappingCheck();
+  // A clock the test owns, so "the newest pass stamped it" is a fact about the
+  // code and not about how fast this machine happens to run three passes.
+  const check = flappingCheck(undefined, (n) => at(n * 30_000).toISOString());
 
   await runPass(state, { home, now: at(0), check, returnResults: true });
   await runPass(state, { home, now: at(30_000), check, returnResults: true });
@@ -127,9 +139,8 @@ test('kendsgerningen skrives på hvert pass, også de der holdes tilbage', async
   assert.notEqual(entry.lastCertRotatedAt, stamped, 'and it is the newest pass that stamped it');
 
   // And a later surface still reads it, with an age. Read from the stamp itself
-  // rather than from a fixed date: a stubbed check carries no `timestamp`, so the
-  // pass stamps with this machine's real clock (`measuredAt`), and a test that
-  // placed `now` months away from the real one would measure nothing.
+  // rather than from a fixed date: the stamp belongs to the check, and a test
+  // that placed `now` months away from it would measure nothing.
   const readAt = new Date(Date.parse(entry.lastCertRotatedAt) + 2 * 86_400_000);
   const later = readCertRotationState(entry, { now: readAt });
   assert.equal(later.rotated, true);

@@ -31,7 +31,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { execFile, execFileSync, spawnSync } from 'node:child_process';
+import { execFile, spawnSync } from 'node:child_process';
 import { promisify } from 'node:util';
 import { mkdtempSync, readFileSync, rmSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -43,6 +43,7 @@ import { canReadCertificate, expectsCertificate } from '../src/status.js';
 import { checkUrl, summarize } from '../src/engine.js';
 import { runPass } from '../src/watch.js';
 import { buildReport, renderReportMarkdown } from '../src/report.js';
+import { selfSigned } from './helpers/certs.mjs';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const CLI = join(ROOT, 'src', 'cli.js');
@@ -73,24 +74,15 @@ async function close(server) {
 /**
  * A certificate that expired 40 days before this run — the ordinary reason a
  * customer's site stops answering, and the reason the renewal warning exists.
- * `-not_after` is a fixed date in the past, so nothing in the repo ever expires.
+ * Both dates are in the past, so nothing in the repo ever expires.
  */
 function lapsedCert(dir) {
-  const key = join(dir, 'key.pem');
-  const cert = join(dir, 'cert.pem');
-  // `YYYYMMDDHHMMSSZ`, and `notBefore` has to be before `notAfter` — openssl
-  // refuses the pair otherwise, which is how the first version of this fixture
-  // failed to be built at all.
-  const stamp = (days) => `${new Date(Date.now() - days * 24 * 60 * 60 * 1000)
-    .toISOString().replace(/[-:T.]/g, '').slice(0, 14)}Z`;
-  execFileSync('openssl', [
-    'req', '-x509', '-newkey', 'rsa:2048', '-nodes',
-    '-keyout', key, '-out', cert,
-    '-not_before', stamp(41), '-not_after', stamp(40),
-    '-subj', '/O=DeskUptime Test CA/CN=127.0.0.1',
-    '-addext', 'subjectAltName=DNS:127.0.0.1',
-  ], { stdio: 'ignore' });
-  return { key: readFileSync(key), cert: readFileSync(cert), certPath: cert };
+  return selfSigned(dir, {
+    fromDays: 41,
+    toDays: 40,
+    subject: '/O=DeskUptime Test CA/CN=127.0.0.1',
+    sans: 'DNS:127.0.0.1',
+  });
 }
 
 /** A site that serves a certificate which expired 40 days ago. */

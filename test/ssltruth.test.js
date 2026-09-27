@@ -32,6 +32,8 @@ import { runPass } from '../src/watch.js';
 import { buildReport, renderReportMarkdown } from '../src/report.js';
 import { readEntry, readSslState, expiredNote, SSL_WARN_DAYS } from '../src/status.js';
 
+import { selfSignedFixture } from './helpers/certs.mjs';
+
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const NODE = process.execPath;
 // Asynchronous, because the TLS fixture lives in *this* process: a synchronous
@@ -56,18 +58,15 @@ function hasOpenssl() {
 /** A real TLS server with a certificate whose `notAfter` is in the past. */
 function expiredTlsServer() {
   const dir = mkdtempSync(join(tmpdir(), 'deskuptime-expired-'));
-  execFileSync('openssl', [
-    'req', '-x509', '-newkey', 'rsa:2048',
-    '-keyout', join(dir, 'k.pem'), '-out', join(dir, 'c.pem'),
-    '-nodes', '-subj', '/CN=expired.example',
-    '-not_before', '20200101000000Z', '-not_after', '20200201000000Z',
-  ], { stdio: 'ignore' });
+  const { key, cert } = selfSignedFixture(null, {
+    fromDays: 2450,
+    toDays: 2410,
+    subject: '/CN=expired.example',
+    sans: 'DNS:expired.example',
+  });
 
   return new Promise((resolve) => {
-    const server = tls.createServer({
-      key: readFileSync(join(dir, 'k.pem')),
-      cert: readFileSync(join(dir, 'c.pem')),
-    }, (socket) => socket.end('hi'));
+    const server = tls.createServer({ key, cert }, (socket) => socket.end('hi'));
     server.listen(0, '127.0.0.1', () => resolve({
       port: server.address().port,
       close: () => new Promise((done) => { server.close(done); rmSync(dir, { recursive: true, force: true }); }),

@@ -40,6 +40,15 @@ const SOMEONE_ELSES_HOME = process.platform === 'win32'
   ? 'C:\\Users\\deskuptime-someone-else'
   : '/Users/deskuptime-someone-else';
 
+/**
+ * The variable `os.homedir()` actually reads — `USERPROFILE` on Windows, `HOME`
+ * everywhere else. Measured on the Windows runner, where overriding only `HOME`
+ * left the fallback pointing at the throwaway directory and this file's claim
+ * below was false for exactly the platform that needs it most: the fallback
+ * decides where a *test* would write, and on Windows that is `USERPROFILE`.
+ */
+const HOMEDIR_VAR = process.platform === 'win32' ? 'USERPROFILE' : 'HOME';
+
 test('the suite itself runs under a throwaway HOME', () => {
   // This is the lock, not a comment about it. `tools/run-tests.mjs` starts the
   // whole suite with HOME/USERPROFILE pointing at a temp directory; running
@@ -62,7 +71,7 @@ test('os.homedir() follows $HOME, so an isolated suite cannot even name the real
   // directory — a lock that cannot be tested because it cannot fail. Node
   // resolves `os.homedir()` from `$HOME` on POSIX, so once the suite is
   // isolated the real home is unreachable from inside it, by env or by API.
-  assert.equal(homedir(), process.env.HOME, 'homedir() is $HOME, not the passwd entry');
+  assert.equal(homedir(), process.env.HOME, 'homedir() is the runner\'s HOME, not the passwd entry');
   assert.ok(isTempHome(homedir()));
 });
 
@@ -88,13 +97,16 @@ test('no HOME at all is refused, because the CLI then falls back to the real one
   assert.doesNotThrow(() => assertTempHome({}), 'inside the runner, the fallback is the suite\'s own home');
 
   const real = process.env.HOME;
+  const realProfile = process.env.USERPROFILE;
   process.env.HOME = SOMEONE_ELSES_HOME;
+  process.env.USERPROFILE = SOMEONE_ELSES_HOME;
   try {
-    assert.equal(effectiveHome({}), SOMEONE_ELSES_HOME, 'the fallback follows $HOME, which is the point');
+    assert.equal(effectiveHome({}), SOMEONE_ELSES_HOME, `the fallback follows $${HOMEDIR_VAR}, which is the point`);
     assert.throws(() => assertTempHome({}), /no HOME is set/);
     assert.throws(() => assertTempHome(undefined), /no HOME is set/);
   } finally {
     process.env.HOME = real;
+    process.env.USERPROFILE = realProfile;
   }
   assert.ok(isTempHome(process.env.HOME), 'and the suite is still isolated afterwards');
 });
@@ -117,7 +129,12 @@ test('a path that only looks temporary is refused', () => {
   assert.equal(isTempHome(escape), false, 'a traversal out of tmpdir is not a temp directory');
   assert.equal(isTempHome(`${tmpdir()}${sep}ok`), true);
   assert.equal(isTempHome(tmpdir()), true);
-  for (const notAHome of [undefined, null, '', 42, {}, 'relative/path', '/tmp']) {
+  // `'/tmp'` cannot be in this list: on Linux `tmpdir()` *is* `/tmp`, so the
+  // two lines above and a hardcoded `'/tmp'` contradict each other and the
+  // suite fails there for being right. Measured on the Linux runner, where
+  // that was the whole of this test's output. A real home is not a temp
+  // directory on any platform, and this file already carries one.
+  for (const notAHome of [undefined, null, '', 42, {}, 'relative/path', SOMEONE_ELSES_HOME]) {
     assert.equal(isTempHome(notAHome), false, `${JSON.stringify(notAHome)} is not a temp directory`);
   }
 });
