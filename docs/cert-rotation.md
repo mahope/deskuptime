@@ -211,3 +211,48 @@ Ordet er *different issuer* og aldrig *rogue*: et site der flytter vært, eller 
 der overtages, giver det samme billede helt uskyldigt. En fornyelse fra den **samme**
 udsteder er stadig `🔑 certificate replaced` og ikke et skift — 90 dages fornyelser er
 den normale gang og må ikke se ud som et overtag.
+
+## De to terminal-lister, anden gang (P1-65, 2026-09-27)
+
+P1-64 efterlod én flade åben og navngav den selv: de to **gratis** lister. Ikke fordi
+målingen manglede — state-filen havde `sslIssuer`, `certIssuerBefore` og
+`certIssuerChangedAt` siden den forrige iteration — men fordi ingen læste dem.
+
+Målt først, nul kode ændret: rigtig `runPass`, rigtig state-fil, rigtig CLI, temp-HOME.
+To pass over et site der svarer 200 i begge, den eneste forskel hvilken udsteder der
+svarede anden gang:
+
+```
+status         ->  ✅ https://kunde.dk/ (200) — SSL 89d · 89 bytes 🔑 certificate replaced today
+watch --status ->  ✅ up  https://kunde.dk/ (200, SSL 89d) @ … 🔑 certificate replaced today
+```
+
+Ingen af dem sagde `Ganske Cloud A/S`, `Rogue Cert BV` eller ordet *issuer*. Det gjorde
+rapporten over den **samme** fil. Ejeren var allerede skrevet; `readEntry` spørger den
+nu, lige ved siden af rotationen og sidelæsningen, og hver liste placerer sætningen.
+Efter:
+
+```
+  ✅ https://kunde.dk/ (200) — SSL 89d · 89 bytes 🔑 certificate replaced today 🏢 certificate answers from a different issuer today (Ganske Cloud A/S → Rogue Cert BV)
+```
+
+**Begge sætninger står der, og ingen erstatter den anden.** De er to kendsgerninger, ikke
+to formuleringer af én: en fornyelse fra samme udsteder roterer certifikatet og siger
+intet om udstederen, og en udsteder der skifter hænde er netop det tilfælde hvor alle
+tallene på rækken stadig ser sunde ud. Rapporten har to linjer under tabellen af samme
+grund, og en liste der læsedes som rapporten skal ikke tie om den ene.
+
+**Ingen status, exit-kode, uptime-tal eller SSL-celle flytter sig.** Låst i en test: rækken
+beholder sit `✅` og sit `SSL 89d`, begge kommandoer exit 0, og `readEntry` er deep-equal
+på alle øvrige felter. Rækker uden skift tier stadig, og en fornyelse fra samme udsteder
+siger *kun* `🔑 certificate replaced` — det er den hyppigste normale gang, og en note der
+stod på hver række ville træne læseren i at rulle forbi den der betyder noget.
+
+De to navne i sætningen er **certifikatets egen tekst**: en hijack vælger dem, og en
+fejlkonfigureret TLS-terminator gør det også. Derfor går sætningen gennem `safeText` som
+URL'en og sidetitlen, målt i en test med et escape-sekvens-navn — fladen skal ikke kunne
+lade et certifikat male over vores egen terminal.
+
+**Listen er stadig ikke en skriver.** Ingen stempel, ingen hændelse, ingen gemt tælling:
+filen er byte for byte den samme efter begge kommandoer. Og der kommer ingen ny
+hændelsestype — den betalte kanal hører til passet, som før.

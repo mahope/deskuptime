@@ -845,10 +845,21 @@ if (command === 'status') {
     // words and a checked day count, so it needs no flattening, and it is empty
     // when no certificate has been replaced.
     const cert = e.certNote ? ` ${e.certNote}` : '';
+    // And *who* answers for the name now. The rotation above is the ordinary
+    // case — a host reissues every 90 days — and it says only that something
+    // changed; the authority is the reading that tells a renewal from a name
+    // somebody else now answers for, and the day count argues against noticing
+    // it, because the new certificate usually has *more* days left than the one it
+    // replaced. Measured 2026-09-27: this list said `🔑 certificate replaced
+    // today` and nothing about `Ganske Cloud A/S → Rogue Cert BV`, so the one
+    // signal a security questionnaire asks for existed only in the paid report.
+    // Both names are the *certificate's* own text — a hijack chooses them — so
+    // the sentence is flattened like the page title above it.
+    const certIssuer = e.certIssuerNote ? ` ${safeText(e.certIssuerNote, { max: 0 })}` : '';
     // A key we never could check is shown without its credentials, like every
     // other surface: a password in a hand-edited or restored key must not be
     // printed on the list a user reads to see whether monitoring works (P1-45).
-    console.log(`  ${up} ${safeText(withoutCredentials(u), { max: 0 })}${code}${ssl}${unknown}${stale}${redirect}${ahead}${content}${cert}`);
+    console.log(`  ${up} ${safeText(withoutCredentials(u), { max: 0 })}${code}${ssl}${unknown}${stale}${redirect}${ahead}${content}${cert}${certIssuer}`);
   }
   // A key that is not an address prints above like any other row — as a site
   // whose verdict is merely unknown — although it was never measured and never

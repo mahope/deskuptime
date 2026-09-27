@@ -827,7 +827,18 @@ export function printStatus(options = {}) {
     // than the old one had, so the row never moved — while the report named the
     // replacement. The sentence is fixed words and a checked day count.
     const cert = row.certNote ? ` ${row.certNote}` : '';
-    console.log(`  ${VERDICT_ICON[row.verdict]}  ${safeText(row.url, { max: 0 })} (${code}${ssl})${checked}${ahead}${unknown}${stale}${redirect}${content}${cert}`);
+    // …and who issued the certificate that answers now, from the same owner. For
+    // the same reason, and one step further: the sentence above says the
+    // certificate was replaced, which most hosts do every 90 days, while the
+    // authority is what tells that apart from a name somebody else answers for —
+    // and this is the command a user runs to find out whether their monitoring
+    // works. Measured 2026-09-27: this list said `🔑 certificate replaced today`
+    // and never named `Ganske Cloud A/S → Rogue Cert BV`, so the hijack read as a
+    // renewal in the two free surfaces and was a line in the paid report. The two
+    // names are the certificate's own text, so the sentence is flattened like the
+    // URL above it.
+    const certIssuer = row.certIssuerNote ? ` ${safeText(row.certIssuerNote, { max: 0 })}` : '';
+    console.log(`  ${VERDICT_ICON[row.verdict]}  ${safeText(row.url, { max: 0 })} (${code}${ssl})${checked}${ahead}${unknown}${stale}${redirect}${content}${cert}${certIssuer}`);
   }
 
   // A stale site is the reader's most consequential line and a per-row marker
