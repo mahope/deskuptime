@@ -2606,6 +2606,45 @@ export function isHealthyStatus(statusCode) {
   return Number.isInteger(statusCode) && statusCode >= 200 && statusCode < 400;
 }
 
+/**
+ * `undici`'s sentence for a request it refuses to *send*, and the only sign the
+ * caller gets that a redirect pointed at an address with credentials in it.
+ *
+ * Measured 2026-09-27 on Node 22.23.2 and 26.7.0, `fetch` has two different
+ * failures for an address with credentials, and only one of them says so:
+ *
+ *   - a URL the *caller* typed is refused outright —
+ *     `Request cannot be constructed from a URL that includes credentials: <url>`,
+ *     on `error.message`;
+ *   - a URL we only reach by *following a redirect* never gets that sentence.
+ *     `undici`'s cross-origin gate throws `fetch failed` with a cause reading
+ *     `cross origin not allowed for request mode "cors"`.
+ *
+ * `check` follows redirects (`ping.js` asks for `redirect: 'follow'`), so it
+ * always gets the second form; `headers` walks the chain by hand and hands the
+ * credentialed address to `fetch` directly, so it gets the first. One fact, two
+ * sentences — and the useless one is the one that reaches the most surfaces.
+ *
+ * In Node that sentence has exactly one cause, so it is safe to read. Eight
+ * shapes were measured: a foreign `Access-Control-Allow-Origin`, no ACAO header
+ * at all, `mode: 'no-cors'`, `mode: 'cors'`, a POST, a username with no
+ * password, a typed credentialed URL, and a credentialed redirect. Only the
+ * last one produced the sentence — Node's `fetch` does not enforce CORS
+ * responses at all. So a site with no browser anywhere in the picture was never
+ * refused a cross-origin request, and reading CORS here is P1-35's class: a
+ * claim that does not describe what happened, in a customer document that says
+ * `is DOWN`.
+ *
+ * Saying so is a redirect claim, and it holds: P1-45 refuses a credentialed URL
+ * the *user* typed on every command before any request is made (measured — exit
+ * 1, `URL with a username and a password`), so an address with credentials can
+ * only have arrived in a `Location` header.
+ */
+const CREDENTIALS_IN_URL = 'cross origin not allowed for request mode "cors"';
+
+/** The sentence we publish instead of `undici`'s, and why it is the true one. */
+const CREDENTIALS_IN_URL_NOTE = 'Redirected to an address with credentials in it — no request was sent';
+
 export function describeFetchError(error) {
   const cause = error?.cause;
   const code = cause?.code || error?.code;
@@ -2618,6 +2657,17 @@ export function describeFetchError(error) {
   }
   if (code === 'ENOTFOUND' || code === 'EAI_AGAIN') {
     return { errorType: 'dns_error', error: scrubUrlCredentials(cause.message || 'Host could not be resolved') };
+  }
+
+  // The request was never sent because the address had credentials in it, and
+  // the sentence that says so is in a browser's vocabulary. The verdict stays
+  // where it is — the site is genuinely unmeasurable, so it is still DOWN, still
+  // exit 2, still `network_error` — and that last part is load-bearing rather
+  // than incidental: `canReadCertificate()` spends the certificate reading on a
+  // `network_error`, which is exactly what a customer whose proxy put HTTP Basic
+  // into a `Location` header still wants to know about the site in front of it.
+  if (String(cause?.message || error?.message || '').includes(CREDENTIALS_IN_URL)) {
+    return { errorType: 'network_error', error: CREDENTIALS_IN_URL_NOTE };
   }
 
   // The sentence comes from `fetch`, not from us, and it quotes the URL that

@@ -1,3 +1,98 @@
+## Status fra denne iteration (88, P1-72 — et sundt site bag et credentialed redirect blev rapporteret DOWN med en sætning om CORS)
+
+**Målt først, nul kode ændret.** Rigtig CLI, to rigtige lokale servere (den ene
+svarer 200 hele vejen, den anden sender `Location:
+http://demo:sup3rsecret@…/staging`), intet stubbet. Fire flader, én sætning:
+
+```
+check            ❌ http://127.0.0.1:49174/
+                   Status:   N/A — DOWN
+                   ⚠️  Error:  cross origin not allowed for request mode "cors"
+check --json     "errorType": "network_error"
+                 "error": "cross origin not allowed for request mode \"cors\""
+watch --once     • … baseline recorded: DOWN — cross origin not allowed for request mode "cors"
+watch-loop       🚨 … is DOWN — cross origin not allowed for request mode "cors"   ← den betalte kanals `message`
+```
+
+Ingen browser er med nogen sted i billedet: dette er en CLI i en shell, og det er
+**kundens egen proxy** der lagde HTTP Basic ind i et `Location`-header. Bureauet
+får en CORS-fejl på et site uden browser, i et dokument der siger `is DOWN` — den
+påstand der ikke beskriver hvad der skete, i en kundefil. P1-71 lukkede
+adgangskoden i den sætning; den sagde intet om **hvorfor** requesten aldrig skete,
+så lækken var væk, og unyttigheden blev stående.
+
+**Målingen fandt også årsagen, og den er to sætninger for én kendsgerning.**
+`fetch` har to forskellige fejl for en adresse med credentials i:
+
+- en URL **brugeren skrev** afvises direkte med `Request cannot be constructed
+  from a URL that includes credentials: <url>` (på `error.message`);
+- en URL vi kun når ved at **følge et redirect** får aldrig den sætning. `undici`s
+  cross-origin-gate kaster `fetch failed` med en cause, der læser `cross origin
+  not allowed for request mode "cors"`.
+
+`check` følger redirects (`ping.js` beder om `redirect: 'follow'`), så den får
+altid den anden form; `headers` går kæden i hån og giver den credentialede adresse
+til `fetch` direkte, så den får den første. **`headers` var altså den eneste flade,
+der talte sandt** — og den flade, ingen kopierer ind i et kundedokument.
+
+**At læse CORS er kun rigtigt i Node, og det er målt, ikke antaget.**otte former
+blev prøvet på både Node 22.23.2 og 26.7.0: et udenlandsk
+`Access-Control-Allow-Origin`, intet ACAO-header, `mode: 'no-cors'`,
+`mode: 'cors'`, et POST, et brugernavn uden adgangskode, en typet credentialed URL
+og et credentialed redirect. **Kun den sidste** gav sætningen — Nodes `fetch`
+håndhæver slet ikke CORS-svar. Så et site uden browser nogensinde blev afvist på
+tværs af en origin.
+
+**Rettelsen er én ejers betingelse, ikke to fladers patch.** To konstanter og én
+gren i `describeFetchError` — den ene sted et `fetch`-problem bliver en påstand, som
+terminal, `--json`, passets linje og alertens `message` alle læser. **Dommen flytter
+sig ikke:** requesten blev aldrig sendt, så sitet er stadig umålbart — DOWN, exit
+2, `errorType: network_error`, `finalUrl: null`, `responseTimeMs: null`. Det sidste
+er ikke tilfældigt: `canReadCertificate()` bruger certifikat-læsningen på en
+`network_error`, og det er præcis det, en kunde bag sådan en proxy stadig vil vide
+om sitet *foran* redirectet. Kun sætningen er vores.
+
+```
+check            ❌ …  ⚠️  Error:  Redirected to an address with credentials in it — no request was sent
+check --json     "errorType": "network_error"
+                 "error": "Redirected to an address with credentials in it — no request was sent"
+headers          ⚠️  Error: Request cannot be constructed from a URL that includes credentials: …
+                 (uændret — den sætning var sand, og P1-71 låste den)
+```
+
+**P1-45's lås holdt, og det er derfor «redirect» er en påstand funktionen kan
+bære.** En credentialed adresse kan *kun* være ankommet i et `Location`-header,
+fordi P1-45 afviser den adresse brugeren skriver på alle fire kommandoer før der
+sendes noget (målt: exit 1, `URL with a username and a password`). Og
+`describeFetchError` har netop to kaldssteder — `checkers/ping.js` og
+`checkers/headers.js` — så webhook-sendningen kan ikke ramme den.
+
+**Verificeret:** 4 nye tests i `test/credentialsentence.test.js` →
+**635/635** (631 + 4); fem målte mutationer døde alle (grenen væk, CORS videre
+i stedet, dommen flyttet til `redirect_incomplete`, `cause`-kæden glemt, timeout-
+sætningen rørt). Den sjette mutation — at fjerne P1-71's skrubning i
+`dns_error`-grenen — **døde ikke**, hverken her eller i P1-71's egen test: den er
+en *manglende lås*, ikke en fejl, og ligger i køen som **P1-73**. Audit 0/0,
+`matrix --check` exit 0, `node --check` ren, `git diff --check` rent. Node 26.7.0.
+`ceo/credentials-cors-sentence`.
+
+**⚠️ Gaten afhænger af hvilken `node` der står først på PATH (ny måling i dag).**
+`package.json` siger `engines: >=24` og `.nvmrc` siger 24, men på maskinen er
+`node` → **22.23.2**, og da bliver gaten **rød med 20 fejl** (alle i
+`install.test.js` og action-testene) — alene fordi `tools/install.sh` siger
+`Node.js 24+ is required`. Node **26.7.0** ligger i
+`/opt/homebrew/Cellar/node/26.7.0/bin` og er ikke på PATH. Kør derfor
+`export PATH="/opt/homebrew/Cellar/node/26.7.0/bin:$PATH"` før `npm test`, ellers
+løber næste iteration i de 20 fejl og læser dem som sin egen regression.
+Baseline i dag: **631/631** på 26.7.0 før ændringen, **635/635** efter.
+
+**Næste:** ❓ 1–3, ❓ 14 og ❓ 16 er stadig ubesvarede. **Målt i denne iteration, ikke
+rettet** — fundet under mutationerne, fordi jeg ville se om P1-71's lås rakte:
+`describeFetchError` har ingen kode, der fortæller om *hvilket* credentials-problem
+der er tale om, så den nye sætning og `headers`' gamle beskriver samme kendsgerning
+med to ord. Det er ikke en modsigelse, men det er to steder at vedligeholde. Se
+**P1-74**.
+
 ## Status fra denne iteration (87, P1-71 — et site sendte sin egen besøgende videre med en adgangskode i URL'en, og værktøjet skrev den ud)
 
 **Målt først, nul kode ændret.** Rigtig CLI, to rigtige lokale servere (den ene svarer
@@ -5703,10 +5798,10 @@ tekst: sætningen er `undici`'s, ikke vores, og den citerer den URL der fejlede.
 - Tre målte mutationer døde alle: rå `finalUrl` i `readRedirectTarget` (1 fejl), rå
   sætning i `describeFetchError` (2), rå `location` i kæden (1). ✅
 
-### P1-72 — I GANG (ikke påbegyndt) — Et sundt site bag et credentialed redirect rapporteres DOWN med en sætning om CORS
+### P1-72 — FÆRDIG 2026-09-27 (`ceo/credentials-cors-sentence`) — Et sundt site bag et credentialed redirect rapporteres DOWN med en sætning om CORS
 
 **Målt 2026-09-27 under P1-71, nul kode ændret.** Begge servere svarer 200 hele vejen,
-men fordi `fetch` ikke må bygge en request til en URL med credentials, skriver begge
+men fordi `fetch` ikke må bygge en request til en URL med credentials, skrev begge
 kommandoer:
 
 ```
@@ -5728,3 +5823,100 @@ CORS; (b) sætningen som et `redirect`-faktum i stedet for et `network_error`, h
 kæden stadig nåede et svar. **Acceptkriterium:** en fejl der handler om credentials må
 aldrig nævne CORS, og ingen af de to kommandoers verdicts, exit-koder eller JSON-felter
 må flytte sig. Mål først, som altid.
+
+**Målt, begge veje — og fundet lå opgaven (a), ikke (b).** Se status fra iteration 88.
+Kort fortalt: `fetch` har *to* fejl for en credentialed adresse, og kun den ene
+nævner det. Den `check` får (redirect-formen) er CORS-gatens sætning; den `headers`
+får (den typede form) er informativ. Åtte former blev målt på Node 22.23.2 og
+26.7.0 for at bevise, at CORS-sætningen i Node kun har den ene årsag — Nodes `fetch`
+håndhæver slet ikke CORS-svar.
+
+**Hvorfor (b) blev forkastet, målt:** `redirect_incomplete` er `headers`-benet på
+en kæde, der *gik igennem* (`src/checkers/headers.js:153`), og den udløser
+`readChain()`-s `stopReason`. Her nåede kæden intet svar, så der er ingen `stopReason`
+at sætte, og `check` følger redirects internt — den ser aldrig kæden. En ny
+`errorType` ville desuden flytte et JSON-felt, som er det acceptkriteriet selv
+forbuder, og ville ripple ind i den betalte webhook-kontrakt (P1-34) og `action.yml`.
+`network_error` er den ærlige spand: request-benet blev aldrig færdigt.
+
+**Acceptkriterier (alle målte):**
+- `check` på et site bag sådan et redirect: exit 2 (uændret), `is DOWN` (uændret), og
+  nul forekomster af `cors` i stdout og stderr. ✅
+- `check --json`: nul `cors` i hele kroppen; `reachable`, `healthy`, `statusCode`,
+  `finalUrl`, `responseTimeMs`, `errorType` **og** felternes rækkefølge uændret. ✅
+- `watch --once`-passet og watch-loopens `down`-transition: nul `cors`, den nye
+  sætning i stedet. Transitionens sætning er præcis den streng `webhookBody()`
+  sender til den betalte kanal (`watch.js:424` → `watch.js:1338`). ✅
+- `headers` på samme site: exit 2, `includes credentials`-sætningen **uændret** og
+  hoppet stadig læsbart. De to kommandoer er enige om dommen og bruger nu hver sit
+  ord om den samme kendsgerning. ✅
+- state-filen: stadig ren, nul adgangskoder, og den gemmer ingen fejl-sætning. ✅
+- De fire egne sætninger (`timeout`, `connection_refused`, `dns_error`,
+  `Network request failed`) er tegn for tegn uændrede, og P1-71's skrubning af
+  `undici`'s rå sætninger er urørt. ✅
+- **635/635** grøn (631 + 4 nye), audit 0/0, `matrix --check` 0, `node --check` ren,
+  `git diff --check` rent. Node 26.7.0. ✅
+- Fem målte mutationer døde alle. ✅
+
+### P1-73 — Ny — `dns_error`-grenens credentials-skrubning har intet lås
+
+**Målt 2026-09-27 under P1-72's mutationstest, nul kode ændret.** P1-72 målte sine egne
+mutationer, og en af dem overlevede: at fjerne `scrubUrlCredentials()` fra
+`describeFetchError`s `dns_error`-grebe (`src/status.js`) dræber **ingen** test — hverken
+de 4 nye i `test/credentialsentence.test.js` eller P1-71's egne. Begge eksisterende
+påstande bruger en besked *uden* URL i (`getaddrinfo ENOTFOUND a.dk`), så skrubningen er
+en no-op i dem.
+
+Det er ikke en fejl: koden er rigtig, og P1-72 lod den urørt. Det er en **manglende lås**
+på et P1-71-lås, og den slags forsvinder stille: næste gang nogen rører den gren, er der
+intet til at sige, at adgangskoden skal være ude.
+
+**Spørgsmålet må besvares målt, ikke antaget:** kan en `ENOTFOUND`/`EAI_AGAIN`-sætning
+overhovedet citere en URL med credentials i? Målt i P1-71 hed beskeden
+`getaddrinfo ENOTFOUND <vært>` — altså kun værten. Hvis svaret er *nej*, så er
+skrubningen i denne gren hverken nødvendig eller skadelig, og den rigtige rettelse er en
+påstand der låser den, så den ikke forsvinder. Hvis svaret er *ja*, er det en
+lækage-klasse der mangler. **Acceptkriterium:** enten en målt påstand der dør når
+skrubningen fjernes, eller en note i planen om hvorfor grenen ikke kan lække — med
+målingen ved siden af.
+
+### P1-74 — Ny — Én kendsgerning, to sætninger: `describeFetchError` ved ikke hvilket credentials-problem det er
+
+**Målt 2026-09-27 under P1-72, nul kode ændret.** Efter P1-72 er der to steder i
+programmet, der siger «adressen havde credentials i, så requesten blev ikke sendt»:
+
+```
+check     Redirected to an address with credentials in it — no request was sent
+headers   Request cannot be constructed from a URL that includes credentials: <url>
+```
+
+Det er **ikke** en modsigelse — de er hver især sande, og de vedrør hver sin flade.
+Men det er to sætninger om én kendsgerning, og de er skrevet på to forskellige steder:
+den nye i `describeFetchError`, den gamle i `undici`s egen. Det er præcis det mønster,
+P1-32/P1-33/P1-45/P1-71 blev skrevet for at slå ihjel: en kendsgerning med to ejere.
+
+**Mulige rettelser at måle:** (a) `describeFetchError` får ét begreb for det og ét
+udtryk, og `headers` bruger samme sætning plus sit eget `Final:`-hop som viser
+*hvilken* adresse det var; (b) ejerne samles i én funktion, så begge flader spørger
+den samme og ingen af dem kan glide fra hinanden. **Acceptkriterium:** de to
+kommandoers fejl-sætninger om credentials skal udledes af den samme kode, en test skal
+låse at de to ikke kan glide, og P1-45's afvisnings-sætning ved *typede* URL'er skal
+stå uændret (den er en anden kendsgerning: brugerens fejl, ikke sidens). Mål først.
+
+### P1-75 — Ny — Gaten er rød på maskinens `node`, ikke på koden
+
+**Målt 2026-09-27, nul kode ændret.** `package.json` siger `engines: >=24` og
+`.nvmrc` siger `24`, men `node` på PATH er **22.23.2**. Under den er gaten **rød med
+20 fejl** — 7 i `test/install.test.js` og 13 i action-testene — og alle 20 fejl er den
+samme linje: `tools/install.sh` siger `Node.js 24+ is required` og afviser at køre.
+Ingen af dem er en fejl i koden. Node **26.7.0** er installeret i
+`/opt/homebrew/Cellar/node/26.7.0/bin` men står ikke på PATH.
+
+Det er præcis den fælde, holdprojekter-opholdet advarer om for jordemoderstudy 23.
+august, kun vendt: der brød ved deploy, fordi byggeserveren var for gammel; her
+bryder den *før* deploy, fordi min egen maskine er. **Acceptkriterium:** en
+iteration skal kunne skrive «635/635 grøn» uden først at huske en `export PATH`.
+De simpleste veje er en `.node-version`, eller at `tools/run-tests.mjs` siger det i
+opstarten når den ser en for gammel `node` — sidstnævnte er det bedste, fordi den
+forklarer fejlen i stedet for at lade 20 røde linjer stå som en gade. Ingen af delene
+er lavet; ❓ til Mads hvis maskinen hellere får en Node 24+ som standard.
