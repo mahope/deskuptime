@@ -40,7 +40,7 @@ eksisterende state, som `watch` allerede skriver.
 Rapporten dækker pr. site: `url`, `status` (`up`/`down`/`unknown`),
 `statusCode`, `uptimePercent`, `window`, `checks`, `failures`, `responseMs`,
 `sslDaysRemaining`, `contentBytes`, `contentReadAt`, `contentChanged`,
-`contentChangedAt`, `contentChangedAgeDays`, `contentTitle`, `contentNote`,
+`contentChangedAt`, `contentChangedAgeDays`, `contentTitle`, `contentNote`, `certRotated`, `certRotatedAt`, `certRotatedAgeDays`, `certRotatedNote`,
 `lastChecked`, `monitoringSince`, og en `summary` med antal
 sites/checks/failures.
 
@@ -164,6 +164,32 @@ Det er her bureauet bliver solgt, og derfor er reglerne hårde:
   aldres ikke: et certifikat der var udløbet på passets tidspunkt er ikke blevet
   gyldigt sidenhen, så den påstand fejler i den sikre retning. I `--json` hedder
   felterne `sslMayHaveExpired` og `sslReadingAgeDays`.
+- **Et certifikat, der er blevet byttet, står ikke i SSL-kolonnen.** Kolonnen
+  tæller ned fra det certifikat der *svarede sidst*, så den kan ikke vise at det
+  ikke er kundens eget længere — og et nyudstedt certifikat har typisk flere
+  dage tilbage end det det erstattede, så et domæne der skifter hænde læses som
+  det sundeste af de to. Målt 2026-09-27 med rigtig CLI og to state-filer
+  skrevet af rigtige passer, den eneste forskel det certifikat der svarede den
+  anden dag:
+
+  ```
+  uændret certifikat         ->  | kunde.dk | UP (200) | 100% | … | 88 d | …
+  certifikatet byttet i dag  ->  | kunde.dk | UP (200) | 100% | … | 89 d | …
+  ```
+
+  Årsagen lå i skrivevejen: `runPass` overskriver `lastCertFingerprint` med den
+  nye identitet i det pass der så rotationen, så state-filen dagen efter kunne
+  ikke kende de to tilfælde fra hinanden. Passet stempler nu `lastCertRotatedAt`,
+  præcis som siden gør det med `lastContentChangedAt`, og rapporten får tællingen
+  `· 1 certificate replaced` i resumelinjen og en **egen linje under tabellen**
+  med alderen: `🔑 certificate replaced 3 d ago`. Ordet er *replaced* og ikke
+  *nyt*, *mistet* eller *mistænkeligt*: de fleste værter udsteder nyt certifikat
+  hver 90. dag, og modtageren ved om sitets burde være skiftet. **Ingen status,
+  exit-kode, uptime-tal eller SSL-celle ændrer sig** — et udstedt certifikat er
+  en kendsgerning, ikke en dom. Ejeren er `readCertRotationState` i
+  `src/status.js`; i `--json` hedder felterne `certRotated`, `certRotatedAt`,
+  `certRotatedAgeDays`, `certRotatedNote` og `summary.certRotated`. Spec:
+  `docs/cert-rotation.md`.
 - **En svartid er en måling, eller ingenting.** Målt 2026-09-26 med rigtig
   `check` + `watch --once` + `report` mod to lokale fixtures (en lukket port og
   en server der accepterer forbindelsen og aldrig svarer), nul kode ændret:

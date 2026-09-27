@@ -1038,6 +1038,77 @@ export function readCertRotation({ fingerprint = null, baselineFingerprint = nul
 }
 
 /**
+ * A *stored* certificate rotation, as a later surface reads it: the client's
+ * report, and any other document written for someone who was not there when the
+ * pass ran.
+ *
+ * The comparison above is a decision made inside one pass; this is the fact that
+ * outlasts it. Both halves are needed, and the state file carried neither: on a
+ * rotation `runPass` overwrites `lastCertFingerprint` with the new identity, so a
+ * day later the file could not tell a domain that had changed owner from one where
+ * the certificate had never been replaced. Measured 2026-09-27 with the real CLI,
+ * two state files written by real passes, the only difference between them the
+ * certificate the site answered with:
+ *
+ *   uændret certifikat        ->  | kunde.dk | UP (200) | 100% | … | 88 d | …
+ *   certifikatet byttet i dag ->  | kunde.dk | UP (200) | 100% | … | 89 d | …
+ *
+ * No line, no count, no JSON field. And the day count is not even a signal: a
+ * replaced certificate usually has *more* days left than the one it replaced, so
+ * the hijack reads as the healthier of the two.
+ *
+ * So the same shape as `readContentChangeState`, and the same rule: the rotation
+ * is a fact about the past and it ages, `ageDays` is asked of `passAge` so a
+ * hand-written stamp cannot be aged into "today" here and something else there,
+ * and a stamp ahead of this machine's clock is named as a clock problem instead of
+ * being printed as a fact about the certificate.
+ *
+ * `false` means "this site has a stored certificate and it has not been replaced" —
+ * which is a claim about every pass since the baseline, so it needs a baseline to
+ * exist. A site with no stored identity at all says `false` here too, because
+ * "no rotation" is not a measurement of a certificate that was never read; the
+ * surfaces that need the difference ask `readCertRotation`, which is where
+ * "nothing to compare against" is one of three verdicts.
+ *
+ * @param {object} entry — one `state.urls[...]` entry
+ * @param {{now?: Date}} [options]
+ * @returns {{rotated: boolean, rotatedAt: string|null, ageDays: number|null,
+ *   aheadMs: number, note: string}}
+ */
+export function readCertRotationState(entry, { now = new Date() } = {}) {
+  const value = entry && typeof entry === 'object' ? entry : {};
+  // A site whose certificate was never replaced has no rotation to report. The
+  // stamp is written only where a pass saw a different certificate than the one it
+  // had stored, so its absence is the ordinary case and not a missing reading.
+  const rotated = typeof value.lastCertRotatedAt === 'string' && value.lastCertRotatedAt !== '';
+  const reading = passAge(rotated ? value.lastCertRotatedAt : null, now);
+  const ageDays = reading.state === PASS_AGE.AGED ? reading.ageDays : null;
+  return {
+    rotated,
+    rotatedAt: rotated ? value.lastCertRotatedAt : null,
+    ageDays,
+    aheadMs: reading.aheadMs,
+    note: certRotationStateNote({ rotated, ageDays, aheadMs: reading.aheadMs }),
+  };
+}
+
+/**
+ * What a surface says about a replaced certificate, in one sentence.
+ *
+ * A rotation is not a verdict — a certificate is reissued every 90 days by most
+ * hosts, and a new one is still a valid certificate for the right name — so the
+ * sentence states the fact and nothing more. It carries the age, because a report
+ * is read once and often days after the pass that produced it, and "the
+ * certificate was replaced" without a date reads as "this morning".
+ */
+export function certRotationStateNote({ rotated = false, ageDays = null, aheadMs = 0 } = {}) {
+  if (rotated !== true) return '';
+  if (Number.isFinite(aheadMs) && aheadMs > 0) return `🔑 certificate replaced — ${clockAheadNote(aheadMs)}`;
+  const when = ageDays === null ? 'at an unreadable time' : ageDays === 0 ? 'today' : `${ageDays} d ago`;
+  return `🔑 certificate replaced ${when}`;
+}
+
+/**
  * The fixed wording for a certificate whose reading is too old to renew against.
  *
  * One sentence for every surface, and it carries the two numbers a reader needs

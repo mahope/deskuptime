@@ -1,3 +1,61 @@
+## Status fra denne iteration (77, P1-61 — kundenapporten vidste ikke, at et kundes certifikat var blevet byttet, og state-filen havde smidt kendsgerningen væk)
+
+**Hvorfor denne flade:** ❓ 1–3 er stadig ubesvarede, så iterationen tog det første
+af de fire uafsluttede fund P1-60 efterlod, og det dyreste: `report` er det
+dokument et bureau videresender til sin kunde.
+
+**Målt først, nul kode ændret.** Rigtig CLI, rigtig `runPass`, to state-filer
+skrevet af rigtige passer over et site der svarer 200 i begge. Den eneste forskel
+mellem dem er hvilket certifikat der svarede den anden dag:
+
+```
+uændret certifikat         ->  | kunde.dk | UP (200) | 100% (2 checks) | … | 88 d | …
+certifikatet byttet i dag  ->  | kunde.dk | UP (200) | 100% (2 checks) | … | 89 d | …
+```
+
+Ingen linje, ingen tælling, intet JSON-felt. Og SSL-dagstalet er ikke engang et
+signal: et nyudstedt certifikat har typisk *flere* dage tilbage end det det
+erstattede, så et hijack læses som det sundeste af de to.
+
+**Årsagen lå i skrivevejen, ikke læsevejen.** `runPass` overskriver
+`lastCertFingerprint` med den nye identitet i netop det pass der så rotationen,
+så state-filen dagen efter kunne ikke kende de to tilfælde fra hinanden. Rettelsen
+er derfor to steder: `entry.lastCertRotatedAt` skrives når et pass ser et andet
+certifikat end det gemte — præcis som `lastContentChangedAt` (P1-56) gør for
+siden — og `readCertRotationState` i `src/status.js` er den ene ejer af den
+gemte rotation, med alderen læst gennem `passAge` som P1-36/57/59 gør det.
+
+**Tre flader, additivt:** `summary.certRotated`, fire additive JSON-felter pr. site
+(`certRotated`, `certRotatedAt`, `certRotatedAgeDays`, `certRotatedNote`), tællingen
+`· 1 certificate replaced` i resumelinjen og én navngiven linje under tabellen med
+alderen. Ordet er *replaced* og ikke *nyt*, *mistet* eller *mistænkeligt*: de fleste
+værter udsteder nyt certifikat hver 90. dag, og modtageren ved om sitets burde være
+skiftet. **Ingen status, exit-kode, uptime-tal eller SSL-celle ændrer sig** — et
+udstedt certifikat er en kendsgerning om certifikatet, aldrig en dom, præcis som
+P1-60 gjorde det for `check`. `docs/agency-report.md` §4 og `docs/cert-rotation.md`
+er opdateret, fordi de er kontrakten et kundedokument skrives imod.
+
+**Test (10 nye i `test/certrotationreport.test.js`, auto i `npm test`):** ejeren på
+alle tre tilstande (rotation med alder / ingen rotation / ulæseligt stempel) plus
+urets to retninger, passets tre faser med state-filen læst tilbage, at kun
+baseline og samme certifikat efterlader intet stemplet, rapportens linje og
+tælling i singularis og to sites i flertal, de additive JSON-felter, og to låse:
+en rotation rører **intet** andet (hele rapport-JSON'en er deepEqual efter at de
+nye felter er fjernet, og Markdown har præcis to ændrede linjer), og en rotation
+flytter hverken `wasUp` eller nedtællingen.
+
+**Resultat: 553/553 grøn** (543 + 10), audit 0/0, `node --check` på alle JS og
+MJS, `matrix --check` exit 0 på Node 26.7.0. **Ingen mutationstest** — over
+tidsbudgeten (43 min), samme ærlige notering som P1-47/49/50/51/52.
+
+**Næste:** ❓ 1–3 og ❓ 14, ellers en målt opgave. Uafsluttede fund fra P1-60 der
+stadig står åbne: (1) de to statuslister (`status`, `watch --status`) tier stadig
+om rotation — samme læsning, samme ejer, den flade til; (2) et certifikat der
+**flapper** mellem to servere skriver `lastCertRotatedAt` på hvert pass, så
+kundenapporten siger "replaced" hvert pass — samme klasse som `content_changed`
+fik sin tæthed for (P1-47), og den er umålt; (3) `serialNumber` er gemt men læst
+af ingen.
+
 ## Status fra denne iteration (76, P1-60 — et domæne, der ikke længere var kundens, svarede 200 med et gyldigt certifikat, og alle flader kaldte det sundt)
 
 **Hvorfor denne flade:** ❓ 1–3 er stadig ubesvarede, så iterationen tog det
@@ -4292,6 +4350,8 @@ for selv. Ingen gemt nøgle er omskrevet, ingen eksisterende adgangsd tilstand
 
 ## Iterationslog
 
+- **Iteration 77 (P1-61, målt + fix):** P1-60 fund (1): kundenapporten vidste ikke at et certifikat var byttet, og state-filen havde kendsgerningen væk — `runPass` overskriver `lastCertFingerprint` i samme pass der ser rotationen. Målt først med rigtig CLI og rigtige passer: to rapporter ens i alt, og SSL-dagstalet større efter et hijack end før det. Fix: `lastCertRotatedAt` (P1-56s `lastContentChangedAt`) + `readCertRotationState` som ene ejer + additivt i rapporten (tælling, fire felter, navngiven linje med alderen). Ordet *replaced*, aldrig *mistænkeligt* — de fleste værter udsteder nyt hver 90. dag. 10 nye tests → **553/553**; audit 0/0; `node --check`, `matrix --check`, `git diff --check` grønne på Node 26.7.0. **Ingen mutationstest** — over tidsbudgeten (43 min). `ceo/report-cert-rotation`. **Næste:** ❓ 1–3 og ❓ 14, ellers en målt opgave; bl.a. de to statuslister, der stadig tier om rotation (P1-62).
+
 - **Iteration 75 (P1-59, målt + fix):** ❓ 1–3 ubesvarede, så målingen gik på
   P1-57's egen uafsluttede fund 1. Rigtig CLI, gratis maskine (temp-HOME), rigtig
   lokal side, to state-filer der afveg i den gemte `lastHash`:
@@ -4606,3 +4666,43 @@ låsen også holder på den maskine, hvor `USERPROFILE` er den der afgør.
 3. `os.homedir()` følger `$HOME`, så **intet i suiten kan navngende det rigtige
    hjem** mens isoleringen holder. Det er den bedste garanti her — og den er
    ikke til at købe med en ekstra test.
+
+### P1-61 — FÆRDIG 2026-09-27 (`ceo/report-cert-rotation`) — Kundenapporten skal kunne se et certifikat, der er blevet byttet
+
+**Begrundelse:** P1-60 gjorde certifikatrotation synlig i `check`, i passets
+hændelser og i den betalte webhook, og efterlod fire fund. Dette var det første,
+og det dyreste: `report` er det dokument et bureau videresender til sin kunde. Et
+kunde-domæne der skifter hænde svarer 200 med en anden autoritets gyldige
+certifikat, og rapporten skrev `UP (200) | 100 %` om begge.
+
+**Målt først** (rigtig CLI, rigtig `runPass`, to state-filer fra rigtige passer):
+de to rapporter var ens i alt hvad der betyder noget, og SSL-dagstalet var
+*større* efter et hijack end før det.
+
+**Rettelsen:** `lastCertRotatedAt` skrives når et pass ser et andet certifikat end
+det gemte (årsagen lå i skrivevejen: baselinens fingerprint blev overskrevet i det
+samme pass). `readCertRotationState` i `src/status.js` er den ene ejer, med
+alderen gennem `passAge` — P1-36/57/59's regel. Rapporten får additivt
+`summary.certRotated`, fire site-felter, tællingen i resumelinjen og én navngiven
+linje under tabellen. Ejer: `readCertRotationState`; `check`'s og passets
+sammenligning er urørt.
+
+**Acceptkriterier (alle målte, se afsnittet øverst):**
+- Et site med `lastCertRotatedAt` får `🔑 certificate replaced 3 d ago` under
+  tabellen og `· 1 certificate replaced` i resumelinjen. ✅
+- Et site uden rotation får ingen linje og ingen tælling. ✅
+- `report --json` har `certRotated`/`certRotatedAt`/`certRotatedAgeDays`/
+  `certRotatedNote` + `summary.certRotated`; et site uden rotation siger `false`
+  og `null`. ✅
+- Hele rapport-JSON'en er ellers identisk (deepEqual), og Markdown har præcis to
+  ændrede linjer. Ingen status, exit-kode, uptime-tal eller SSL-celle ændret. ✅
+- Passets tre faser: baseline → intet stempel, samme certifikat → intet stempel,
+  rotation → stempel. ✅
+- `docs/agency-report.md` §4 og `docs/cert-rotation.md` beskriver den nye linje. ✅
+- `npm test` **553/553** (543 + 10), audit 0/0, `matrix --check` 0, `node --check`
+  ren. Node 26.7.0. ✅
+
+**Næste:** de to statuslister (`status`, `watch --status`) tier stadig om
+rotation — P1-62, samme læsning og samme ejer, den anden flade til. Derefter
+rotationens tæthed (et certifikat der flapper) og `serialNumber`, der gemmes men
+læses af ingen.
