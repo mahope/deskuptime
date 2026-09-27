@@ -1,3 +1,43 @@
+## Status fra denne iteration (87, P1-71 — et site sendte sin egen besøgende videre med en adgangskode i URL'en, og værktøjet skrev den ud)
+
+**Målt først, nul kode ændret.** Rigtig CLI, to rigtige lokale servere (den ene svarer
+200, den anden sender `Location: http://demo:adgangskode@…/staging`), intet stubbet. Den
+adgangskode nåede `deskuptime headers` seks gange på terminalen og seks gange i
+`--json` — i `Final:`, i kædens `location`, og to gange i selve fejl-sætningen. En bureau
+indsætter den JSON i en ticket eller en step-summary. Det er den mest almindelige grund
+til at et redirect-mål har en adgangskode i: en kundes staging bag en proxy der spørger
+om HTTP Basic.
+
+**P1-45's lås holdt, og det var målingen der viste hvorfor de to flader var rene.**
+P1-45 lukkede i 26/9 den adresse *brugeren* skriver, og sagde intet om den adresse et
+*site* svarer med. `fetch` nægter at bygge en request til sådan en URL, så *check*-benet
+holdt sig aldrig for en: målt skrev `check` `cross origin not allowed for request mode
+"cors"` med `finalUrl: null`, og state-filen, alerten til kundens kanal og rapporten var
+alle rene. Kun `headers`, der går kæden i hån, holdt strengen. Den anden form for lækagen
+er tekst, ikke adresse: sætningen er `undici`'s, ikke vores, og den citerer den URL der
+fejlede — derfor kom den samme kode ind ad to døre.
+
+**To ejere, ikke fire plaster.** `scrubUrlCredentials()` er søskende til
+`withoutCredentials()`: én ejer for en adresse, én for en sætning der citerer en, og den
+bruges i `describeFetchError` — det ene sted et `fetch`-problem bliver en påstand, som
+terminal, `--json`, alertens `message` og state-filen alle læser. Og
+`readRedirectTarget()`s `finalUrl` går gennem `withoutCredentials()`, fordi det er den
+kendsgerning der *forlader* maskinen som den betalte kanals felt. Kæden i `headers`
+følger stadig den rigtige adresse og *gemmer* den rensede, så **dommen ikke flytter sig**:
+begge kommandoer siger exit 2 om samme site, målt før og efter.
+
+**Verificeret:** 4 nye tests i `test/redirectcredentials.test.js` (fundet af
+målingen, så de er en del af gaten) → **631/631** (627 + 4); tre målte mutationer døde
+alle; audit 0/0, `matrix --check` 0, `node --check` ren, `git diff --check` rent. Node
+26.7.0. `ceo/redirect-credentials`, `4507314`, fast-forward-merget til `main` og pushet
+2026-09-27.
+
+**Næste:** ❓ 1–3, ❓ 14 og ❓ 16 er stadig ubesvarede. **Målt i denne iteration, ikke
+rettet** (P1-72): et site der svarer 200 hele vejen rapporteres `is DOWN` med
+`cross origin not allowed for request mode "cors"` — en CORS-fejl om et site uden en
+browser, i et kundedokument. Ikke en lækage, men P1-35's klasse, og rettelsen må ikke
+lade `headers` sige UP mens `check` siger DOWN.
+
 ## Status fra denne iteration (86, P1-70 — en alarm sagde at sidens titel var ændret, og trykkede den samme titel på begge sider af en pil)
 
 **Målt først, nul kode ændret.** Rigtig CLI, rigtig `watch`-loop, rigtig state-fil med
@@ -5009,6 +5049,8 @@ for selv. Ingen gemt nøgle er omskrevet, ingen eksisterende adgangsd tilstand
 
 ## Iterationslog
 
+- **Iteration 87 (P1-71, målt + fix):** ❓ 1–3, ❓ 14 og ❓ 16 stadig ubesvarede, så målingen gik på det åbne spørgsmål P1-70 lod ligge: kan en adgangskode i et **redirect-mål** nå en flad der forlader maskinen? **Ja — men ikke på de to der blev gættet på.** Målt først med rigtig CLI og to rigtige servere (den ene svarer 200, den anden sender `Location: http://demo:sup3rsecret@…`): `check` var ren (`cross origin not allowed for request mode "cors"`, `finalUrl: null`, exit 2) fordi `fetch` ikke må bygge en request med credentials, så state-filen, kanalen og rapporten holdt; kun `headers`, der går kæden i hån, skrev koden seks gange på terminalen og seks i `--json` — i `Final:`, i `steps[].location` og to gange i `undici`s egen fejl-sætning. Fix: `scrubUrlCredentials()` (søskende til `withoutCredentials`, for en *sætning* der citerer en URL) bruges i `describeFetchError`, den ene sted et fetch-problem bliver en påstand; `readRedirectTarget().finalUrl` går gennem `withoutCredentials()`, fordi det er den kendsgerning der forlader maskinen som den betalte kanals felt; `checkHeaders` følger stadig den **rigtige** adresse og gemmer/siger den rensede, med loop-detektering på de rå strenge i sit eget `seen`-sæt. 4 nye tests i `test/redirectcredentials.test.js` → **631/631** (627 + 4); audit 0/0; `matrix --check` 0; `node --check`, `git diff --check` grønne på Node 26.7.0. **Tre mutationer målt, alle døde** (1/2/1 fejl). `ceo/redirect-credentials`, `4507314`, fast-forward-merget til `main` og pushet 2026-09-27. **Ingen dom, exit-kode, matrix-række eller payload-felt flytter sig** — målt før og efter på samme site. **Næste:** ❓ 1–3, ❓ 14, ❓ 16; og **P1-72**, målt her og ikke rettet: et sundt site bag et credentialed redirect siger `is DOWN — cross origin not allowed for request mode "cors"`.
+
 - **Iteration 84 (P1-68, målt + fix):** ❓ 1–3, ❓ 14 og ❓ 16 er stadig ubesvarede, så målingen gik på det sidste fund P1-63 selv efterlod — "derefter rotationens antal". 24 timers rigtige passer over to sites der kun adskiller sig i hvilket certifikat der svarer, og kundenapporten 90 dage senere skrev `🔑 certificate replaced 90 d ago` for **begge**: en fornyelse hvert 90. dag og et site der roterer 47 gange i døgnet, som er den facon et hijack har. Fix: `certRotationCount` skrives på samme gren og i samme pass som stemplet der allerede står, og bæres videre af `readCertRotationState` — de to gratis-lister spørger samme ejer og siger det uden en linje af egen kode. **Den normale fornyelse er byte for byte uændret**, fordi «1 fornyelse» ikke lærer en kunde noget de ikke havde; tallet løber med i alle fire former af sætningen, også ved et ur der går foran, og en håndskrevet tæller er ingen tæller (`"many"`, `-1`, `1.5`, `1e21` er alle 0). 7 nye tests → **618/618** (611 + 7); audit 0/0; `matrix --check` 0; `node --check`, `git diff --check` grønne på Node 26.7.0. **Fem mutationer målt, alle døde** (3/4/1/3/1 fejl). `ceo/cert-rotation-count`. **To fejl i min egen måling, begge fundet af den:** tælleren lå i checkeren som et *opkalds*-tæller, men `runPass` giver den samme checker alle URL'er én gang hver pr. pass, så den gik to pr. pass, hvert site fik et konstant certifikat, og målingen rapporterede «aldrig roteret» om et site der roterede på hvert pass; og samme fejl en gang til med to sites i én HOME, hvor den anden pass læste fra disk og skrev over den første. Begge var målingen, ikke koden, og begge står i testfilens kommentar. **Næste:** ❓ 1–3, ❓ 14, ❓ 16; `lastCertSerial` læses stadig af ingen.
 
 - **Iteration 81 (P1-65, målt + fix):** ❓ 1–3 ubesvarede, så fladen var den P1-64 lod ligge: de to **gratis** lister. Ikke en manglende måling men en manglende læsning — state-filen har ført `sslIssuer`/`certIssuerBefore`/`certIssuerChangedAt` siden P1-64, og ingen læste dem. Målt først med rigtig `runPass`, rigtig state-fil, rigtig CLI, temp-HOME: begge lister skrev `🔑 certificate replaced today` og sagde hverken `Ganske Cloud A/S`, `Rogue Cert BV` eller *issuer*; `readEntry` havde nul `issuer`-felter; rapporten over samme fil navngavnede begge. Fix: `readEntry` spørger `readCertIssuerState` og eksponerer `certIssuer` + `certIssuerNote`; begge lister placerer sætningen, gennem `safeText` fordi begge navne er certifikatets egen tekst. Rækken bæder begge sætninger — to kendsgerninger, ikke to formuleringer af én — mens en fornyelse fra samme udsteder tier om udstederen. 12 nye tests → **597/597** (585 + 12); audit 0/0; `node --check`, `matrix --check`, `git diff --check` grønne på Node 26.7.0. **Ingen status, exit-kode, uptime-tal eller SSL-celle flytter sig**, og listerne skriver stadig ikke — låst i en test som læser filen byte for byte. `ceo/cert-issuer-lists`. **Ingen mutationstest** — over tidsbudgeten. **Næste:** ❓ 1–3 og ❓ 14, ellers en målt opgave; bl.a. `cert_rotated`-alarmen, rotation pr. antal og `lastCertSerial`.
@@ -5595,10 +5637,94 @@ titlen ændrede sig, men at forskellen kun er mellemrum eller tegn en skærm ikk
   `matrix --check` 0, `node --check` ren, `git diff --check` rent. Node 26.7.0. ✅
 - Den strukturelle lås på «sætningen er besluttet ét sted» udvidet 3 → 4, ikke slækket. ✅
 
-**Åbent og målt, ikke rettet (tidsbudget):** en 302 til
-`http://bruger:adgangskode@anden-vært/` lod et pass stå uden output i over 3 s, og et rent
-`fetch` mod samme redirect svarede ikke inden for 30 s. P1-45 lod ingen nøgle med kode i
-blive tjekket, men de to flader der *forlader* maskinen — `webhookBody()`'s fulde
-`event.finalUrl` til kundens kanal og `notify()`'s rå `event.url` — er ikke dækket af
-P1-45's lås. Kræver måling af, om en adgangskode i et redirect-mål overhovedet kan nå
-en af dem, før den rettes.
+**Lukket i næste iteration:** målingen af det åbne spørgsmål blev P1-71, og svaret var
+ja — men ikke på de to flader der blev gættet på. Se P1-71.
+
+### P1-71 — FÆRDIG 2026-09-27 (`ceo/redirect-credentials`) — Et redirect med en adgangskode i er skrevet ud hele vejen
+
+**Begrundelse:** målt først med den rigtige CLI og to rigtige lokale servere, hvor den
+ene svarer 200 og den anden sender `Location: http://demo:adgangskode@…/staging`. Det
+er den mest almindelige grund til at et redirect-mål har en adgangskode i: en kundes
+staging bag en proxy der spørger om HTTP Basic. P1-45 (26/9) lukkede den adresse
+*brugeren* skriver; det sagde intet om den adresse et *site* svarer med, og P1-45's lås
+kunne ikke se den, fordi et `Location`-header er det ene URL i programmet vi ikke selv
+har skrevet.
+
+```
+$ deskuptime headers http://127.0.0.1:51748/
+   Final: http://demo:sup3rsecret@127.0.0.1:51747/staging (n/a)
+   ⚠️  Error: Request cannot be constructed from a URL that includes credentials:
+      http://demo:sup3rsecret@127.0.0.1:51747/staging
+
+$ deskuptime headers http://127.0.0.1:51748/ --json
+   { "finalUrl": "http://demo:sup3rsecret@…", "steps": [ … "location": "http://demo:sup3rsecret@…" ],
+     "error": "Request cannot be constructed from a URL that includes credentials: http://demo:sup3rsecret@…" }
+```
+
+**Seks kopier i terminalen, seks i JSON'en** — og en bureauindsætter den JSON i en
+ticket, en step-summary eller en mail.
+
+**Målingen afgrænsede også skaden, og det er derfor rettelsen er lille.** `fetch`
+nægter at bygge en request til en URL med credentials, så *check*-benet holdt sig aldrig
+for en: målt skrev `check` `cross origin not allowed for request mode "cors"` med
+`finalUrl: null`, og state-filen, alerten til kundens kanal og rapporten var alle rene.
+Kun `headers`, som går kæden i hån, holdt strengen. Den anden form for lækagen var
+tekst: sætningen er `undici`'s, ikke vores, og den citerer den URL der fejlede.
+
+**Rettelsen er to ejere, ikke fire plaster.**
+- `scrubUrlCredentials(text)` i `src/status.js` — søskendeskab til `withoutCredentials`:
+  én ejer for en adresse, én for en sætning der citerer en. Den bruges i
+  `describeFetchError`, som er den *ene* sted et `fetch`-problem bliver en påstand
+  (terminal, `--json`, `message` i alerten, state-filen).
+- `readRedirectTarget()`s `finalUrl` går gennem `withoutCredentials()` — den kendsgerning
+  der *forlader* maskinen som den betalte kanals `finalUrl` (webhook-kroppen, `action.yml`).
+- `checkHeaders()` følger stadig den **rigtige** adresse, men gemmer og siger den rensede;
+  loop-detektering kører på de rå strenge i et eget `seen`-sæt, så to hop der kun
+  adskiller sig i adgangskoden ikke kan lade som en løkke.
+
+**Acceptkriterier (alle målte):**
+- `headers` på et site med sådan et redirect: exit 2 (uændret), nul kopier i stdout og
+  stderr, og `Final:` + `steps[].location` viser stadig hoppet *uden* koden. ✅
+- `headers --json`: nul kopier i hele kroppen; `finalUrl` og `steps[].location` er den
+  rensede adresse, `steps[0].url` er stadig den brugeren bad om. ✅
+- **Dommen flytter sig ikke:** begge kommandoer siger exit 2 om samme site, så de to
+  flader ikke kan modsige hinanden i et kundedokument. ✅
+- `check` på samme site: exit 2, nul kopier (var allerede rent — målt, ikke antaget). ✅
+- En kæde uden credentials er tegn for tegn uændret, og selvløkken siger stadig
+  `after 1 hop` — min første `seen`-frø gjorde den til `after 0 hops`, fundet af
+  `status.test.js` og rettet. ✅
+- `describeFetchError`s egne sætninger (`Request timed out`, `Connection refused`,
+  dns) er uændrede; kun den rå `fetch`-sætning renses. ✅
+- `readRedirectTarget` med et credentialed mål: `finalUrl` renset, `offHost` og
+  `answeredHost` uændrede, og en token i stien (**ikke** en adgangskode) stadig med —
+  P1-27's grænse er ikke flyttet. ✅
+- **631/631** grøn (627 + 4 nye), audit 0/0, `matrix --check` 0, `node --check` ren,
+  `git diff --check` rent. Node 26.7.0. ✅
+- Tre målte mutationer døde alle: rå `finalUrl` i `readRedirectTarget` (1 fejl), rå
+  sætning i `describeFetchError` (2), rå `location` i kæden (1). ✅
+
+### P1-72 — I GANG (ikke påbegyndt) — Et sundt site bag et credentialed redirect rapporteres DOWN med en sætning om CORS
+
+**Målt 2026-09-27 under P1-71, nul kode ændret.** Begge servere svarer 200 hele vejen,
+men fordi `fetch` ikke må bygge en request til en URL med credentials, skriver begge
+kommandoer:
+
+```
+❌ http://127.0.0.1:51923/
+   Status:   N/A — DOWN
+   ⚠️  Error:  cross origin not allowed for request mode "cors"
+```
+
+Det er **ikke** en lækage, men det er P1-35's klasse: en sætning, der ikke beskriver
+hvad der skete, i et kundedokument der siger `is DOWN`. Bureauet får en CORS-fejl på et
+site, der ikke har en browser. Og `check` og `headers` er enige om nedbruddet, så
+løsningen er **ikke** at lade kæden fortsætte uden credentials — det ville gøre
+`headers` UP mens `check` er DOWN, altså en ny modsigelse.
+
+**Mulige rettelser at måle:** (a) en egen sætning i `describeFetchError` for
+`credentials`-fejlen, der siger hvad der faktisk skete («the site redirected to an
+address with credentials in it — the request was never sent»), så bureauet ikke læser
+CORS; (b) sætningen som et `redirect`-faktum i stedet for et `network_error`, hvis
+kæden stadig nåede et svar. **Acceptkriterium:** en fejl der handler om credentials må
+aldrig nævne CORS, og ingen af de to kommandoers verdicts, exit-koder eller JSON-felter
+må flytte sig. Mål først, som altid.
