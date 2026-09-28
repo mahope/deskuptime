@@ -261,6 +261,14 @@ export function readContentChange({ previousLength = null, length = null, previo
   if (sameSize) {
     return {
       titleChanged,
+      // The pair itself, so the pass can keep the "before" with the change. An
+      // alert quotes the arrow for as long as it takes the webhook to answer, and
+      // then the page is read again and `lastTitle` is the *new* one — so a
+      // reader arriving later had only half the sentence. Returning the titles the
+      // comparison already measured means the writer does not re-derive which side
+      // was old: `titleChanged` and `previousTitle` cannot disagree.
+      previousTitle: titleChanged ? before : null,
+      title: titleChanged ? after : null,
       message: titleChanged
         ? pairReadable
           ? `content changed — page title: "${before}" → "${after}" (same size, ${length} bytes)`
@@ -274,6 +282,8 @@ export function readContentChange({ previousLength = null, length = null, previo
   // correct in every case where the numbers actually differ.
   return {
     titleChanged,
+    previousTitle: titleChanged ? before : null,
+    title: titleChanged ? after : null,
     message: `content changed (${Number.isFinite(previousLength) ? previousLength : '?'} → ${Number.isFinite(length) ? length : '?'} bytes)`,
   };
 }
@@ -282,6 +292,29 @@ export function readContentChange({ previousLength = null, length = null, previo
  * How long one site waits between two *sent* content-change alerts. One hour.
  */
 export const CONTENT_ALERT_MIN_GAP_MS = 60 * 60 * 1000;
+
+/**
+ * The title pair, when there is one worth printing.
+ *
+ * One owner, because the arrow is a claim: the two titles have to be the ones the
+ * comparison actually measured, and only `readContentChange` can say which side was
+ * the old one. Both are the page's own text, so a terminal surface still flattens
+ * the sentence with `safeText()` — but the *pair* is compared through it here, for
+ * the same reason the alert's own arrow is: two titles that differ only in
+ * whitespace print as the same string on both sides, which is a sentence
+ * contradicting itself (P1-70).
+ *
+ * Returns `null` — the one-sided form, which is also the form for every state file
+ * written before the pair was kept — when there is no before, when it is the same
+ * title, or when the two would print identically.
+ */
+function titlePairNote(title, previousTitle) {
+  const after = titleText(title);
+  const before = titleText(previousTitle);
+  if (after === null || before === null || before === after) return null;
+  if (safeText(before, { max: 0 }) === safeText(after, { max: 0 })) return null;
+  return ` — page title: "${before}" → "${after}"`;
+}
 
 /**
  * One content-change alert per site per hour — the throttle, and the sentence
@@ -392,13 +425,31 @@ export function readContentChangeState(entry, { now = new Date() } = {}) {
     bytes: byteCount(value.lastContentLength),
     bytesReadAt: typeof value.lastContentReadAt === 'string' && value.lastContentReadAt !== '' ? value.lastContentReadAt : null,
     title: titleText(value.lastTitle),
+    // The title the page carried before the change, when the pass that measured
+    // the change kept it. Without it a surface could name only the new title, and
+    // `— page title: "Acme — shop"` reads as a description of the page rather
+    // than of a change to it: the arrow the channel's own alert quotes exists
+    // only for the seconds that alert is in flight. Measured 2026-09-28 with a
+    // real `runPass` — the channel said `page title: "Acme — home" → "Acme —
+    // shop"` and all three readers said `page title: "Acme — shop"`.
+    //
+    // It is a before, not a second claim: a hand-edited or restored file that
+    // holds a "before" equal to the current title has no pair, and the sentence
+    // is the one-sided one, which is true rather than an arrow onto itself.
+    previousTitle: titleText(value.contentTitleBefore),
     // The sentence, built here from exactly the fields just decided, so a
     // caller cannot assemble it from a different set. Measured: the first
     // version had the report hand a *site* object to a function that read the
     // *reader's* field names, and the named line rendered as
     // `https://kunde.dk/ ()` — the sentence and the column had stopped being
     // the same decision.
-    note: contentChangeNote({ changed, ageDays, aheadMs: reading.aheadMs, title: value.lastTitle }),
+    note: contentChangeNote({
+      changed,
+      ageDays,
+      aheadMs: reading.aheadMs,
+      title: value.lastTitle,
+      previousTitle: value.contentTitleBefore,
+    }),
   };
 }
 
@@ -411,11 +462,14 @@ export function readContentChangeState(entry, { now = new Date() } = {}) {
  * rather than "no change": that would be the false all-clear P1-21 removed from
  * `check --json`, and a page nobody has read deserves no sentence at all.
  */
-export function contentChangeNote({ changed = false, ageDays = null, aheadMs = 0, title = null } = {}) {
+export function contentChangeNote({ changed = false, ageDays = null, aheadMs = 0, title = null, previousTitle = null } = {}) {
   if (changed !== true) return '';
   if (Number.isFinite(aheadMs) && aheadMs > 0) return `🔄 content changed — last change ${clockAheadNote(aheadMs)}`;
   const when = ageDays === null ? 'at an unreadable time' : ageDays === 0 ? 'today' : `${ageDays} d ago`;
-  const named = titleText(title) === null ? '' : ` — page title: "${titleText(title)}"`;
+  // The arrow when the pass kept both sides, the single title when it could not.
+  // Same owner as the alert's own pair (`readContentChange`), so the channel and
+  // the three readers cannot describe one change two ways.
+  const named = titlePairNote(title, previousTitle) ?? (titleText(title) === null ? '' : ` — page title: "${titleText(title)}"`);
   return `🔄 content changed ${when}${named}`;
 }
 

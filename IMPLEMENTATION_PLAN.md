@@ -1,3 +1,84 @@
+## Status fra denne iteration (96, P1-80 — kundenapporten og begge lister sagde "side title: B" om en ændring fra "A" til "B", fordi "A" var målt og kasseret)
+
+**Målt først, nul kode ændret.** Rigtig `runPass` over to rigtige lokale servere, rigtig
+state-fil, rigtig rapport, rigtig modtager på den betalte kanal, Pro fra den gemte
+licens (intet kald til mahope.tools, intet stubbet ud over den). Titlen voksede om
+præcis en pris' bredde, så bytes og størrelse var uændrede og ændringen var reel:
+
+```
+kanal:     content changed — page title: "Acme — home" → "Acme — shop" (same size, 95 bytes)
+status:    ✅ … (200) 🔄 content changed today — page title: "Acme — shop"
+watch:     ✅ up … (200) 🔄 content changed today — page title: "Acme — shop"
+rapport:   **One site …:** … (🔄 content changed today — page title: "Acme — shop")
+```
+
+Fire flader, én ændring, to sætninger. Kanalen — den eneste betalte flade, der får
+en besked pr. ændring — har **begge** titler. Alle tre læsere har kun den nye, og
+den ensidige sætning læses som en *beskrivelse af siden* efter ordet `changed`:
+`page title: "Acme — shop"` er sandt om siden i dag, ikke om en overgang. Den halvdel
+der svarer på "hvad sagde den før" — den eneste et bureau kan skrive i en
+kundenmail — fandtes kun i den besked, der forsvinder, og kun en gang i timen pr.
+side (P1-47s dæmpning), altså netop på den slags side hvor en læser har mest brug
+for den.
+
+**Årsagen er at parret blev målt to steder og gemt ét.** `readContentChange`
+sammenligner `entry.lastTitle` med titlen denne pass læste og citerer begge sider,
+men returnerede kun `titleChanged` — ikke titlerne. `runPass` skrev så
+`lastTitle = den nye` i samme pass, og da var den gamle væk. En alarm er en
+engangshændelse; de tre lister er et genlæst arkiv, og de læser det arkiv, alarmen
+ikke skrev til.
+
+**Rettelsen er samme form som `certIssuerBefore` (P1-64) og `contentReadAt`
+(P1-78):** sammenligningen skrives hvor ændringen måles, så ingen læser holder halv
+delen. `readContentChange` giver `previousTitle`/`title` tilbage fra det kald der
+målte dem, så skriveren ikke kan være uenig med `titleChanged` om hvilken side der
+var den gamle. `contentTitleBefore` skrives **og ryddes på samme betingelse** — det
+er parret til en *ændring*, ikke til siden. Det er den del målingen tvang: en titel
+der flytter sig uden at bytes ændres, eller en ændring der ikke flyttede titlen,
+ville arve en gammel pil og skrive `content changed today — page title: "A" → "B"`
+om en ændring der ingen af delene gjorde — den ensidige forms fejl, kun sværere at
+se. Felten **slettes** (ikke `= null`), så "aldrig set et titelskift" og "så et der
+ikke havde et par" er samme fravær.
+
+**Målt efter:** alle fire flader siger præcis den sætning kanalen sendte. Pilen
+arves fra `readContentChangeState`, så de to gratis lister og rapporten bygger den
+af samme felter; en tilstand skrevet *før* denne ændring giver uændret den ensidige
+sætning, tegn for tegn. Parret sammenlignes gennem `safeText`, så to titler der
+kun adskiller sig ved en escape-sekvens eller et nul-tegn ikke giver en pil der
+peger på sig selv (P1-70's regel, arvet). Additivt `contentTitleBefore` i `--json`.
+
+**11 nye tests i `test/titlepair.test.js`** → **694/694** (683 + 11); audit 0/0;
+`matrix --check` exit 0; `node --check` ren på alle JS, `git diff --check` rent.
+**Syv mutationer målt.** Seks døde: skriveren gemmer intet (6 fejl), skriveren rydder
+aldrig (1), clear'en ved en titel der flytter sig alene (1), læseren bruger aldrig
+paret (4), rapporten taber `--json`-feltet (2), printbarheds-vagten (1). Den syvende
+— `before === after` før `safeText`-sammenligningen — **overlever, og er ækvivalent**:
+to ens strenge printer altid ens, så kortslutningen kan ikke ændre et output.
+Målt, ikke formodet: filen blev hver gang difset mod originalen, efter at fem
+mutationer i en tidligere iteration vished ud som "0 fejl".
+
+**Tre eksisterende låse opdateret, ikke slækket** — de låste den ensidige sætning,
+som er præcis den fejl denne iteration fjerner: `contentchange.test.js`'s to
+rejse-tests hævter nu `page title: "Side A" → "Free iPhone!!"` på den betalte linje
+og på **begge gratis lister**, og `status.test.js`'s `deepEqual` på ejeren får de to
+nye felter plus en påstand på at de følger `titleChanged`. Låsen på "kun ejeren
+skriver sætningen" (4 forekomster af `content changed —` i `status.js`) er urørt og
+tæller stadig 4.
+
+**To fejl i mine egne tests, fundet af gaten:** første version af `pageCheck` havde
+en tæller *inde i* hjælperen, så et nyt kald ved hvert `runPass` genstartede den
+og gjorde den næste pass til en baseline — testen påstod en ændring den aldrig
+frembragte, og den fejlede af en helt anden grund. Nu skriver testen hver læsning
+ud, `changed` inklusive. Og en påstand på alderen regnede fra `BASE` mens
+rapporten fik `new Date()`.
+
+**Næste:** ❓ 1–3, ❓ 14 og ❓ 16 afventer Mads. Køen er tømt; nye opgaver skal
+findes ved måling, som denne. Målingen gik denne gang gennem **alle fire** flader
+på én rigtig `runPass` — `tools/measure-e2e.mjs` (to rigtige servere, rigtig
+modtager, alle flader) og `tools/measure-surfaces.mjs` (otte håndskrevede
+tilstande, én flade ad gangen) er de to bænke, den kom fra; de kører under
+temp-HOME og påstår intet.
+
 ## Status fra denne iteration (95, P1-79 — kundenrapporten sagde "stable" om en side, der aldrig blev læst fordi den var for stor)
 
 **Målt først, nul kode ændret.** Rigtig `runPass`, rigtig `state.json`, rigtig rapport,
@@ -5520,6 +5601,7 @@ for selv. Ingen gemt nøgle er omskrevet, ingen eksisterende adgangsd tilstand
 10. **Skal der skæres en ny `v0.2.9-cli`-release?** P0-9b gør curl-stien væsentligt bedre, men *kun* en release med et publiceret `.sha256` gør checksum-verificeringen obligatorisk; lige nu advarer installeren om 0.2.5, fordi ingen af de 12 releases har en sidecar. Release-workflowen uploader automatisk sidecaren, så det eneste arbejde er `git tag v0.2.9-cli && git push --tags` (det gør Mads — agenten laver aldrig tags) og `npm publish` af 0.2.9. Samme release synkroniserer Homebrew-formlen, som stadig peger på en ældre version i det eksterne tap-repo.
 11. Er `v1`-tagget (2026-08-26) med gamle 0.1.3-tarballs og 0.1.4/0.2.6-desktopsassets stadig nødvendigt, eller er det et rodet relikvieskilt, der bør slettes eller omdøbes? Det er det eneste release uden versionssuffix, og det ligger lige i installérens kandidatliste (den springes over i dag, fordi der intet `deskuptime-<ver>.tar.gz`-asset passer til `v1`).
 
+- **Release-note P1-80:** Når en sides `<title>` ændrer sig, sagde **din betalte kanal** begge titler — `page title: "Acme — home" → "Acme — shop"` — men de to terminal-lister og kundenapporten sagde kun den nye: `page title: "Acme — shop"`. Den gamle titel blev målt i hvert pass og skrevet væk i samme pass, så den halvdel der svarer på *"hvad sagde siden før"* fandtes kun i den besked, der forsvinder. Nu siger alle fire flader præcis den samme sætning, med en pil: `🔄 content changed today — page title: "Acme — home" → "Acme — shop"`. Det er især værd at have for et bureau, fordi kanalen er dæmpet til én besked i timen pr. side — på en side der ændrer sig to gange i timen var det netop de øvrige lister, der stod tilbage med den ensidige sætning. **Mærket:** pilen hører til den *målte ændring*, så den forsvinder igen hvis næste ændring kun rører bytes (en CSRF-token, et nonce) eller hvis titlen flytter sig uden at bodyen gør det — en gammel pil må aldrig stå under en ny ændrings ord. **En side der aldrig har haft en titel-ændring, eller en kunde der har kørt en ældre version, ser præcis som før** — den ensidige sætning, uændret. Ingen status, exit-kode, uptime-tal, Content-celle eller alarm flytter sig.
 - **Release-note P1-79:** En kunde side, der er vokset over **2 MiB**, blev skrevet som **`stable`** i rapporten — altså "siden er læst, og den har ikke ændret sig" — i det dokument du sender videre til kunden. Siden var aldrig læst: værktøjet springer overlarge sider over, så det er ikke et nedbrud, bare ingen sidesignal. Før skrev rapporten `stable · 3145728 bytes, read at an unknown time`, og de to terminal-lister skrev samme tal. Nu siger rapporten `—` og listerne tier, præcis som for en side der aldrig er blevet læst. **Mærket:** det er kun den erklærende form. Server du sender **en stor side med `content-length` på**, var den gemt som en målt størrelse; samme side **streamet uden den** var allerede korrekt. Begge former er nu målt og dækket af test, så de ikke kan glide fra hinanden igen. **En side der *er* læst, beholder sin størrelse tegn for tegn**, og en side der voksede over grænsen beholder den målte størrelse fra det pass der læste den — med sin egen alder, som siden P1-78. `check` og `check --json` er urørte: de fortæller stadig, hvor stor siden er, og at de sprang den over med grænsen og et nedre tal. **Ingen exit-kode, matrix-række eller JSON-felt er ændret.**
 
 - **Release-note P1-38:** `deskupreport` kan nu se forskel på et site der var overvåaget hele perioden, og et site hvor bureauets eget overvågningsloop lå ned i to dage. Før skrev `Uptime (window)`-kolonnen `95.83% (28 recorded d, 1344 checks, 56 failed)` i et dokument, hvis fodnot siger at kolonnen tæller "the passes recorded in the last 30 days" — to tal om de samme 30 dage, hvor det ene dækker 28 af dem. Nu skriver rapporten under tabellen **Fewer days recorded than the window for 1 site — the uptime above covers part of the period, not all of it:** `<url> (28 of 30 d)`, og resumelinjen tæller `1 with an incomplete window`. **Cellen er uændret**, så intet i jeres systemer brydes; kun en linje er tilføjet, og `report --json` får fire additive felter (`windowRecordedDays`, `windowGap`, `windowMissingDays`, `summary.windowGaps`). **Et site der først blev overvågt i denne uge får aldrig linjen** — 3 registrerede dage ud af 30 er hele sandheden om et site I netop har tilføjet — og det samme gælder en historikfil der kun startede at blive skrevet i går, uanset hvor længe I har overvåget sitet. Vi kan ikke bevise en mangel på dage, filerne ikke indeholder, og det gælder især lige nu: de daglige buckets startede først at blive skrevet da `report` udkom.
@@ -5566,6 +5648,8 @@ for selv. Ingen gemt nøgle er omskrevet, ingen eksisterende adgangsd tilstand
 - **Iteration 63 (P1-47, målt + fix):** ❓ 1–3 ubesvarede, så målingen gik på den betalte kanals *hyppighed* — den eneste del af alarmeringen ingen måling dækkede. Rigtig CLI, temp-HOME, rigtig lokal side med et token pr. forespørgsel: 3 pass → 3 `content changed`-alarmer, ingen af dem handlingsværdige; hver er en POST + en notifikation, så 2 880/dag ved 30 s. **Fix:** `readContentChangeAlert()` i `src/status.js` (1 time, pr. site, ur-baglæns undertrykker intet, intet kasseres) + brug i `runPass`; matrix-claim og §2 opdateret, så påstanden matcher leveringen. 10 nye tests → **431/431**; audit 0/0; `node --check`, `matrix --check`, `git diff --check` grønne på Node 26.7.0. Én ældre test opdateret (lagt krav på den gamle adfærd) og femte pass efter en time tilføjet, så dens eget formål er stærkere. To fejl i mine egne tests fundet (stub sendte `changed` på baseline; tabt `contentHash`-argument gjorde én test grøn af forkert grund). **Ingen mutationstest** — over tidsbudgeten. `ceo/content-alert-flood`, `54e8f54`.
 
 ## Iterationslog
+
+- **Iteration 96 (P1-80, målt + fix):** ❓ 1–3, ❓ 14 og ❓ 16 stadig ubesvarede, så målingen gik på den **ændrede sides titel**. Rigtig `runPass` over to rigtige lokale servere, rigtig state-fil, rigtig rapport og rigtig modtager på den betalte kanal, Pro fra den gemte licens (intet kald til mahope.tools): kanalen skrev `page title: "Acme — home" → "Acme — shop" (same size, 95 bytes)`, og `status`, `watch --status` og kundenapporten skrev alle tre `page title: "Acme — shop"` — den ensidige form, som efter ordet *changed* læses som en beskrivelse af siden i dag. Titlen var målt to steder og gemt ét: `readContentChange` sammenlignede `entry.lastTitle` med den nye og citerede begge, men returnerede kun `titleChanged`; samme pass skrev `lastTitle = den nye`, og den gamle var væk. En alarm er engang, de tre lister er et genlæst arkiv. Fix: `readContentChange` giver `previousTitle`/`title` tilbage fra det kald der målte dem, `runPass` skriver `contentTitleBefore` hvor ændringen måles (samme form som `certIssuerBefore`, P1-64, og `contentReadAt`, P1-78) — **og rydder den på samme betingelse**, fordi parret tilhører en *ændring* og ikke siden: en titel der flytter sig uden byte-ændring, eller en ændring uden titelskift, ville ellers arve en gammel pil. `delete` ikke `= null`. Efter: alle fire flader siger præcis den sætning kanalen sendte; en state-fil skrevet før rettelsen giver den ensidige sætning uændret. Parret sammenlignes gennem `safeText`, så to titler der kun adskiller sig ved en escape eller et nul-tegn ikke giver en pil der peger på sig selv (P1-70 arvet). Additivt `contentTitleBefore` i `--json`. 11 nye tests i `test/titlepair.test.js` → **694/694** (683 + 11); audit 0/0; `matrix --check` 0; `node --check`, `git diff --check` grønne. **Syv mutationer målt, seks døde** (6/1/1/4/2/1 fejl); den syvende (`before === after` før `safeText`) **overlever som ækvivalent** — to ens strenge printer altid ens. Hver mutation blev difset mod originalen, fordi fem i en tidligere iteration vished ud som "0 fejl". **Tre eksisterende låse opdateret, ikke slækket** — de låste den ensidige sætning, som er præcis denne fejl: de to rejse-tests i `contentchange.test.js` kræver nu `page title: "Side A" → "Free iPhone!!"` på den betalte linje og på begge gratis lister, og `status.test.js`'s `deepEqual` på ejeren får de to nye felter. Låsen på "kun ejeren skriver sætningen" (4 forekomster) er urørt. **To fejl i mine egne tests fundet af gaten:** `pageCheck` havde en tæller inde i hjælperen, så et nyt kald pr. `runPass` genstartede den og gjorde næste pass til en baseline (testen påstod en ændring den aldrig frembragte); og en alder-påstand regnede fra `BASE` mens rapporten fik `new Date()`. To målebænke lagt til: `tools/measure-e2e.mjs` (to rigtige servere, rigtig modtager, alle fire flader) og `tools/measure-surfaces.mjs` (otte håndskrevede tilstande) — de kører under temp-HOME og påstår intet. `ceo/content-title-pair`. **Ingen status, exit-kode, uptime-tal, Content-celle eller alarm flytter sig.** **Næste:** ❓ 1–3, ❓ 14, ❓ 16; ellers en målt opgave.
 
 - **Iteration 95 (P1-79, målt + fix):** ❓ 1–3, ❓ 14 og ❓ 16 stadig ubesvarede, så målingen gik på den betalte rapports **Content-celle**. Rigtig `runPass`, rigtig state-fil, rigtig 3 MiB-side, rigtig rapport: `stable · 3145728 bytes, read at an unknown time` om en side der aldrig blev læst — og fodnotens egen løfte ("a page over the content-check limit is never read, so it shows — rather than a size") var brudt af den celle den selv definerer. `readContentState` har skelnet målt/erklæret siden P1-21, og `check --json` spørger den; `runPass` testede `Number.isFinite(contentLength)`, som en server-*erklæring* også opfylder. **Målingen fandt hvorfor P1-78's test var grøn:** samme side uden `content-length` giver `contentLength: null`, nåede aldrig linjen og svarede `—` — samme grænse, samme ulæste side, to svar. Fix: `runPass` spørger `readContentState(result.content).measured`, den ene ejer. Efter: begge former `—`, listerne tier, læste sider urørte, P1-78's alder urørt. 5 nye tests i `test/oversizedpage.test.js` → **683/683** (678 + 5); audit 0/0; `matrix --check` 0; `node --check`, `git diff --check` grønne. Tre mutationer målt, alle døde (3/3/3 fejl). `ceo/oversized-page-size`. **To fejl i mine egne tests fundet af gaten** (tom state → exit 2 slog alle ihj; hel-række-sammenligning fejlede på port og responstid, som netop skal være forskellige). **Næste:** ❓ 1–3, ❓ 14, ❓ 16; ellers en målt opgave.
 

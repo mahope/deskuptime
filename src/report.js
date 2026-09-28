@@ -349,6 +349,13 @@ export function buildReport(state, { title, now = new Date(), history, windowDay
         contentChangedAt: content.changedAt,
         contentChangedAgeDays: content.ageDays,
         contentTitle: content.title,
+        // The title the page carried before that change, when the pass that
+        // measured the change kept it. `contentTitle` alone is the page as it is
+        // now, so a consumer that renders it next to `contentChanged` can only
+        // say the page's title is that — the same one-sided reading `contentNote`
+        // had until the pair was kept. Additive and `null` for every state file
+        // written before the pair existed, so nothing a consumer reads moves.
+        contentTitleBefore: content.previousTitle,
         // The owner's own sentence, carried through rather than rebuilt. The
         // first version had the report assemble it from the site's fields, and
         // the two sets of names did not match — the line rendered as

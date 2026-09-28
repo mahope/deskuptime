@@ -1497,7 +1497,24 @@ test('content_changed: ejeren tager bare de facts den kan bruge', () => {
   // `content_changed`, fordi hashen da var den samme — her er det ejeren alene,
   // så grænsen låses.
   const same = { previousLength: 10, length: 10, previousTitle: 'Samme', title: 'Samme' };
-  assert.deepEqual(readContentChange(same), { titleChanged: false, message: "content changed — same size (10 bytes): the page's bytes differ" });
+  assert.deepEqual(readContentChange(same), {
+    titleChanged: false,
+    // The pair rides along with the flag, so the pass can keep the "before" with
+    // the change and a reader arriving later is not left with half the sentence
+    // (P1-80). No title moved, so there is no pair — the same shape, not an
+    // invented one.
+    previousTitle: null,
+    title: null,
+    message: "content changed — same size (10 bytes): the page's bytes differ",
+  });
+
+  // …and when the title did move, both sides come back from the same call that
+  // measured them, so the writer cannot disagree with the flag about which side
+  // was the old one.
+  const moved = readContentChange({ previousLength: 10, length: 10, previousTitle: 'Gammelt', title: 'Nyt' });
+  assert.equal(moved.titleChanged, true);
+  assert.equal(moved.previousTitle, 'Gammelt');
+  assert.equal(moved.title, 'Nyt');
 
   // En titel der ikke er en streng, eller som er tom, er ikke en titel. Uden
   // begge sider kan der ikke være et titelskift at navngive.

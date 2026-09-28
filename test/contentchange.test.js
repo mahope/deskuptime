@@ -246,11 +246,15 @@ test('the report names a changed page instead of printing 100 % and moving on', 
   // …and the document says what the columns above do not.
   assert.equal(site1.contentChanged, true);
   assert.equal(site1.contentTitle, 'Free iPhone!!');
+  assert.equal(site1.contentTitleBefore, 'Side A', 'the title the change replaced is kept, so the pair can be read again (P1-80)');
   assert.match(markdown, /\| Content \|/, 'the table has a content column');
   assert.match(markdown, /🔄 changed/, 'the row marks the change');
   assert.match(markdown, /\*\*1 site\(s\) · 1 up · 0 down · \d+ checks? · 0 failed · 1 content changed\*\*/, markdown);
   assert.match(markdown, /had its page content change since monitoring/, markdown);
-  assert.match(markdown, /page title: "Free iPhone!!"/, 'the named line carries the title');
+  // The pair, not just the new title: the line a client reads has to answer what
+  // the page said *before*, which is the half the alert quotes and the state file
+  // used to throw away (P1-80).
+  assert.match(markdown, /page title: "Side A" → "Free iPhone!!"/, 'the named line carries both titles');
 });
 
 test('an unchanged page is reported as stable, and a skipped one is not "stable"', async (t) => {
@@ -431,7 +435,10 @@ test('the two lists name a defaced page instead of a healthy 200', async (t) => 
   for (const [stdout, label] of [[list.stdout, 'status'], [watch.stdout, 'watch --status']]) {
     const row = rowFor(stdout, site.url);
     assert.match(row, /🔄 content changed/, `${label}: the row is silent about a page that was rewritten`);
-    assert.match(row, /page title: "Free iPhone!!"/, `${label}: the title is the part a customer recognises`);
+    // Both titles, not only the new one. These are the two free lists, so this is
+    // where a user without a report learns what the page said before; the pair
+    // used to live only in the paid channel's one-shot alert (P1-80).
+    assert.match(row, /page title: "Side A" → "Free iPhone!!"/, `${label}: the title is the part a customer recognises — and what it replaced`);
     // The verdict does not move. A page served with 200 is up, whatever it says.
     assert.match(row, /\(200\)/, `${label}: the status code is still the site's`);
   }

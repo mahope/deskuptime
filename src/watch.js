@@ -671,6 +671,38 @@ export async function runPass(state, opts = {}) {
         previousTitle: entry.lastTitle,
         title: result.content.title,
       });
+      // The title the page carried *before* this change, kept beside the change so
+      // a later reader can say what it became. `readContentChange` measured this
+      // pair and quoted it — `page title: "Acme — home" → "Acme — shop"` — but an
+      // alert is a one-shot: the pass below overwrites `lastTitle` with the new
+      // one, so the arrow existed for the seconds the webhook was in flight and
+      // was gone before anyone opened `status`, `watch --status` or the client
+      // report. Those three read `lastTitle` alone and printed one-sided — `page
+      // title: "Acme — shop"`, which reads as a description of the page rather
+      // than of a change. Measured 2026-09-28 with a real `runPass` over a real
+      // page, no code changed:
+      //
+      //   channel: content changed — page title: "Acme — home" → "Acme — shop" (same size, 95 bytes)
+      //   status:  🔄 content changed today — page title: "Acme — shop"
+      //   report:  🔄 content changed today — page title: "Acme — shop"
+      //
+      // The same shape as `certIssuerBefore` above: the comparison is written where
+      // the change is measured, so no reader is left holding half of it.
+      //
+      // It is written *and cleared* on the same condition, because the pair belongs
+      // to a change rather than to the page. A change whose title did not move —
+      // a nonce, a CSRF token, a live counter — carries no pair, so an older
+      // arrow is dropped rather than left to be read as this one. Keeping it would
+      // put a real pair from an older change next to "changed today", which is
+      // the same kind of lie as the one-sided form: a title the change did not do.
+      //
+      // `delete` and not `= null`: the field is absent when there is no pair, so
+      // "this state file has never seen a titled change" and "this one saw a title
+      // change that had no pair" are the same absence rather than two shapes a
+      // reader has to tell apart.
+      if (change.titleChanged) entry.contentTitleBefore = change.previousTitle;
+      else delete entry.contentTitleBefore;
+
       // Whether the change is *sent* is a second question, and it has one owner
       // too: a page that renders a per-request value (a CSRF nonce, a
       // cache-buster, a live counter) differs on every pass, and every difference
@@ -750,7 +782,17 @@ export async function runPass(state, opts = {}) {
     // bytes differ. `content.js` has always measured it; this is the first
     // surface to keep it. Only overwritten when the page still offers one, so a
     // pass that could not read a title does not erase the last real one.
-    if (typeof result.content?.title === 'string' && result.content.title.trim() !== '') entry.lastTitle = result.content.title.trim();
+    if (typeof result.content?.title === 'string' && result.content.title.trim() !== '') {
+      const title = result.content.title.trim();
+      // The other half of the pair's rule: a title that moves *without* a change
+      // being measured drops the pair too, for the same reason. The block above
+      // owns "a change happened, and these were its titles"; this owns "the page
+      // was re-read and its title is now this, with nothing measured to pair it
+      // against". Between them the pair can only ever describe the newest
+      // measured change, and the sentence it produces cannot be one pass stale.
+      if (title !== entry.lastTitle && result.content?.changed !== true) delete entry.contentTitleBefore;
+      entry.lastTitle = title;
+    }
   }
 
   // The counters go to disk here; the alerts this pass just produced are already
