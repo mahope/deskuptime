@@ -8295,11 +8295,11 @@ for selv. Ingen gemt nøgle er omskrevet, ingen eksisterende adgangsd tilstand
     `@v0` og alligevel få rettelser. Det kræver to ting kun du kan gøre:
     `git tag v0 <nyeste cli-release> && git push origin v0`, og at
     release-workflowet flytter tag'en ved hver ny CLI-release. **Jeg har lavet
-    låsen, så hvis du vil have `@v0` tilbage i README, er det en linje i
-    `test/actionref.test.js` jeg så skal slå fra** — låsten kræver i dag
-    bevidst en *branch*, fordi et release-tag kan være ældre end den tabel der
-    står under opskriften. Sig til, så skifter jeg den til "findes, og er
-    nyere end det seneste tag", og gør opskriften klar til `@v0`.
+    låsen, så hvis du vil have `@v0` tilbage i README, kan den ikke bare slås
+    fra:** låsten kræver i dag bevidst at opskriftens ref er *løs* — den må ikke
+    være et release-tag, fordi et tag kan være ældre end den tabel der står
+    under opskriften. Sig til, så skifter jeg den til "findes, og er et tag der
+    flyttes med hver release", og gør opskriften klar til `@v0`.
     (Bemærk: ❓ 11's `v1`-tag er et andet relikvieskilt — det er et desktop-tal
     uden versionssuffix og uden publiceret tarball, ikke den samme slags tag.)
 
