@@ -1,6 +1,6 @@
-> **Seneste:** iteration 107 (P1-92, færdig) — historien står i køens afsnit
-> `P1-92 — FÆRDIG 2026-09-28` lige under `## Prioriteret kø`. Næste opgave er
-> `P1-93`: gaten er rød af **uret**, ikke af nettet.
+> **Seneste:** iteration 108 (P1-93, færdig) — historien står i køens afsnit
+> `P1-93 — FÆRDIG 2026-09-28` lige under `## Prioriteret kø`. Næste opgave er
+> `P1-94`: mål de fixtures, der endnu har et fast ur.
 
 ## Status fra denne iteration (106, P1-91 — det gratis værktøj havde ingen sted at sige tak, fordi ingen kommando nogensinde skrev donationslinket ud)
 
@@ -3983,14 +3983,112 @@ på delt tilstand mellem filer, ikke på en fejl i testen. Næste opgave.
 
 **Deploy-note ikke nødvendig:** CLI-repo uden live-deploytarget.
 
-### P1-93 — NÆSTE — gaten er rød af uret, ikke af nettet
+### P1-93 — FÆRDIG 2026-09-28 (`ceo/gate-clock`, `3472a62`) — gaten var rød af uret: et fixture med et fast tidspunkt, læst af en kommando der aldrer med maskinens ur
 
-Målt her, ikke gættet: 744/751 på det uændrede træ, 7 fejl i to filer.
-`test/oversizedpage.test.js:197` og `:222` skriver et stempel og læser det
-tilbage; rapporten siger `read 2 min ahead of this machine's clock` og
-`100% (41 checks)`. `test/sslissuer.test.js` er grønt i isolation og rødt i
-suiten, altså delt tilstand. Spørgsmålet for næste iteration: hvem skriver
-`lastChecked`, og hvorfor står der 41 checks i ét pass?
+**Målt først, og CI'en med: ét kald, aldrig polling.** `main` var **rød**
+siden P1-92-mergeen kl. 09:06, og de 7 fejl var de samme som P1-92 havde
+noteret som "ikke mine":
+
+```
+completed  failure  Merge ceo/gate-offline: gaten måler ikke længere …  36401360275
+```
+
+Reproduceret på det uændrede træ med Node 26.7.0: **749/756**. Bemærk at
+planens egen-opskrivning fra P1-92 var delvis forkert på to punkter, og begge er
+rettet her: filerne er **tre**, ikke to (`certissuerlists`, `certrotationlists`,
+`oversizedpage` — ikke `sslissuer`, som er grønt både alene og i suiten), og
+tallet var 749/756, fordi P1-92 selv lagde 5 tests til.
+
+**Det er én fejl i tre ansigter, og ingen af dem vedkommer koden.** Alle tre
+filer skrev et state-fixture med stempler fra et *fast tidspunkt* og lod en
+**rigtig** kommando alder det med maskinens eget ur:
+
+```
+test/certissuerlists.test.js   const BASE = '2026-09-27T09:00:00.000Z'
+test/certrotationlists.test.js  const BASE = '2026-09-27T09:00:00.000Z'
+test/oversizedpage.test.js     const NOW  = new Date('2026-09-28T09:00:00.000Z')
+  påstand   🏢 certificate answers from a different issuer 2 d ago (Ganske … → Rogue …)
+  rækken    🏢 certificate answers from a different issuer 3 d ago (Ganske … → Rogue …)
+```
+
+De to første kører `status` og `watch --status` i en **børneproces** — kommandoen
+alder stemplet fra maskinens ur, mens påstanden holdt en alder talt fra `BASE`.
+Grønne i præcis 24 timer, så 5 af de 7 fejl. Den tredje har de to ure omvendt:
+rapportens `now` var fast, **passen** stemplede rigtig tid, så passen lå i
+fremtiden og hver række fik `stable · 70 bytes, read 36 min ahead of this
+machine's clock` hængt på sig — rapporten *har* ret (P1-42), det var fixture'ens
+ur, der var en fiktion, der var udløbet.
+
+**De to åbne spørgsmål fra P1-92 er besvaret, begge ved måling:**
+- *Hvem skriver `lastChecked`?* `runPass` i `src/watch.js`, med maskinens
+  klokkeslæt. Ingen skriver et fremtidigt stempel; det fremtidige stempel kom fra
+  testens egen `now`.
+- *Hvorfor 41 checks i ét pass?* Fordi de er to passer over et fixture med 40:
+  `oversizedpage.test.js:64` (`PRIOR_PASS.checks: 40`) plus den nye pass = 41, og
+  den følgende test laver to passer = 42. Det er fixture'ets egen tæller, ikke en
+  taltalt. `100% (42 checks)` og `— (no pass in the last 30 d)` i samme række er
+  heller ikke en modsigelse: det er to kolonner, "Uptime (all)" mod
+  "Uptime (window)", og vinduet læses fra historikfilen, som testen sender tom.
+
+**Rettelsen ligger i én delt hjælper.** `test/helpers/clock.mjs` ejer ankeret:
+`ANCHOR` er `new Date()` ved import, `daysBefore(n)` skriver hele dage fra det.
+De to certifikatlister får `const BASE = ANCHOR`, så *alle* deres aldre både
+in-process og i børneprocessen kommer fra samme ur. `oversizedpage` fik den anden
+rettelse, fordi dens læser skal være **senere** end dens skriver: rapportens `now`
+er `new Date()` **ved kaldet**, ikke ved indlæsning — ellers ville et anker fra
+importen ligge *før* den pass, der stempler bagefter.
+
+**Hvorfor det er holdt, og ikke bare flyttet:** fordi ejeren **gulver**.
+`passAge` er `Math.floor(age / MS_PER_DAY)`, så et stempel taget ved import
+læser `0 d` resten af døgnet og `1 d` præcis efter 24 timer. Det er låst med en
+løkke over døgnets timepoint, så en fremtidig `Math.ceil` — som ville få
+`daysAgo(2)` til at læse `3 d` to sekunder efter skrivningen — dør med en fejl.
+
+**Låset er målt, ikke en regex-scanning.** Først skrevet som en scan af hele
+`test/`-træet efter faste tidspunkter, og kastet væk efter måling, som i P1-92:
+den ville råbe om **tyve** filer, der er *korrekte* — `readEntry` og `buildReport`
+tager `{ now }`, og en fil der giver læser og skriver samme øjeblik har gjort
+alderen deterministisk med vilje. Så er låset målingen fra P1-92 kørt med vilje:
+`test/clockgate.test.js` **kører den rigtige kommando** på to state-filer der
+kun adskiller sig i forankringen (`i dag` mod `1 d ago`), og de tre filer er
+låst på navn. Den fejler med den sætning kommandoen skrev, ikke med et
+linjenummer i en liste.
+
+**Acceptkriterier — alle syv opfyldt:**
+
+1. ✅ Hele suiten grøn: **759/759** (756 + 3 nye), mod 749/756 målt først.
+2. ✅ De 5 alder-fejl og de 2 "ahead"-fejl er målt væk på de rigtige filer:
+   22/22 i de to certifikatlister, 5/5 i `oversizedpage`.
+3. ✅ Ingen fast tidspunkt som ur i de tre filer; de to lister tager deres alder
+   fra `daysBefore(days, BASE)`, som låser på importen af hjælperen.
+4. ✅ `ANCHOR` følger maskinens ur (målt: < 60 s drift), og et anker læser `0 d`
+   hele døgnet og `1 d` efter præcis 24 h — låst, fordi `passAge` gulver.
+5. ✅ Målingen kører den rigtige `status` og ser den aldre et stempel, så låset
+   har ingen blind plads at regne med.
+6. ✅ `oversizedpage`'s rapport-ur læses **ved kaldet**, ikke ved import: en
+   læser før sin egen skriver er præcis den fejl, rettelsen fjerner.
+7. ✅ `matrix --check` exit 0; `npm audit` 0/0; `node --check` ren på alle fem
+   JS/MJS-filer; `git diff --check` rent. Ingen fil i `src/` rørt.
+
+**Tre mutationer målt, alle tre døde:** gulv→`Math.ceil` i `passAge` (2 fejl i
+`clockgate`), `ANCHOR` gjort til et fast tidspunkt (2 fejl, drift-låsen og
+døgn-løkken), og `oversizedpage` sat tilbage til et ur fra *importen* i stedet
+for ved kaldet (2 fejl, rækkerne får `ahead of this machine's clock` igen).
+
+**Deploy-note ikke nødvendig:** CLI-repo uden live-deploytarget.
+
+### P1-94 — NÆSTE — mål de tidsstemplede fixtures, der endnu står med et fast tidspunkt
+
+De 20 filer P1-93 bevidst lod stå, har hver sin begrundelse (samme `now` til
+læser og skriver), og det er ikke målt endnu hvilke af dem der på en dag
+skal have et fast ur. Den næste iteration skal **måle** det — ikke regex-scane
+det: samme metode som P1-93, en rigtig kommando på to forankringer, og en fil
+der kan bevise at den er grøn. Kandidater med et fast ur *og* en børneproces:
+`history` (NOW 25/9), `report` (NOW 25/9), `statusline` (NOW 26/9),
+`contentchange` (NOW 27/9), `httpdownreason` (06:00), `reportkeyreason` (06:00),
+`certrotationcount` (27/6). `certrotationcount` er grønt siden juni med et ur
+fra 27/6, så ur-et alene er ikke nok til at røde — målingen skal finde den anden
+faktor, ellers er denne opgave lukket som `BLOCKED: ikke målt`.
 
 ### P1-91 — FÆRDIG 2026-09-28 (`ceo/thanks-free-list`, `81e97a7`) — det gratis værktøj havde ingen sted at sige tak
 
