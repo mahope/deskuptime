@@ -1,8 +1,85 @@
-> **Seneste:** iteration 110 (P1-95, færdig) — historien står i køens afsnit
-> `P1-95 — FÆRDIG 2026-09-28` lige under `## Prioriteret kø`. Næste opgave er en
+> **Seneste:** iteration 111 (P1-96, færdig) — historien står i køens afsnit
+> `P1-96 — FÆRDIG 2026-09-28` lige under `## Prioriteret kø`. Næste opgave er en
 > ny målt opgave: køen er tømt for målte kandidater igen.
 
-## Status fra denne iteration (110, P1-95 — curl-installeren installerede en release, der aldrig har eksisteret)
+## Status fra denne iteration (111, P1-96 — `headers` var den eneste flade der gik kæden igennem uden at spørge, hvem der svarede)
+
+**Målt først, nul kode ændret.** Køen var tømt, så målingen gik på den flade
+loopet har rørt mindst: `deskuptime headers` — bureauets egen kommando, den der
+skal forklare en kundes site. Rigtig CLI, to rigtige lokale servere, et site der
+svarer `301` til en sti på en anden vært (det er en parkeringsside, et hijacket
+domæne og en tastefejl hos en registrar — alle tre svarer 200):
+
+```
+headers      301 → http://127.0.0.1:61779/landet
+             Final: http://127.0.0.1:61779/landet (200) — redirected     exit 0
+check        Status: 200 — UP
+             ⚠️  answered by another host — the response came from 127.0.0.1:61779,
+                not 127.0.0.1:61780                                     exit 0
+headers --json  { "finalUrl": "…:61779/landet", "redirected": true }
+check   --json  { "finalUrl": "…:61779/landet", "offHostRedirect": true }
+```
+
+**Årsagen er en anden slags hull end de forrige, og derfor så det hele ud som om
+intet var galt.** Ikke to flader der skrev hver sin sætning — **en flade der
+aldrig spurgte**. `headers` er den eneste kommando der følger kæden i hånden, og
+derfor også den eneste der *kan* vide det; P1-26/P1-27 lagde `readRedirectTarget`
+som den ene ejer og gav den til `check --json`, `watch`, begge lister,
+rapportrækken, den navngiven linje og den betalte webhook. Dens lås var en scan
+efter **sætningen** — og sætningen ligger i `status.js`, så scanningen var grøn
+mens den ene flade, ingen scanner kender, beskrev det samme site ved *ikke at
+spørge*. Kæden står på skærmen, så en omhyggelig læser kan se skiftet; men
+verdiktlinjen siger blot `redirected`, og det ord skal dække både
+`www.acme.dk → acme.dk` (den almindeligste redirect på nettet) og et domæne der
+ikke længere leverer kundens site. I `--json` har et bureau-script `redirected:
+true` i begge tilfælde og **intet felt** der kan skelne dem.
+
+**Rettelsen er én læsning, spurgt én gang, fra den ejer alle andre bruger.**
+Ejerens egen sætning som `⚠️`-linje under `Final:`, og **samme nøgle som
+`check --json` allerede udgiver** — så en konsument lærer reglen én gang. Dommen
+og exit-koden flytter sig ikke: en redirect er ikke en fejl (P1-26's regel), så
+det er en advarselslinje, ikke en ny dom.
+
+**Porten er målt, ikke antaget.** `readRedirectTarget` får `finalUrl: null` når
+`chain.measured` er falsk, altså samme mål som de fem sikkerhedsheadere er holdt
+til: en vært der **aldrig svarede** kan ikke have svaret. Det er ikke en
+bik rantregel — målt: en kæde der krydser til den anden vært og derefter løber i
+en løkke har som sidste *adresse* den anden vært, men intet svar kom derfra. Uden
+porten ville JSON her have sagt `offHostRedirect: true` om et kryds ingen så.
+Den fjerde test bygger præcis den kæde.
+
+**Acceptkriterier — alle syv opfyldt:**
+
+1. ✅ `headers` skriver ejers sætning ved et værtsskifte (målt på rigtig CLI mod
+   to rigtige servere), og `check` skriver den samme sætning for samme URL.
+2. ✅ `headers --json` udgiver `offHostRedirect: true` — samme nøgle og samme
+   værdi som `check --json` på det samme site.
+3. ✅ En redirect på **egen** vært tier: ingen advarselslinje, `false` i JSON,
+   `redirected: true` og `securityChecked: true` uændrede, `Final:`-linjen
+   uændret.
+4. ✅ En forladt kæde siger `offHostRedirect: false`, ingen sætning i terminalen,
+   `Final: — (redirect chain not followed)` og exit 2 uændret.
+5. ✅ Struktur-lås: `headers`-blokken skal kalde `readRedirectTarget` **med
+   `chain.measured`-porten**, og ejers hele sætning må kun findes i `status.js`.
+6. ✅ Rapportens navngiven linje må stadig bygge af `offHostNote` — målt, ikke
+   antaget: `report.js` skriver *også* ordene `answered by another host`, men som
+   en indpakning om ejers sætning. Låsen målte derfor på **hele** sætningen
+   (`— the response came from`), ikke på de tre første ord; den første version
+   af låsen var rød af den grund.
+7. ✅ 5 nye tests i `test/offhostheaders.test.js` — adfærdslåse mod rigtig CLI og
+   rigtige servere, plus de strukturelle.
+
+**Gaten:** **767/767** på Node 26.7.0 via `tools/run-tests.mjs` (762 + 5);
+`matrix --check` exit 0; audit 0/0; `node --check` ren; `git diff --check` rent.
+CI var grøn på `main` før start (ét kald, ingen polling).
+
+**Deploy-note ikke nødvendig:** CLI-repo udden live-deploytarget. Ingen side
+blev ændret, så der er ingen trafik-baseline at skrive; målingen er i
+kommandoens output, ikke på en side.
+
+**Ingen fil i `src/` rørt ud over `cli.js`** — én fil, to steder, plus testen.
+
+## Status fra tidligere iteration (110, P1-95 — curl-installeren installerede en release, der aldrig har eksisteret)
 
 **Målt først, mod det rigtige GitHub, intet stubbet.** Køen var tømt for målte
 kandidater, så målingen gik på den frie distributionsvej — den som ❓ 10 og
@@ -3956,6 +4033,28 @@ Den aktuelle gate-definition er registreret her:
 
 ## Prioriteret kø
 
+### P1-96 — FÆRDIG 2026-09-28 (`ceo/headers-offhost`) — `headers` gik kæden igennem uden at spørge, hvem der svarede
+
+**Målt først, nul kode ændret.** Se afsnittet øverst. Kort fortalt: to rigtige
+lokale servere, et site der `301`er til en anden vært. `check` skrev ejers
+sætning, `headers` skrev `Final: … — redirected` og exit 0, og `headers --json`
+havde intet felt der kunne skelne en parkeringsside fra `www → apex` — mens
+`check --json` udgav `offHostRedirect`.
+
+**Årsagen:** `headers` er den eneste flade der selv følger kæden, og den var den
+eneste der aldrig spurgte `readRedirectTarget`. Låsen fra P1-26/27 scannede efter
+**sætningen**, som ligger i `status.js` — så den var grøn for en flade, der
+beskrev det samme site ved ikke at stille spørgsmålet.
+
+**Rettelsen:** én læsning fra ejeren — `note` i terminalen og **samme**
+`offHostRedirect`-nøgle som `check --json`, gated på `chain.measured`, fordi en
+vært der aldrig svarede ikke kan have svaret (målt med en kæde der krydser og
+derefter løber i løkke). Dommen, exit-koden, `redirected` og egen-vært-
+redirecten er uændrede.
+
+**Gaten:** **767/767** (762 + 5); `matrix --check` exit 0; audit 0/0;
+`node --check` ren; `git diff --check` rent. `ceo/headers-offhost`.
+
 ### P1-92 — FÆRDIG 2026-09-28 (`ceo/gate-offline`) — ét test gør gaten rød med en fejl, der ikke handler om koden
 
 **Målt først, nul kode ændret.** Ét kald til CI'en ved iterationens start (aldrig
@@ -4167,8 +4266,8 @@ for ved kaldet (2 fejl, rækkerne får `ahead of this machine's clock` igen).
 
 **Deploy-note ikke nødvendig:** CLI-repo uden live-deploytarget.
 
-> **Seneste:** iteration 110 (P1-95, færdig) — historien står i køens afsnit
-> `P1-95 — FÆRDIG 2026-09-28` lige under `## Prioriteret kø`. Næste opgave er en
+> **Seneste:** iteration 111 (P1-96, færdig) — historien står i køens afsnit
+> `P1-96 — FÆRDIG 2026-09-28` lige under `## Prioriteret kø`. Næste opgave er en
 > ny målt opgave: køen er tømt for målte kandidater igen.
 
 ### P1-95 — FÆRDIG 2026-09-28 (`ceo/installer-no-guess`) — curl-installeren installerede en release, der aldrig har eksisteret
