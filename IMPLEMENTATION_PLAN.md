@@ -1,3 +1,59 @@
+## Status fra denne iteration (94, P1-78 — kundenrapporten trykkede sidens størrelse uden at sige, hvor gammel den var, mens begge lister sagde det)
+
+**Målt først, nul kode ændret.** Rigtig CLI, rigtig `state.json`, rigtig rapport,
+Pro fra `passthrough`-stubben, intet stubbet ud over licensen. Ét site hvis seneste
+pass var 5 **timer** gammelt, og hvis side sidst var **læst** for 5 **dage** —
+`content.js` springer en body over 2 MiB over og lader den gamle størrelse blive
+liggende, hvilket er en målt, daglig sti, ikke en håndredigeret fil:
+
+```
+report      | https://stor-side.dk/ | … | stable · 3221225 bytes | 2026-09-27 20:30 UTC |
+--status      ✅ up  https://stor-side.dk/ (200) @ 2026-09-27T20:30:53.552Z · 3221225 bytes, read 5 d ago
+status        ✅ https://stor-side.dk/ (200) · 3221225 bytes, read 5 d ago
+```
+
+Tre flader, én fil, én læsning, tre sætninger. Rækkens sidste kolonne siger at
+tjekket er 5 timer gammelt, og størrelseskolonnen læses som en måling af det tjek.
+Den er det ikke: siden er ikke *læst* på 5 dage. I det dokument kunden modtager er
+`stable` påstanden om, at siden er i orden nu.
+
+**Årsagen er at ét spørgsmål havde to ejere, og den betalte flade var den med
+ingen.** `byteCountNote` i `status.js:1541` har svaret på det siden 27/9 — to lister
+med alderen på — og rapportens `contentCell` printede det bløde tal. Ingen af
+cellerne læser dårligt; den betalte flade spurgte slet ikke.
+
+**Rettelsen er én ejer med to placeringer.** `contentBytesNote` eksporteres, og
+cellen sætter sit eget `stable · ` foran de samme ord, listerne skriver, så
+beslutningen har én implementering og placeringerne kun adskiller sig ved præfiks.
+Uret tages fra `generatedAt` — samme øjeblik, `buildReport` fik den — så ingen ny
+topniveau-etage, og felt-sæt-tet i `report.test.js:224` er uændret. En læsning fra
+i dag er uændret **tegn for tegn**. Fodnotens sætning om kolonnen er rettet, så den
+definerer alderen lige så vel som `—` og `Changed`.
+
+**Målt efter:** kun de to rækker, hvor læsningen ikke er fra i dag, skifter ord.
+`daglig.dk` (læst i dag) er `| stable · 100 bytes |` før og efter; en ulæselig
+læsetid er `stable · 100 bytes, read at an unknown time`, som de to lister siger
+tegn for tegn; en aldrig læst side siger stadig `—`, og en ændret side siger stadig
+`🔄 changed` med alderen under tabellen. `--json` førte `contentReadAt` i forvejen,
+så en konsument kan se det samme tilfælde uden et nyt flag.
+
+**8 nye tests i `test/contentage.test.js`** → **678/678** (670 + 8); audit 0/0;
+`matrix --check` exit 0; `node --check` ren på alle JS, `git diff --check` rent.
+**Tre målte mutationer døde alle:** cellen læser ikke alderen (7 fejl), ejeren
+runder en ulæselig tid til i dag (5), cellen spørger pass-tiden i stedet for
+læse-tiden (7). `ceo/report-content-age`.
+
+**Én fejl i min egen kode, fundet af gaten:** første udgave lagde et nyt
+topniveau-felt `now` på rapporten, fordi cellen skal have et ur. Gaten fangede det
+i `test/report.test.js` — feltsættet er låst med vilje, så et nyt felt er en
+beslutning og ikke en bivirkning. Retten er den mindre: `generatedAt` *er*
+`buildReport`s ur under et andet navn, så cellen spørger det og intet nyt felt
+tilføjes.
+
+**Næste:** ❓ 1–3, ❓ 14 og ❓ 16 afventer Mads. Køen er tømt; nye opgaver skal
+findes ved måling, som denne. Målingen nåede den betalte rapport gennem de to lister
+— det er den vej, `report` bør måles på igen.
+
 ## Status fra denne iteration (93, P1-77 — kundenrapporten sagde "aldrig tjekket" på en række der viste et tjek fra i går)
 
 **Målt først, nul kode ændret.** Rigtig `report` over en rigtig `state.json` uden

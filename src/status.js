@@ -1517,7 +1517,9 @@ function byteCount(value) {
 }
 
 /**
- * How a terminal list row names the size of a page, and how old that size is.
+ * How a surface names the size of a page, and how old that size is. One owner:
+ * the two terminal lists have asked it since 2026-09-27, and the client report
+ * has asked nobody — see {@link contentBytesNote}'s caller in `report.js`.
  *
  * The size is a measurement of one reading, and a reading ages. `content.js`
  * skips a body over the 2 MiB limit and leaves `lastContentLength` alone, so a
@@ -1533,12 +1535,15 @@ function byteCount(value) {
  * should stay short. Everything else says how old the number is, and a time that
  * cannot be placed says so rather than being rounded into "today".
  *
+ * The words are a list row's, not a table cell's: the report puts them after its
+ * own `stable · `, so one decision and two placements.
+ *
  * @param {unknown} bytes — the state's `lastContentLength`
  * @param {unknown} readAt — the state's `lastContentReadAt`
  * @param {Date} now
  * @returns {string} the fragment, or `''` when the size was never measured
  */
-function byteCountNote(bytes, readAt, now) {
+export function contentBytesNote(bytes, readAt, now) {
   const size = `${byteCount(bytes)} bytes`;
   const reading = passAge(readAt, now);
   if (reading.state === PASS_AGE.AGED && reading.ageDays === 0) return size;
@@ -2168,7 +2173,7 @@ export function readEntry(entry, { now = new Date(), url = '' } = {}) {
     // a table.
     content,
     contentNote: content.note,
-    contentSize: content.changed || content.bytes === null ? '' : byteCountNote(content.bytes, content.bytesReadAt, now),
+    contentSize: content.changed || content.bytes === null ? '' : contentBytesNote(content.bytes, content.bytesReadAt, now),
     // The certificate, in the one shape a row needs. Same rule as the page above:
     // the fact and its age travel together, so "replaced" never reads as
     // "this morning" on a list that is opened days after the pass. Fixed words

@@ -27,7 +27,7 @@
 import { PRODUCT } from './features.js';
 import { DEFAULT_WINDOW_DAYS, windowCoverage, windowSummary } from './history.js';
 import { markdownCell as cell } from './display.js';
-import { SSL_WARN_DAYS, STALE_AFTER_DAYS, clockAheadNote, expiredNote, isCheckStale, isCheckableUrl, passAge, readCertIssuerState, readCertRotationState, readContentChangeState, readPassTime, readRedirectTarget, readResponseMs, readSslState, readStatusCode, sslLapsedNote, staleAgeNote, unknownNote, unusableUrlNote, verdictFor, withoutCredentials } from './status.js';
+import { SSL_WARN_DAYS, STALE_AFTER_DAYS, clockAheadNote, contentBytesNote, expiredNote, isCheckStale, isCheckableUrl, passAge, readCertIssuerState, readCertRotationState, readContentChangeState, readPassTime, readRedirectTarget, readResponseMs, readSslState, readStatusCode, sslLapsedNote, staleAgeNote, unknownNote, unusableUrlNote, verdictFor, withoutCredentials } from './status.js';
 
 export const DEFAULT_REPORT_TITLE = 'Website uptime report';
 const MAX_TITLE_LENGTH = 120;
@@ -664,15 +664,33 @@ const HEADERS = ['Site', 'Status', 'Uptime (all)', 'Uptime (window)', 'Response'
  * `check --json`. The *change* is named under the table, not here — a cell that
  * carries a sentence is a cell nobody reads, which is the reason the report
  * names things out loud instead.
+ *
+ * The size carries its own age, asked of the one owner the two terminal lists
+ * have asked since 2026-09-27. The report was the last surface that printed a
+ * bare number, and it printed it in the document a client reads: measured
+ * 2026-09-28, a site whose pass was 5 h old and whose page had not been *read*
+ * for 5 days — `content.js` skips a body over 2 MiB and leaves the old size
+ * behind — read `stable · 3221225 bytes` here while both lists said
+ * `3221225 bytes, read 5 d ago` about the same row of the same file. Two cells
+ * in one row said the check was 5 hours old and that the page had been looked at
+ * five days ago, and neither of them said so. A reading from today keeps the
+ * words it has always had, character for character.
  */
-function contentCell(site) {
+function contentCell(site, now) {
   if (site.contentChanged) return '🔄 changed';
   if (site.contentBytes === null) return '—';
-  return `stable · ${site.contentBytes} bytes`;
+  return `stable · ${contentBytesNote(site.contentBytes, site.contentReadAt, now)}`;
 }
 
 export function renderReportMarkdown(report) {
   const windowDays = report.windowDays || DEFAULT_WINDOW_DAYS;
+  // The clock the cells are rendered against. `buildReport` was handed one and
+  // stamped it here as `generatedAt`, so this is that same instant under its other
+  // name — a report rendered twice from one report object cannot age a reading one
+  // way in the column and another way in the line under the table. `Date` here
+  // covers the ISO string `buildReport` writes and the `Date` a hand-built report
+  // object in the tests carries.
+  const now = new Date(report.generatedAt);
   // The partition `buildReport` already resolved, so the line and the JSON are
   // two renderings of one answer. `siteBuckets` is still the owner — it is only
   // asked again here for a report object built by hand rather than by
@@ -686,7 +704,7 @@ export function renderReportMarkdown(report) {
       cell(windowCell(site, windowDays)),
       cell(site.responseMs === null ? '—' : `${site.responseMs} ms`),
       cell(sslCell(site)),
-      cell(contentCell(site)),
+      cell(contentCell(site, now)),
       cell(lastCheckCell(site)),
     ];
     return `| ${cells.join(' | ')} |`;
@@ -864,7 +882,7 @@ export function renderReportMarkdown(report) {
     ...afterPassLines,
     ...uncheckableLines,
     '',
-    `Uptime is the share of completed monitoring passes that answered HTTP 200–399. "Uptime (all)" counts every pass since the site was added${since ? ` (earliest ${shortTime(since)})` : ''}; "Uptime (window)" counts the passes recorded in the last ${windowDays} days. A site with no completed pass yet shows — rather than 100%. Where a pass *is* on the row — a status, a response time, a last-check time — the — names the state file's missing check counter instead, because that pass ran and only the counter is not there; \`counterNotRecorded\` in \`--json\` is the same fact as a boolean. "Uptime (window)" is counted from a separate daily history file, so a row can show a recent check with an empty window column; that column then names the file that is missing the pass rather than claiming the site was not monitored. The two files can also disagree the other way, with the history file holding recorded checks on days that are newer than the last pass in the state file; such a site is named below the table with the number of those days, so the window column is never read as checks this machine ran after it stopped watching. A site that was already being monitored when the window opened, but has fewer recorded days than the window, is named below the table with both counts, so the share and the period are not read as covering days nobody watched. The counts in the summary line are a partition: every site is in exactly one of up, down, not checked, status unknown or stale. "Up" and "down" describe sites checked within the last ${STALE_AFTER_DAYS} days; a site whose monitoring stopped is counted as stale and keeps the status from its last pass in the table, named with the age of that pass. "Status unknown" means a pass ran but its result cannot be read from the state file. A listed URL that is not a full address can never be measured at all: it is named below the table and counted separately, so its empty row is never read as a site that was simply quiet. The SSL column is what the last pass read, so its day count is the deadline the certificate had at that moment. A reading less than a day old is shown as measured; one old enough that the certificate may have lapsed since is named as such and is not counted as a renewal to schedule — run \`deskuptime check <url>\` for a fresh reading. A certificate that was replaced since monitoring is named below the table with the age it had when this report was generated; the SSL column counts down from the certificate that answered last, so it cannot show that it is a different one from the client's. The same line carries that certificate's serial number, because the issuer above and the serial are what a security review asks for as a pair, and a renewal that changed nothing else is the one case where the number is still worth reading. A certificate that now answers from an authority other than the one the site answered with when monitoring started is named the same way, with both names: a renewal keeps its issuer, and a hijack keeps every number above looking healthy. \`sslIssuer\` in \`--json\` names the authority behind the certificate the SSL column counts down from. The Content column is what the last pass that actually read the page saw: a page over the content-check limit is never read, so it shows — rather than a size, and a size left by an earlier pass is never presented as this check's measurement. "Changed" is a change measured since the site was added, and it is named below the table with the age it had when this report was generated — a page that was altered and then left alone is still a page a customer should know about, and the uptime columns do not cover it.`,
+    `Uptime is the share of completed monitoring passes that answered HTTP 200–399. "Uptime (all)" counts every pass since the site was added${since ? ` (earliest ${shortTime(since)})` : ''}; "Uptime (window)" counts the passes recorded in the last ${windowDays} days. A site with no completed pass yet shows — rather than 100%. Where a pass *is* on the row — a status, a response time, a last-check time — the — names the state file's missing check counter instead, because that pass ran and only the counter is not there; \`counterNotRecorded\` in \`--json\` is the same fact as a boolean. "Uptime (window)" is counted from a separate daily history file, so a row can show a recent check with an empty window column; that column then names the file that is missing the pass rather than claiming the site was not monitored. The two files can also disagree the other way, with the history file holding recorded checks on days that are newer than the last pass in the state file; such a site is named below the table with the number of those days, so the window column is never read as checks this machine ran after it stopped watching. A site that was already being monitored when the window opened, but has fewer recorded days than the window, is named below the table with both counts, so the share and the period are not read as covering days nobody watched. The counts in the summary line are a partition: every site is in exactly one of up, down, not checked, status unknown or stale. "Up" and "down" describe sites checked within the last ${STALE_AFTER_DAYS} days; a site whose monitoring stopped is counted as stale and keeps the status from its last pass in the table, named with the age of that pass. "Status unknown" means a pass ran but its result cannot be read from the state file. A listed URL that is not a full address can never be measured at all: it is named below the table and counted separately, so its empty row is never read as a site that was simply quiet. The SSL column is what the last pass read, so its day count is the deadline the certificate had at that moment. A reading less than a day old is shown as measured; one old enough that the certificate may have lapsed since is named as such and is not counted as a renewal to schedule — run \`deskuptime check <url>\` for a fresh reading. A certificate that was replaced since monitoring is named below the table with the age it had when this report was generated; the SSL column counts down from the certificate that answered last, so it cannot show that it is a different one from the client's. The same line carries that certificate's serial number, because the issuer above and the serial are what a security review asks for as a pair, and a renewal that changed nothing else is the one case where the number is still worth reading. A certificate that now answers from an authority other than the one the site answered with when monitoring started is named the same way, with both names: a renewal keeps its issuer, and a hijack keeps every number above looking healthy. \`sslIssuer\` in \`--json\` names the authority behind the certificate the SSL column counts down from. The Content column is what the last pass that actually read the page saw: a page over the content-check limit is never read, so it shows — rather than a size, and a size left by an earlier pass is never presented as this check's measurement. A size that is not from today says how old it is, because the check in the last column can be hours old while the page was last read days ago, and a row that quoted a number without saying when would read as a measurement of now. \`contentReadAt\` in \`--json\` is that time. "Changed" is a change measured since the site was added, and it is named below the table with the age it had when this report was generated — a page that was altered and then left alone is still a page a customer should know about, and the uptime columns do not cover it.`,
     '',
     `Generated on one machine, without an account: no page content, response headers or license data is included, and nothing was uploaded.`,
   ].join('\n');
