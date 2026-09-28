@@ -1,8 +1,89 @@
-> **Seneste:** iteration 112 (P1-97, færdig) — historien står i køens afsnit
-> `P1-97 — FÆRDIG 2026-09-28` lige under `## Prioriteret kø`. Næste opgave er en
-> ny målt opgave: køen er tømt for målte kandidater igen.
+> **Seneste:** iteration 113 (P1-98, færdig) — historien står i køens afsnit
+> `P1-98 — FÆRDIG 2026-09-28` lige under `## Prioriteret kø`. Køen er igen tom
+> for målte kandidater; de målte fund er under `## ❓ Til Mads`.
 
-## Status fra denne iteration (112, P1-97 — bureauets egen kommando skrev en parkeringssides HSTS som kundens fund)
+## Status fra denne iteration (113, P1-98 — den gratis tier afviste den 4. URL ved at smide de 3 andre væk)
+
+**Målt først, nul kode ændret.** Køen var tømt, så målingen gik på den vej en ny
+gratisbruger går: at sætte værktøjet op. Rigtig CLI, rigtige lokale servere, tom
+`~/.deskuptime`:
+
+```
+$ deskuptime watch a b c --once      →  exit 0, 3 sites overvåget
+$ deskuptime watch a b c d --once    →  exit 1
+  ❌ Error: Free tier monitors 3 URLs. …/d/ not added. Pro unlocks …
+  $ deskuptime status                 →  Monitored URLs (0)
+$ deskuptime watch a b c d e --once  →  exit 1, to afvisninger, og stadig 0
+```
+
+**Sætningen er sand og arbejdet er ikke.** Den nævner kun den URL der ikke passede
+— som en bruger læser som "a, b og c overvåges". Det gør de ikke. `state.json`
+blev aldrig skrevet, så værktøjet svarede på sit eget første spørgsmål — *virker
+min overvågning?* — med nul sites på en kommando der navngav tre.
+
+**Årsagen er at beslutningen blev taget to gange, og de to kopier var uenige.**
+`addMonitoredUrls()` — den den kørende loop bruger — tager grænsen én URL ad gang
+og beholder dem der passer. `runOnce()` beregnede den samme liste igen, før
+passet, og `return`ede **hele passet** i det øjeblik den ikke var tom, så
+`--once` og `watch` gav modsatte svar på den samme kommando. Loopen var den
+ærlige, og loopen er den flade en betalende kunde sidder på.
+
+**Rettelsen er ikke en blødere grænse.** Forudkørslen beholder sit job — den ejer
+den sætning brugeren læser, og den afviser stadig *før* en eneste request når
+intet passer (3 allerede overvåget, låst af `matrix.test.js`) — men den tager nu
+kun de URL'er der ikke passer *væk fra* passet. `cli.js` printer passet før
+afvisningen, fordi afvisningen kun navngner den ene, der ikke blev målt.
+
+**Fælden lå i min egen guard, og en eksisterende lås låste den.** Første version
+af betingelsen var `rejected.length === wanted.length`, som også er sand når
+`wanted` er tom — altså når en cron-kørsel kører den *samme* liste igen. Så fik
+en anden pass over et nedbrudt site intet at skrive. Målt, ikke antaget: det viste
+sig som **6 røde tests i gaten efter en grøn måling**. Den anden fælde lå i
+`test/status.test.js`, der låste `requests === 0` for en kommando med 4 URL'er —
+altså låste den selve skaden. Den er nu spredt smallere og ærligere: den
+afviste URL må aldrig efterspørges, de tre der passer skal være gemt, og passet
+skal være printet.
+
+**Exit-koderne, målt:** 3 URL'er → 0 uændret. 4 URL'er → 1, de 3 målt og
+printede, den 4. afvist. `a b c` med `d` ned → **2**, fordi et nedbrud er det et
+cron ser efter, og det skal ikke skjules af en afvisning.
+
+**Acceptkriterier — alle syv opfyldt:**
+
+1. ✅ `watch a b c d --once` på tom state gemmer **3** sites, printer alle tre i
+   passet, og afviser kun `d` — målt på rigtig CLI mod rigtige servere.
+2. ✅ 5 URL'er: 3 gemt, **to** afvisningssætninger, begge URL'er navngivet.
+3. ✅ 3 URL'er alene: exit 0, ingen afvisning, uændret.
+4. ✅ Kun *nye* URL'er tæller mod grænsen, så en cron-kørsel af den samme liste
+   ikke låser sig selv ude (den fejl, der lå i guarden).
+5. ✅ Når intet passer (3 allerede overvåget): stadig exit 1, samme sætning,
+   samme købslink, og **ingen** baseline-linje — låst to steder
+   (`matrix.test.js` og den nye fil).
+6. ✅ `test/status.test.js:1728` låste skaden; den er nu spredt til den påstand
+   der holder: den afviste URL efterspørges aldrig, de 3 gemmes, passet printes.
+7. ✅ 5 nye tests i `test/p198partialadd.test.js`, alle mod rigtig CLI og rigtige
+   servere. **Mutation målt:** gammel all-eller-intet-adfærd → 2 døde; pass-printet
+   fjernet fra `cli.js` → 2 døde.
+
+**Gaten:** **778/778** på Node 26.7.0 via `tools/run-tests.mjs` (773 + 5);
+`matrix --check` exit 0; audit 0/0; `node --check` ren på alle fire filer;
+`git diff --check` rent.
+
+**Deploy-note ikke nødvendig:** CLI-repo uden live-deploytarget. Ingen side blev
+ændret, så der er ingen trafik-baseline at skrive; målingen er i kommandoens
+output, ikke på en side.
+
+**To filer i `src/` + to testfiler.** `runOnce()` og den ene `--once`-gren i
+`cli.js`. Ikke rørt: den kørende loop (den var allerede rigtig), `check`,
+listerne, rapporten og matrixen.
+
+**Uafsluttet og bevidst dropped:** et sjette testtilfælde (exit 2 ved et nedbrud
+blandt de tre) hang i 20 s uden at fejle, da det kørte som fil. Adfærden er
+*målt* ovenfor med den rigtige CLI (exit 2 på 112 ms) og låst indirekte af
+`status.test.js:1785`, som dækker exit 2 for DOWN. Jeg droppede testen frem for
+at merge med en rød gaten.
+
+## Status fra tidligere iteration (112, P1-97 — bureauets egen kommando skrev en parkeringssides HSTS som kundens fund)
 
 **Målt først, nul kode ændret.** To rigtige lokale servere, en `301` imellem dem, og
 den fremmede med de stærke headere. Målingen gav **ens ark**: `headers` om
@@ -4055,6 +4136,35 @@ Den aktuelle gate-definition er registreret her:
 - ~~`tools/make_tarball.sh:14` udelader `src/checkers/headers.js`~~ **Rettet i P2-1 del A (2026-09-25), og linjen var forældet her:** scriptet kopierer nu hele `src/`-træet i stedet for en håndlavet filliste, og `test/tarball.test.js` låser det. `tools/install.sh:6` er derimod stadig fastsat til 0.1.4 mod `package.json`s 0.2.8 — en curl-bruger får altså en version tre minorer under npm-versionen, som mangler hele P1-13…P1-24's rettelser; nyeste publicerede `v*-cli` er v0.2.5-cli, så en ny release (❓ 10) er forudsætningen for at lukke det.
 
 ## Prioriteret kø
+
+> **Køen er tom for målte kandidater** (iteration 113). De målte fund fra den
+> iteration ligger i afsnittet ovenfor og i `❓ Til Mads`. Næste iteration skal
+> **måle først** og finde sin egen opgave — den metode der har fundet de sidste
+> 90 opgaver. Se `❓ Til Mads` for de konkrete, målbare kandidater.
+
+### P1-98 — FÆRDIG 2026-09-28 (`ceo/partial-add`) — den gratis tier afviste den 4. URL ved at smide de 3 andre væk
+
+**Målt først, nul kode ændret.** Se afsnittet øverst. Kort fortalt: rigtig CLI,
+rigtige lokale servere, tom state. `deskuptime watch a b c d --once` skrev exit 1
+og én afvisning for `d` — og overvågede **intet**: `status` svarede
+`Monitored URLs (0)`, og `state.json` var aldrig skrevet.
+
+**Årsagen:** beslutningen blev taget to steder. `addMonitoredUrls()` tager
+grænsen én URL ad gang og beholder dem der passer (det er den kørende loops
+vej, og den var rigtig); `runOnce()` beregnede den samme liste igen og
+returnerede hele passet, så snart den ikke var tom.
+
+**Rettelsen:** forudkørslen tager kun de URL'er der ikke passer *væk fra*
+passet, og `cli.js` printer passet før afvisningen. Når intet passer, afvises der
+stadig før en eneste request.
+
+**Acceptkriterier — alle syv opfyldt:** se afsnittet øverst.
+
+**Gaten:** **778/778** på Node 26.7.0 via `tools/run-tests.mjs` (773 + 5);
+`matrix --check` exit 0; audit 0/0; `node --check` ren; `git diff --check` rent.
+Mutation målt på begge dele af rettelsen (2 døde hver).
+
+**To filer i `src/` + to testfiler.** Den kørende loop var allerede rigtig.
 
 ### P1-97 — FÆRDIG 2026-09-28 (`ceo/header-source`, `9dbe294`) — `headers` skrev **fremmedens** sikkerhedsheadere som kundens fund
 
