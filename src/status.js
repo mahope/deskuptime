@@ -2764,6 +2764,32 @@ export function httpDownNote({ statusCode } = {}) {
 }
 
 /**
+ * The same closed door in the few words a table cell can carry — `note` is the
+ * sentence, `label` is what a row has room for, the pair `readRedirectTarget`
+ * already returns for the same reason.
+ *
+ * Measured 2026-09-28 on the GitHub Action's own step summary, the seventh
+ * surface, over a real local server answering 200, 401, 403, 429, 404 and 500.
+ * P1-84 gave the terminal, both status lists, the watch alert, the webhook
+ * payload and the client report the reason; this table had a `Status` column
+ * and a neighbouring `HTTP` column, and used the second one as the whole story:
+ *
+ *   | http://127.0.0.1:56113/401 | ❌ DOWN | 401 | 11ms | — |
+ *
+ * So a staging site behind a proxy turned a customer's CI run red with a number
+ * and no sentence, in the one table that is read in a browser tab after a build
+ * has already failed. `404` and `5xx` are the site and stay the site: the label
+ * is empty for them, exactly as `httpDownKind` is `null`.
+ */
+export function httpDownLabel({ statusCode } = {}) {
+  return {
+    'auth-required': 'closed door: a username and password is required',
+    'not-allowed': 'closed door: this request was refused',
+    'rate-limited': 'throttled: the site is rate-limiting this monitor',
+  }[httpDownKind(statusCode)] ?? null;
+}
+
+/**
  * `undici`'s two sentences for a request it refuses to *send*, because the
  * address has credentials in it — and the only sign the caller gets that a
  * redirect pointed at one.
