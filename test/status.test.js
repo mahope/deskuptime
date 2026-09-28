@@ -1725,9 +1725,15 @@ test('watch --once without a URL or saved state exits 1', async (t) => {
   );
 });
 
-test('watch --once rejects URLs beyond the free limit before any request', async (t) => {
-  let requests = 0;
-  const baseUrl = await statusServer(t, undefined, () => { requests++; });
+test('watch --once rejects URLs beyond the free limit, and never requests the one it refused', async (t) => {
+  // Measured 2026-09-28: this test used to assert `requests === 0` for a command
+  // naming four URLs, which is the harm itself — the free tier refused the 4th
+  // by returning the whole pass, so the three that fitted were never watched and
+  // the user was told only about the one that did not fit. The lock that was
+  // worth keeping is narrower and is kept below: the URL the tool refuses is
+  // never contacted, so a refusal costs no traffic and leaks nothing.
+  const asked = [];
+  const baseUrl = await statusServer(t, undefined, (req) => { asked.push(new URL(req.url, 'http://localhost').pathname); });
   const home = mkdtempSync(join(tmpdir(), 'deskuptime-once-limit-'));
   t.after(() => rmSync(home, { recursive: true, force: true }));
   const urls = [200, 201, 202, 203].map(status => `${baseUrl}/status/${status}`);
@@ -1740,10 +1746,17 @@ test('watch --once rejects URLs beyond the free limit before any request', async
       assert.equal(error.code, 1);
       assert.match(error.stderr, /Free tier monitors 3 URLs/);
       assert.match(error.stderr, new RegExp(urls[3].replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+      // The three that fitted are measured and reported — the refusal names only
+      // the fourth, so silence about them is what made the old behaviour a lie.
+      for (const url of urls.slice(0, 3)) {
+        assert.ok(error.stdout.includes(url), `passet for ${url} er ikke printet: ${error.stdout}`);
+      }
       return true;
     },
   );
-  assert.equal(requests, 0);
+  assert.ok(!asked.includes('/status/203'), `den afviste URL blev alligevel efterspurgt: ${asked.join(', ')}`);
+  const state = JSON.parse(readFileSync(getStateFile({ env: { HOME: home } }), 'utf8'));
+  assert.equal(Object.keys(state.urls).length, 3, `de 3 der passede skal være gemt: ${Object.keys(state.urls).join(', ')}`);
 });
 
 test('watch --once rejects empty option values before any request', async (t) => {

@@ -1265,15 +1265,36 @@ export async function runOnce(urls, opts = {}) {
   try {
     const state = loadState(opts);
     const pro = isPro(state);
+    // Which of the requested URLs this tier has no room for. Measured 2026-09-28
+    // with the real CLI and a fresh state: `watch a b c d --once` refused only
+    // `d` in the output and then monitored *nothing* — not a, not b, not c, no
+    // state file at all — because this pre-flight returned the whole pass the
+    // moment one URL did not fit. So a free user pasting their four sites into
+    // one command, the normal way to set the tool up, got a tool that watches
+    // none of them and a message that implies the first three are being watched.
+    // `addMonitoredUrls()` has always made this decision one URL at a time, and
+    // the running loop is the surface that proved it: it added the first three
+    // and refused the fourth. The two surfaces disagreed, and the paid one was
+    // the honest one. So the pre-flight now only takes the URLs that do not fit
+    // *away* from the run; when none of them fit it still refuses before a single
+    // request, which is the 3-already-monitored case `matrix.test.js` locks.
+    let rejected = [];
     if (!pro) {
       const available = Math.max(FREE.urlLimit - monitoredCount(state), 0);
-      const rejected = [...new Set(urls)].filter(url => !state.urls[url]).slice(available);
-      if (rejected.length > 0) return { events: [], results: [], healthy: false, added: 0, rejected };
+      const wanted = [...new Set(urls)].filter(url => !state.urls[url]);
+      rejected = wanted.slice(available);
+      // `wanted` empty means every requested site is already monitored — a cron
+      // `--once` re-running the same list. Nothing is over the limit then, and
+      // the pass must run: measured 2026-09-28, an `available === wanted` test
+      // without this guard made a second pass of a DOWN site print nothing.
+      if (wanted.length > 0 && rejected.length === wanted.length) {
+        return { events: [], results: [], healthy: false, added: 0, rejected };
+      }
     }
-    const added = addMonitoredUrls(state, urls, pro);
+    const added = addMonitoredUrls(state, urls.filter(url => !rejected.includes(url)), pro);
     if (Object.keys(state.urls).length === 0) return { events: [], results: [], healthy: false, added, empty: true };
     const pass = await runPass(state, { ...opts, returnResults: true });
-    return { ...pass, added };
+    return { ...pass, added, rejected };
   } finally {
     lock.release();
   }

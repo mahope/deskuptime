@@ -741,9 +741,16 @@ if (command === 'watch') {
       // a cron job can act on.
       console.error(`❌ Error: ${stateWriteErrorMessage(pass.stateError, getStateFile())}`);
       process.exitCode = 1;
-    } else if (pass.rejected) {
+    } else if (pass.rejected?.length) {
+      // The sites that fitted were measured, so the pass is printed first: the
+      // refusal names only the URLs that did not fit, and a user who saw just
+      // that had no way to know whether the other three were being watched (they
+      // were not — see runOnce). Exit 2 still means "a site is DOWN", which is
+      // the signal a cron job watches for, so it wins over the refusal; exit 1
+      // keeps meaning "the command could not do everything it was asked to".
+      if (pass.results?.length) printPass(pass);
       for (const url of pass.rejected) console.error(`❌ Error: ${freeLimitMessage(url)}`);
-      process.exitCode = 1;
+      process.exitCode = pass.results?.length ? (pass.healthy ? 1 : 2) : 1;
     } else if (pass.empty) {
       console.error('❌ Error: at least one URL required');
       console.error('Usage: deskuptime watch <url> --once');
