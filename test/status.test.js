@@ -410,20 +410,26 @@ test('cli: one invalid URL rejects the whole check before any request', async (t
 });
 
 test('cli: unknown options fail instead of being ignored', async () => {
+  // The URL is a loopback placeholder on purpose. This test is that the CLI
+  // refuses the argument *before* it connects, and that is a stronger claim
+  // against a closed port than against a public host: were the option accepted,
+  // a stray request would show up as a connection error instead of nothing.
+  // `test/offlinegate.test.js` is the lock that keeps the gate off the internet.
+  const URL_UNDER_TEST = 'http://127.0.0.1:1/';
   await assert.rejects(
-    run(process.execPath, [CLI, 'check', 'https://example.com', '--jsonn']),
+    run(process.execPath, [CLI, 'check', URL_UNDER_TEST, '--jsonn']),
     (error) => error.code === 1 && /Unknown option: --jsonn/.test(error.stderr)
   );
   await assert.rejects(
-    run(process.execPath, [CLI, 'check', 'https://example.com', '--timeout=50']),
+    run(process.execPath, [CLI, 'check', URL_UNDER_TEST, '--timeout=50']),
     (error) => error.code === 1 && /Unknown option: --timeout=50/.test(error.stderr)
   );
   await assert.rejects(
-    run(process.execPath, [CLI, 'headers', 'https://example.com', 'stray']),
+    run(process.execPath, [CLI, 'headers', URL_UNDER_TEST, 'stray']),
     (error) => error.code === 1 && /Unexpected argument: stray/.test(error.stderr)
   );
   await assert.rejects(
-    run(process.execPath, [CLI, 'headers', 'https://example.com', '-x']),
+    run(process.execPath, [CLI, 'headers', URL_UNDER_TEST, '-x']),
     (error) => error.code === 1 && /Unknown option: -x/.test(error.stderr)
   );
 });

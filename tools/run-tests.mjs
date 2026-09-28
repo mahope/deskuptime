@@ -32,7 +32,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { readFileSync, readdirSync, rmSync, statSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { delimiter, dirname, join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { isTempHome } from '../test/helpers/env.mjs';
 import {
@@ -46,6 +46,23 @@ import {
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const TEST_DIR = join(ROOT, 'test');
+
+/**
+ * P1-92 — the public internet, unreachable from every process the suite starts.
+ *
+ * It goes in `NODE_OPTIONS` rather than in the child's argv on purpose, and the
+ * reason is measured rather than preferred. The suite's common shape is a test
+ * that runs the real CLI in a *child* process, and a flag on this runner's own
+ * argv is not inherited by anything. `test/uncheckable.test.js` is one of them,
+ * and it was green on the internet and red without it — so a preload on argv
+ * would have locked the tests that dial from Node and left the tests that dial
+ * from the CLI free to decide the gate's colour. `NODE_OPTIONS` reaches both,
+ * the same way `PATH` does below.
+ *
+ * Two measured instances of the failure this prevents are in the header of
+ * `test/helpers/offline.mjs`. `test/offlinegate.test.js` is the lock.
+ */
+const OFFLINE_PRELOAD = `--import ${pathToFileURL(join(TEST_DIR, 'helpers', 'offline.mjs')).href}`;
 
 /**
  * Run the suite under a Node that satisfies `engines`, or explain that it
@@ -143,7 +160,12 @@ async function main() {
   const child = spawn(process.execPath, ['--test', ...suite], {
     cwd: ROOT,
     stdio: 'inherit',
-    env: { ...process.env, HOME: home, USERPROFILE: home },
+    env: {
+      ...process.env,
+      HOME: home,
+      USERPROFILE: home,
+      NODE_OPTIONS: [process.env.NODE_OPTIONS, OFFLINE_PRELOAD].filter(Boolean).join(' '),
+    },
   });
 
   const code = await new Promise((done) => child.on('exit', done));
