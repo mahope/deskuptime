@@ -1,3 +1,67 @@
+## Status fra denne iteration (93, P1-77 — kundenrapporten sagde "aldrig tjekket" på en række der viste et tjek fra i går)
+
+**Målt først, nul kode ændret.** Rigtig `report` over en rigtig `state.json` uden
+`tællerparret` — den form en maskine får første gang den kører et pass fra en nyere
+version — plus ét site der aldrig er tjekket. Pro fra `passthrough`-stubben, intet
+stubbet ud over licensen:
+
+```
+| https://never.dk/       | not checked yet | — (no completed pass) | … | —      | — | — | —                   |
+| http://127.0.0.1:57311/ | UP (200)        | — (no completed pass) | … | 120 ms | — | stable · 100 bytes | 2026-09-27 02:00 UTC |
+
+**2 site(s) · 1 up · 0 down · 1 not checked · 0 checks · 0 failed**
+```
+
+Én række siger i samme linje, at et pass gennemførte i går — status, responstid
+og sidste tjek-tidspunkt siger alle tre det — og at intet pass nogensinde
+gennemførte. **Målt bevis:** næste rigtige pass på netop den fil skrev
+`100% (1 check)`, så passet i rækken skete. Det var *tælleren* state.json ikke
+havde, og cellen sagde ikke hvilken af de to der manglede. Fodnoten gjorde
+påstanden for hele kolonnen, ikke kun for én celle: "A site with no completed
+pass yet shows —".
+
+**Årsagen er at `uptimePercent` ikke kan se de to tilstande fra hinanden.**
+Den returnerer `null` for `checks === 0`, og en tæller kan være nul på to
+måder: intet pass kørte, eller der står ingen tæller i filen. Den gamle celle
+lagde begge i `— (no completed pass)`, som er en påstand om *historikken*.
+
+**Rettelsen er én ejer med to fakta, ikke ét gæt.** `counterNotRecorded()` spørger
+`passRecorded` — det samme felt `unknownNote` og resumelinjen allerede bruger, så
+de tre flader ikke kan være uenige — og tællerparret i filen. Kun når begge holder
+skifter cellen til `— (no counter in the state file)`. En side uden pass holder
+den gamle sætning **tegn for tegn** — dér er den sand. Nyt additivt felt
+`counterNotRecorded` i `--json`, altid til stede, så en konsument kan forgrene på
+feltet og ikke på dets fravær. Fodnotens sætning er rettet, så den navngiver begge
+tilstande.
+
+**Målt efter:** kun den række hvor tælleren mangler skifter ord. `never.dk` er
+tegn for tegn uændret, en site med tællere (`91.67% (12 checks, 1 failed)`) er
+uændret, og status, responstid, content-læsning, sidste tjek-tidspunkt, resumetalt
+og exit-kode flytter sig ingen steder. Tallene er ikke skjult: cellen siger hvilken
+fil, der mangler noget, i stedet for at gætte den anden vej.
+
+**9 nye tests i `test/nocounter.test.js`** → **670/670** (661 + 9); audit 0/0;
+`matrix --check` exit 0; `node --check` ren på alle JS, `git diff --check` rent.
+**Tre målte mutationer døde alle:** cellen læser ikke det nye felt (4 fejl), ejeren
+ser bort fra `passRecorded` (4), ejeren kalder et tællerpar der *er* skrevet som 0
+for manglende (1). Ingen ny claim, ingen matrix-række, intet nyt krav, ingen
+deploy-note (CLI-repoet deployer ikke). `ceo/report-no-counter`.
+
+**Én fejl i min egen test, fundet af gaten:** første version af feltet var
+`uptimePercent === null && passRecorded`, hvilket også fanger et par der *er*
+skrevet som `checks: 0, checksUp: 0` — og så ville cellen sige at filen mangler en
+tæller, når den har en. Testen låste den forkerte forventning, og begge tilfælde er
+nu hver sin påstand: `counterNotRecorded({ checks: 0, checksUp: 0 })` er `false`.
+
+**Bevidst ikke rettet:** et tællerpar der er skrevet som 0 mens et pass står på
+rækken. Intet DeskUptime skriver kan frembringe det — `recordPass` tæller begge tal
+op og skriver dem med passet — så det er en håndredigeret fil, som `counters()`
+allerede klemmer og reparerer næste pass. At navngive en manglende fil dér ville
+bytte én forkert påstand for en anden, så den række beholder sin sætning uændret.
+
+**Næste:** ❓ 1–3, ❓ 14 og ❓ 16 afventer Mads. Køen er tømt; nye opgaver skal
+findes ved måling, som denne.
+
 ## Status fra denne iteration (92, P1-76 — kundenrapporten talte 240 checks for et site den holdt op med at tjekke for 8 dage siden)
 
 **Målt først, nul kode ændret.** Rigtig CLI, rigtig `state.json`, rigtig
@@ -6313,3 +6377,36 @@ deploy-note** — CLI-repoet deployer ikke.
 **Åbent og bevidst ikke rettet:** de to terminal-lister (`status`, `watch --status`)
 læser kun `state.json` og kan derfor ikke se uoverensstemmelsen. Om de *bør* sige
 noget er et valg, ikke en måling, så det ligger ikke i denne opgave.
+
+### P1-77 — FÆRDIG 2026-09-28 (`ceo/report-no-counter`, `1c9eded`) — Kundenrapporten sagde "no completed pass" på en række, der viste et pass fra i går
+
+**Målt 2026-09-28, nul kode ændret.** Rigtig `report` over en rigtig `state.json`
+uden `tællerparret` (den form en maskine får første gang den kører et pass fra en
+nyere version) plus ét site der aldrig er tjekket:
+
+```
+| http://127.0.0.1:57311/ | UP (200) | — (no completed pass) | … | 120 ms | stable · 100 bytes | 2026-09-27 02:00 UTC |
+**2 site(s) · 1 up · 0 down · 1 not checked · 0 checks · 0 failed**
+```
+
+**Bevis på at passet skete:** næste rigtige pass på samme fil målte
+`100% (1 check)`. Fodnoten gjorde påstanden for hele kolonnen.
+
+**Rettelsen:** `counterNotRecorded()` i `src/report.js` spørger både `passRecorded`
+(fladen `unknownNote` og resumelinjen allerede bruger) og tællerparret i filen.
+Kun når begge holder skifter cellen til `— (no counter in the state file)`;
+`--json` får feltet `counterNotRecorded`, altid til stede. Fodnoten er rettet, så
+den definerer begge tilstande.
+
+**Acceptkriterium, målt:** kun rækker uden tæller skifter ord. `never.dk` er tegn
+for tegn uændret, en site med tællere er uændret, og status, responstid, content,
+sidste tjek-tidspunkt, resumetalt og exit-kode flytter sig ingen steder. 9 nye
+tests i `test/nocounter.test.js` → **670/670** (661 + 9); audit 0/0;
+`matrix --check` exit 0; `node --check`, `git diff --check` grønne. Tre målte
+mutationer døde med 4, 4 og 1 fejl. Ingen ny claim, ingen matrix-række, intet
+krav ændret. **Ingen deploy-note** — CLI-repoet deployer ikke.
+
+**Målt og bevidst ikke rettet:** et tællerpar skrevet som `0` mens et pass står på
+rækken. `recordPass` tæller begge tal op og skriver dem med passet, så intet
+DeskUptime skriver kan frembringe det; `counters()` klemmer og reparerer en
+håndredigeret fil næste pass. En test låser den beslutning.
