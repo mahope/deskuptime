@@ -622,15 +622,35 @@ function licenseTermNote(stored, now) {
  * a second license. Every gate — the `report` command, `--webhook` — goes
  * through this function, so a gate can never contradict `deskuptime status`.
  *
+ * The subject and its verb are two fields, not one string, because the two gates
+ * do not agree in number. Measured 2026-09-28 through the real CLI, a real
+ * `~/.deskuptime` and a real webhook receiver, on the free tier and on a released
+ * seat:
+ *
+ *   ⚠️  No webhook was sent. webhook alerts needs an active Pro license. Pro unlocks it here: …
+ *   ❌ Error: the client report needs an active Pro license. Pro unlocks it here: …
+ *
+ * The same five sentences, byte for byte, on both gates — one of which names a
+ * singular feature and one a plural one. The owner held the noun and the verb
+ * apart, so the verb could only ever be the singular `needs`, and the plural
+ * feature was the one that paid for it: `webhook alerts needs`. It was wrong in
+ * all four gated states, and it was wrong in the sentence that tells a customer
+ * who already paid whether to buy a second license. Both callers' own fallback
+ * strings — the ones this function replaces whenever it returns a message — had
+ * the verb right (`Webhook alerts need an active Pro license.`), so the text a
+ * free user saw depended on which branch produced it.
+ *
  * @param {object} license — state.license, as stored (may be absent)
- * @param {string} feature — the gated feature, as the customer knows it
+ * @param {object} feature — `{ subject, verb }`, the gated feature as the customer
+ *   knows it, with the verb that agrees with it: `{ subject: 'webhook alerts',
+ *   verb: 'need' }`, `{ subject: 'the client report', verb: 'needs' }`
  * @returns {string|null} the message to print, or null when the license is Pro
  */
 export function proGateMessage(license, feature, { now = Date.now() } = {}) {
   const { status, detail } = describeLicense(license, { now });
   if (PRO_STATUSES.includes(status)) return null;
 
-  const gate = `${feature} needs an active Pro license`;
+  const gate = `${feature.subject} ${feature.verb} an active Pro license`;
   if (status === LICENSE_STATUS.FREE) {
     return `${gate}. Pro unlocks it here: ${BUY_URL} — then "deskuptime activate <key>".`;
   }

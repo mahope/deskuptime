@@ -1,6 +1,100 @@
-> **Seneste:** iteration 115 (P1-100, færdig) — historien står i køens afsnit
-> `P1-100 — FÆRDIG 2026-09-28` lige under `## Prioriteret kø`. Køen er igen tom
+> **Seneste:** iteration 116 (P1-101, færdig) — historien står i køens afsnit
+> `P1-101 — FÆRDIG 2026-09-28` lige under `## Prioriteret kø`. Køen er igen tom
 > for målte kandidater; de målte fund er under `## ❓ Til Mads`.
+
+## Status fra denne iteration (116, P1-101 — den Pro-grænse der navngiver et flertal sagde "webhook alerts needs")
+
+**Målt først, nul kode ændret.** Køen var tømt, så målingen gik på de to Pro-flader
+— de eneste to steder i CLI'en hvor en kunde kan få at vide, at noget koster
+penger, og de to der skal svare det samme. Rigtig CLI, rigtig `~/.deskuptime` i en
+temp-HOME, rigtig lokal webhook-modtager, licensserveren stubbet (aldrig et kald
+til mahope.tools). På gratisniveauet og på en afgivet plads:
+
+```
+$ deskuptime watch <url> --webhook <url>          # gratisniveau
+⚠️  No webhook was sent. webhook alerts needs an active Pro license. Pro unlocks it here: …
+$ deskuptime report                               # gratisniveau
+❌ Error: the client report needs an active Pro license. Pro unlocks it here: …
+```
+
+**To grænser, fire tilstande hver, én ejer — og ejeren holdt navneordet og verbet
+fra hinanden.** `proGateMessage(license, feature)` tog feature'en som en streng og
+skrev `` `${feature} needs an active Pro license` ``. Verbet *kunne* derfor være
+entalsformen `needs`, så den flertalige grænse var den, der betalte:
+
+```
+❌  webhook alerts needs an active Pro license      ← den, der var forkert
+✅  the client report needs an active Pro license   ← den, der var rigtig
+```
+
+Det var forkert i **alle fire** tilstande der skriver en sætning — `free`,
+`unverified`, `invalid` og `released` — og det var forkert i netop de to af dem,
+der fortæller en kunde som **allerede har betalt**, om de skal købe en licens
+til. Den kunde, der har afgivet sin plads, læste i dag `webhook alerts needs an
+active Pro license — seat released on this machine on 2026-09-28, 1 of 3 machines
+in use.` To fejl i én sætning: en der forvandler en kanal til to, og en der gør
+en besked om en betalt kundes egen plads uforståelig.
+
+**Bemærk, hvorfor ingen lås så det.** De to tests der dækker `proGateMessage`
+(`test/license.test.js:372` og `:404`) gav **samme streng ind** som de læste ud og
+matchede på den. De testede altså, at et navneord kommer tilbage som det blev
+afleveret — de testede aldrig verbet, fordi de ikke havde noget at teste det
+imod. En lås der kun kan se det, den bliver handet, kan ikke se en fejl der er
+indbygget i den hånd.
+
+**Rettelsen er, at navneord og verb er to felter.** Kunden skal kunne læse den;
+`feature` er nu `{ subject, verb }`, og hver kaldsted definerer sit eget par som
+en konstant ved siden af den kode der bruger det: `WEBHOOK_GATE` i `src/watch.js`
+(`webhook alerts` / `need`) og `REPORT_GATE` i `src/cli.js` (`the client report` /
+`needs`). Bevægelsen er en del af rettelsen — de to steder hvor kunden *kunne* have
+læst en renere sætning, havde den rigtige sætning liggende som **fallback** lige
+ved siden af den forkerte, så den tekst en gratisbruger så, afhang af hvilken
+gren der producerede den.
+
+**Acceptkriterier — alle syv opfyldt:**
+
+1. ✅ Den flertalige grænse siger `webhook alerts need an active Pro license` i
+   alle fire gatede tilstande, målt gennem rigtig CLI (gratis + afgivet plads).
+2. ✅ Den entalige grænse siger `the client report needs` — målt tegn for tegn
+   uændret før og efter på samme fixture, inkl. exit-kode 1.
+3. ✅ Ingen grænse siger `needs` om et flertal eller `need` om et ental. Målt med
+   ordgrænse, ikke `includes`: `needs` **indeholder** `need`, så et naivt
+   `includes` ville have dømt den rigtige entalsgrænse forkert. Den fejl lå i min
+   egen test, fundet af gaten.
+4. ✅ Begge kaldssteder i `src/` passerer en konstant, ikke en indlejret streng, og
+   konstantens `verb` matcher sit `subject`s tal (målt ved at læse dem *ud af
+   filerne* frem for at gentage dem i testen — en test der gentager tallet, kan
+   ikke se når tallet ændrer sig).
+5. ✅ 8 nye tests i `test/progateverb.test.js`, hvoraf 3 kører den rigtige CLI og
+   starter den rigtige loop mod en rigtig lokal server. De fire gatede tilstande
+   måles gennem `describeLicense` først, så en række der ikke nåede den tilstand
+   dens navn lover, ville døde som en måling af det forkerte sted.
+6. ✅ Ingen exit-kode, intet JSON-felt, ingen matrix-række og intet købslink er
+   ændret. Den eneste forskel en kunde kan se er ét ord i én sætning.
+7. ✅ **Tre mutationer målt, alle tre døde** (3 / 2 / 2 fejl): den flertalige
+   grænse får entalsverbet (den oprindelige fejl), den entalige får flertalsverbet
+   (spejlbilledet), og et kaldssted indlejrer navneordet igen i stedet for
+   konstanten.
+
+**Gaten:** **797/797** på Node 24 via `tools/run-tests.mjs` (789 + 8);
+`matrix --check` exit 0; audit 0/0; `node --check` ren på alle seks rørte filer;
+`git diff --check` rent.
+
+**Ingen deploy-note:** CLI-repo uden live-deploytarget, og ingen side blev
+ændret, så der er ingen trafik-baseline at skrive.
+
+**Tre filer i `src/` rørt:** `license.js` (ejeren), `watch.js` og `cli.js` (de to
+kaldssteder). Fire testfiler + den nye.
+
+**Målt, ikke antaget, undervejs:** de tre mutationer er kørt på *koden* og ikke på
+teksten: den oprindelige fejl (flertalsgrænsen får `needs`) dør i 3 tests, dens
+spejlbillede (entalsgrænsen får `need`) i 2, og en indlejret navneords-streng i 2.
+Alle tre dør på adfærd, ikke på en import — de to første fordi den nye fil læser
+sætningen, den tredje fordi låsen læser kaldsstederne *i filerne* frem for at tro
+på en gentaget konstant. Ved M1 og M2 faldt derfor også de ældre tests: de
+kaldssteder der læser den rå `src/`-tekst låser navneordet, så et forkert verb
+dræber dem med. Det er den egenskab P1-101 skulle have — en fejl i sætningen er
+ikke længere noget kun den nye test ser.
 
 ## Status fra denne iteration (115, P1-100 — den fornyede licens holdt den døde dato fra den dag, maskinen første gang aktiverede)
 
@@ -4352,10 +4446,33 @@ Den aktuelle gate-definition er registreret her:
 
 ## Prioriteret kø
 
-> **Køen er tom for målte kandidater** (iteration 115). De målte fund fra den
+> **Køen er tom for målte kandidater** (iteration 116). De målte fund fra den
 > iteration ligger i afsnittet ovenfor og i `❓ Til Mads`. Næste iteration skal
 > **måle først** og finde sin egen opgave — den metode der har fundet de sidste
-> 92 opgaver. Se `❓ Til Mads` for de konkrete, målbare kandidater.
+> 93 opgaver. Se `❓ Til Mads` for de konkrete, målbare kandidater.
+
+### P1-101 — FÆRDIG 2026-09-28 (`ceo/gate-verb`) — den Pro-grænse der navngiver et flertal sagde "webhook alerts needs"
+
+**Målt først, nul kode ændret.** Se afsnittet øverst. Kort fortalt: de to Pro-grænser
+— de eneste to steder i CLI'en der fortæller en kunde at noget koster penge —
+gennem den rigtige CLI på gratisniveau og på afgivet plads. Den ene skrev
+`webhook alerts needs an active Pro license`, den anden skrev korrekt
+`the client report needs …`.
+
+**Årsagen:** `proGateMessage()` tog feature'en som én streng og skrev
+`` `${feature} needs an active Pro license` ``. Verbet kunne derfor kun være
+entalsformen, så den flertalige grænse bar hele fejlen. De to tests der dækker
+funktionen gav samme streng ind som de læste ud, så de testede aldrig verbet.
+
+**Fix:** `feature` er nu `{ subject, verb }`, og hvert kaldssted definerer sit eget
+par som konstant ved siden af den kode der bruger det — `WEBHOOK_GATE`
+(`src/watch.js`) og `REPORT_GATE` (`src/cli.js`). Bevægelsen er en del af rettelsen:
+de to steder hvor kunden kunne have læst en renere sætning, havde den rigtige som
+fallback lige ved siden af den forkerte. 8 nye tests i
+`test/progateverb.test.js` (3 gennem rigtig CLI + rigtig loop) → **797/797**
+(789 + 8); audit 0/0; `matrix --check` 0; `node --check` og `git diff --check`
+grønne. **Tre mutationer målt, alle tre døde** (3/2/2 fejl). Ingen exit-kode,
+intet JSON-felt, ingen matrix-række, intet købslink ændret.
 
 ### P1-100 — FÆRDIG 2026-09-28 (`ceo/license-renewal`) — den fornyede licens holdt den døde dato fra den dag, maskinen første gang aktiverede
 
@@ -7641,6 +7758,19 @@ for selv. Ingen gemt nøgle er omskrevet, ingen eksisterende adgangsd tilstand
 - **Iteration 65 (P1-49, målt + fix):** ❓ 1–3 ubesvarede, så målingen gik på den sidste del af P1-47's egen afvejning, som aldrig var målt: `down`/`up` er bevidst aldrig tynget. Målt først med rigtig `runPass` + rigtig `sendWebhook` mod en lokal side der skiftede 200/500 på et ur, 40 pass: **28 POSTs**, 2 016/døgn pr. site. Efter: **4**. Reglen er bevidst *ikke* P1-47s, fordi en ren tidsdæmpning af `down` kan bruge vinduet i stilhed på et rigtigt nedbrud; tærsklen (4 skift i vinduet) er derfor det bærende, og den er målt med to tests der begge siger at nedbrud **ikke** holdes. `readTransitionAlert()` i `src/status.js` er den ene ejer og beskrær selv tidslisten, fordi den strukturelle lås `four pass states are decided in one place` døde min første version, der alderede et tidspunkt i `watch.js`. 10 nye tests i `test/flap.test.js` (lagt til i `npm test`) → **446/446** (436 + 10); audit 0/0; `node --check`, `matrix --check`, `git diff --check` grønne på Node 26.7.0. Matrix-påstanden `Webhook alerts on every event` blev falsk og siger nu at en flappende site holdes på 1/time pr. art efter 4 skift. **Ingen mutationstest** — over tidsbudgeten. `ceo/flap-alerts`, `fe9e7db`, mergeet til `main` og pushet 2026-09-27. **Næste:** ❓ 1–3 og ❓ 14, ellers en målt opgave.
 
 ## Deploy-/release-noter
+
+- **Release-note P1-101:** Når en gratisbruger beder om webhook-alerts, sagde
+  værktøjet `webhook alerts needs an active Pro license` — flertal med entalsverb.
+  Nu siger det `webhook alerts **need** an active Pro license`. Det var de **to**
+  steder grænsen står, og kun de: `deskuptime watch <url> --webhook …` og
+  `deskuptime report`. Det gjaldt alle fire tilstande — gratis, afgivet plads,
+  ubekræftet licens og afvist nøgle — og dermed også de to sætninger, der
+  fortæller en kunde som **allerede har betalt**, om de skal købe en licens til:
+  dem læste før `webhook alerts needs` og læser nu `webhook alerts need`.
+  Kundenapportens **egen** grænse (`the client report needs …`) er uændret, tegn
+  for tegn. **Ingen funktion, intet flag, intet exit-niveau og intet købslink er
+  ændret** — det eneste en kunde kan se forskel på er ét ord i én sætning.
+
 
 - **Release-note P1-99:** `deskuptime status` fortæller nu **hvornår licensen
   udløber**. Før stod `expires_at` i `state.json` siden P1-19 — og blev læst af

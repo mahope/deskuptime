@@ -26,6 +26,10 @@ import { FREE, PRO, PRODUCT, renderThanks } from './features.js';
 const LICENSE_RECHECK_MS = 24 * 60 * 60 * 1000;
 const STATE_LOCK_MAX_AGE_MS = 5 * 60 * 1000;
 const WEBHOOK_TIMEOUT_MS = 10_000;
+// How the webhook gate names itself to the customer. The subject is plural, so
+// its verb is `need` — see proGateMessage() in src/license.js, which the other
+// gate (the client report, singular) also renders through.
+const WEBHOOK_GATE = Object.freeze({ subject: 'webhook alerts', verb: 'need' });
 // How many times one alert may be POSTed, and how long to wait between the
 // attempts. Measured 2026-09-26: one 5xx from the receiver lost the alert for
 // good, because the pass had already latched the change. Every attempt shares
@@ -1740,7 +1744,7 @@ export async function startWatch(urls, opts = {}) {
   if (webhookUrl && !pro) {
     // Same gate as the other Pro-only surfaces: a key the server never rejected
     // is answered with "re-check the key", never with the checkout.
-    console.error(`⚠️  No webhook was sent. ${proGateMessage(state.license, 'webhook alerts') || 'Webhook alerts need an active Pro license.'}`);
+    console.error(`⚠️  No webhook was sent. ${proGateMessage(state.license, WEBHOOK_GATE) || 'Webhook alerts need an active Pro license.'}`);
     console.error('    Terminal alerts keep working. Monitoring starts now; the webhook activates with the license.\n');
   } else if (pro && !webhookUrl && process.platform !== 'darwin') {
     console.error('ℹ️  Local desktop notifications are macOS-only in the CLI. Use --webhook for alerts on this platform.\n');

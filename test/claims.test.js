@@ -76,13 +76,13 @@ test('upgrade-vejen nævner købslinket, så gratisbrugere ikke sidder fast ved 
   assert.ok(freeLimitMessage('https://yoursite.com/').includes(PRO_BUY), 'URL-grænsen skal pege på det aftalte købslink');
   // Every Pro-only gate renders through proGateMessage(), so a free user who hits
   // one of them is told where to buy — from one function, not a second copy.
-  assert.ok(proGateMessage(null, 'webhook alerts').includes(PRO_BUY), 'en Pro-grænse skal pege på det aftalte købslink');
+  assert.ok(proGateMessage(null, { subject: 'webhook alerts', verb: 'need' }).includes(PRO_BUY), 'en Pro-grænse skal pege på det aftalte købslink');
   const watch = readFileSync(join(root, 'src', 'watch.js'), 'utf-8');
   assert.ok(watch.includes('upgradeHint'), 'src/watch.js mangler upgradeHint');
   const hinted = [...watch.matchAll(/upgradeHint\(([^)]*)\)/g)].map(match => match[1]);
   assert.ok(hinted.length >= 2, `upgradeHint bruges kun ${hinted.length} steder`);
   assert.ok(
-    watch.includes("proGateMessage(state.license, 'webhook alerts')"),
+    watch.includes('proGateMessage(state.license, WEBHOOK_GATE)'),
     'webhook-grænsen skal pege på proGateMessage, så den ikke kan modsige `deskuptime status`',
   );
 });

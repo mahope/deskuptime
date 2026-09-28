@@ -24,6 +24,9 @@ const CLI = join(ROOT, 'src', 'cli.js');
 const STUB = join(ROOT, 'test', 'fixtures', 'license-stub.mjs');
 const KEY = '0123456789abcdef0123456789abcdef';
 const BUY_URL = 'https://buy.stripe.com/7sY9AS9eX3Iu418fJ5bMQ01';
+// The client report is a singular feature, so its gate says "needs". The plural
+// gate (webhook alerts, "need") is measured in test/progateverb.test.js.
+const REPORT_GATE = { subject: 'the client report', verb: 'needs' };
 
 function run(args, { env = {} } = {}) {
   return new Promise((resolve) => {
@@ -147,7 +150,7 @@ test('seat: describeLicense reads a receipt, with or without its optional facts'
 
 test('seat: the gate names the release and never the checkout', () => {
   const receipt = releaseReceipt({ plan: 'pro', machinesInUse: 2, releasedAt: '2026-09-26T10:00:00.000Z' });
-  const msg = proGateMessage(receipt, 'the client report');
+  const msg = proGateMessage(receipt, REPORT_GATE);
   assert.doesNotMatch(msg, /buy\.stripe\.com/);
   assert.match(msg, /deskuptime activate <license-key>/);
   // Same state word as `deskuptime status`, so the gate cannot be read as a

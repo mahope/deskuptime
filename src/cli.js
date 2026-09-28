@@ -26,6 +26,10 @@ import { FREE, PRODUCT, proExtras, renderHelpPro } from './features.js';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const pkg = JSON.parse(readFileSync(join(__dirname, '..', 'package.json'), 'utf-8'));
 const MAX_WATCH_INTERVAL = 2_147_483;
+// How the client-report gate names itself to the customer. Singular feature, so
+// its verb is `needs` — the other gate (webhook alerts, plural) says `need`.
+// See proGateMessage() in src/license.js, which owns every sentence around this.
+const REPORT_GATE = Object.freeze({ subject: 'the client report', verb: 'needs' });
 
 const args = process.argv.slice(2);
 const command = args[0];
@@ -992,7 +996,7 @@ if (command === 'report') {
     // the same numbers as text. A customer whose key was never rejected is told
     // to re-check the key, not to buy again — see proGateMessage().
     const { proGateMessage } = await import('./license.js');
-    const gate = proGateMessage(state.license, 'the client report');
+    const gate = proGateMessage(state.license, REPORT_GATE);
     console.error(`❌ Error: ${gate || 'the client report needs an active Pro license'}`);
     process.exit(1);
   }
