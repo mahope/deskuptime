@@ -458,7 +458,11 @@ export function describeLicense(license, { now = Date.now() } = {}) {
     return {
       status,
       validatedAt,
-      detail: [verifiedOn ? `last verified ${verifiedOn}` : 'not verified yet — run "deskuptime watch" to re-check', ...seats].join(', '),
+      detail: [
+        verifiedOn ? `last verified ${verifiedOn}` : 'not verified yet — run "deskuptime watch" to re-check',
+        ...seats,
+        ...licenseTermNote(stored, now),
+      ].join(', '),
     };
   }
   if (status === LICENSE_STATUS.CACHED) {
@@ -492,6 +496,48 @@ export function describeLicense(license, { now = Date.now() } = {}) {
 function withinGrace(license, now) {
   const last = Date.parse(license?.validatedAt ?? '');
   return Number.isFinite(last) && now - last < OFFLINE_GRACE_MS;
+}
+
+/**
+ * When this license runs out — as a note, or nothing at all.
+ *
+ * The server has answered `expires_at` on every activation since the key was
+ * stored, and `activate` has written it into `state.json` the whole time. No
+ * surface read it: `docs/license-lifecycle.md` has said for days that "`status`
+ * kan vise pladserne og udløbsdatoen bagefter", and the seats showed while the
+ * date did not. Measured 2026-09-28 with the real CLI and a real activation
+ * answer — the same two commands, one probe apart, and only one of them prints
+ * anything about when the year is up:
+ *
+ *   state.json   "expiresAt": "2027-09-26T00:00:00.000Z"
+ *   activate     ✅ Pro activated (3 of 3 machines in use).
+ *   status       Pro license: active, last verified 2026-09-28, 3 of 3 machines in use when activated
+ *
+ * A yearly customer is never told the date, so the renewal is invisible until
+ * the server starts refusing the key. A license with no `expires_at` — a
+ * lifetime one — is the same silence with nothing to say, which is the honest
+ * reading: `expires_at: null` means there is no end date, not that we lost it.
+ * So the note is the date, and its absence is not a gap to fill.
+ *
+ * Two rules the word itself has to hold to, because the date is a *stored*
+ * reading and the verdict above is a live one:
+ *
+ *   - it never demotes the status. A record whose date has passed is still
+ *     whatever the server last said, because that server may have renewed the
+ *     license and this file never heard. Deciding Pro from a cached date is how
+ *     a paying customer gets locked out of a product they paid for; the next
+ *     pass asks the authority again.
+ *   - it never says "expires" about a day that is already behind us. That would
+ *     be a line reading `Pro license: active, … expires 2026-08-01`, which
+ *     contradicts itself in the same breath.
+ *
+ * @returns {string[]} one note, or none when the license carries no end date
+ */
+function licenseTermNote(stored, now) {
+  const end = Date.parse(stored?.expiresAt ?? '');
+  if (!Number.isFinite(end)) return [];
+  const day = new Date(end).toISOString().slice(0, 10);
+  return [end < now ? `term ended ${day} as reported at activation` : `expires ${day}`];
 }
 
 /**

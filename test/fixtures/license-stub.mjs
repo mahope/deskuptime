@@ -6,9 +6,16 @@
  *
  * Scenario: DUB_STUB_SCENARIO=ok           activate 200 (3 of 3 in use), deactivate 200 (2 of 3 left)
  *           DUB_STUB_SCENARIO=limit        activate 409 (device limit reached)
+ *           DUB_STUB_SCENARIO=lifetime     activate 200 with `expires_at: null` and `lifetime: true`
  *           DUB_STUB_SCENARIO=trap         any call exits 9, so read-only surfaces can be proven offline
  *           DUB_STUB_SCENARIO=passthrough  the three license endpoints are stubbed, every
  *                                          other request is the real fetch
+ *
+ * `lifetime` is the shape the license server answers for the one-time
+ * purchases: the same `product` as the subscription, no `expires_at`, and
+ * `lifetime: true`. Added 2026-09-28 so a lifetime customer could be measured
+ * through the real CLI — until then this file had no way to produce one, and
+ * `lifetime` appeared nowhere in `src/`.
  *
  * `passthrough` exists because this file used to *replace* `globalThis.fetch`
  * wholesale and answered 500 to anything that was not a license endpoint. That
@@ -36,6 +43,9 @@ globalThis.fetch = async (url, ...rest) => {
   }
   if (endpoint.endsWith('/activate')) {
     if (SCENARIO === 'limit') return json(409, { ok: false, error: 'Device limit reached' });
+    if (SCENARIO === 'lifetime') {
+      return json(200, { ok: true, activated: true, plan: 'pro', expires_at: null, lifetime: true, devices_in_use: 1 });
+    }
     return json(200, { ok: true, activated: true, plan: 'pro', expires_at: '2027-09-26T00:00:00.000Z', devices_in_use: 3 });
   }
   if (endpoint.endsWith('/validate')) {
