@@ -1,6 +1,85 @@
-> **Seneste:** iteration 100 (P1-84, færdig) — historien står i køens afsnit
-> `P1-84 — FÆRDIG 2026-09-28` lige under `## Prioriteret kø`.
+> **Seneste:** iteration 101 (P1-85, færdig) — historien står i køens afsnit
+> `P1-85 — FÆRDIG 2026-09-28` lige under `## Prioriteret kø`.
 > Afsnittene for 97 og 98 er ældre og ligger henholdsvis øverst og nederst.
+
+## Status fra denne iteration (101, P1-85 — kundenapporten talte et pass fra 19 dage fremtiden som "1 up")
+
+**Målt først, nul kode ændret.** `tools/measure-surfaces.mjs clock-ahead` — én
+håndskreven tilstand, alle fire flader, rigtig CLI under temp-HOME:
+
+```
+status:     ✅ https://kunde.dk/ (200) — SSL 89d ⚠️ 19 d ahead of this machine's clock
+rapport:    | https://kunde.dk/ | UP (200) | … | 2026-10-17 05:26 UTC ⚠️ 19 d ahead |
+            **1 site(s) · 1 up · 0 down**
+json:       "passState": "ahead", "ageDays": null, "stale": false, "partition.up": 1
+```
+
+**Ét tal i et dokument, der sendes til en kunde, var ikke sandt.** Resumetælleren
+skrev `1 up` om et pass med tidsstemplet **2026-10-17** i et dokument, hvis egen
+overskrift siger *Generated 2026-09-28* — altså en kontrol, der endnu ikke var
+sket. Dokumentets **egen fodnote** definerer `up` som *"sites checked within the
+last 2 days"*, så tællingen modsagde den tekst, der stod lige under den. Alt
+andet var allerede sandt: `passAge` nægter at kalde et sådant pass "tjekket i
+dag" (`ageDays: null`, P1-6), rækken sagde `UP (200)` med advarslen, og de to
+gratislister sagde `✅ up` med samme advarsel. **P1-6 havde ladt netop det ene
+tal stå, der krævedes for at dokumentet hang sammen.**
+
+**Årsagen er at `passAge` er en ejer af *passets tilstand*, og partitionen var en
+anden.** `passAge`/`PASS_AGE` vidste at tiden lå foran (`PASS_AGE.AHEAD`), og
+`buildReport` skrev både `passState` og `clockAhead` på sitet. Alligevel
+`siteBuckets` spurgte kun `stale` og `status`, og en fremtidig tid er ikke
+`stale` — så den faldt i `up`. Samme form som P1-32 og P1-83: en besked der
+skal læses, besvarer et spørgsmål kaldet to steder.
+
+**Efter:**
+
+```
+| https://kunde.dk/ | UP (200) | … | 2026-10-17 05:26 UTC ⚠️ 19 d ahead of this machine's clock |
+**1 site(s) · 0 up · 0 down · 1 checked ahead of this machine's clock**
+**1 site has its last check dated ahead of this machine's clock — that pass cannot have run yet,
+ so it is not counted as up above:** https://kunde.dk/ (19 d ahead of this machine's clock)
+```
+
+**Rettelsen er staleness' form, fordi det er samme fejl:** rækken beholder sit
+`UP (200)` og sin advarsel — det er sandt, hvad maskinen så — men **ud af `up`**,
+i en sjette spand. `down` er bevidst *ikke* filtreret, ligesom før: en kunde skal
+stadig se et site der sidst blev set nede. Ny additive nøgle i `--json`:
+`summary.ahead` og `partition.ahead`. Fodnotens partitionsdefinition er
+opdateret, så den igen kan læses som en aftale.
+
+**Acceptkriterier — alle syv opfyldt:**
+
+1. ✅ Et pass foran uret er ikke i `up` (hverken i `summary` eller `partition`),
+   på `report` og i `report --json`.
+2. ✅ Partitionen er stadig disjunk og summerer til `sites` (testet med to sites).
+3. ✅ Rækken beholder `UP (200)`, advarslen `⚠️ 19 d ahead of this machine's
+   clock` og `passState`/`ageDays`/`stale` uændrede.
+4. ✅ Ét `up` for et normalt pass er tegn for tegn uændret, også på resumelinjen.
+5. ✅ Ny linje under tabellen bygget af **ejerens egen sætning** (`clockAhead`),
+   plus tælleren på resumelinjen.
+6. ✅ Additive felter kun: `summary.ahead`, `partition.ahead`.
+7. ✅ `PASS_AGE.AHEAD` er den eneste kilde til ordet — `report.js` må ikke skrive
+   et pass-state-literal (P1-6's strukturelle lås fangede netop mit første forsøg
+   og drev den til import af `PASS_AGE` i stedet).
+
+**Gaten:** **729/729** på Node 26.7.0 via `tools/run-tests.mjs`; audit 0/0;
+`matrix --check` exit 0; `node --check` ren på alle JS; `git diff --check` rent.
+Merge: `8a5944a` (commit `b51956a`, branch `ceo/clock-ahead-up-count`).
+
+**To eksisterende låse rettet, ikke slækket — de låste den gamle løgn:**
+
+- `test/report.test.js:1204` *"the four pass states are decided in one place"* —
+  faldt på mit første forsøg, fordi jeg skrev `=== 'ahead'` i `report.js`. Rettelsen
+  er import af `PASS_AGE`, som er hvad låsen vil have haft hele tiden.
+- `test/report.test.js:1146` og `:1259` (P1-6's "1 up"-lås) — siger nu `1 up · 0
+  down` + den nye tæller + navngivelsen, og **beholder** P1-6's egne påstande:
+  rækken siger `UP (200)`, listerne siger `✅ up`, ingen af dem siger `stale`, og
+  advarslen står på alle tre flader. Det er den del af P1-6 der stadig er sand.
+
+**Næste:** ❓ 1–3, ❓ 14 og ❓ 16 afventer Mads. Køen er tømt; nye opgaver skal
+findes ved måling. Målingen kom fra `tools/measure-surfaces.mjs`' otte
+håndskrevne tilstande — kun `clock-ahead` er målt siden P1-77, og de øvrige syv
+er ulæste i denne omgang.
 
 ## Status fra denne iteration (97, P1-81 — målebænken skrev i den rigtige `~/.deskuptime`, fordi den gav `runPass` en nøgle, intet læser)
 
@@ -3402,6 +3481,53 @@ Den aktuelle gate-definition er registreret her:
 - ~~`tools/make_tarball.sh:14` udelader `src/checkers/headers.js`~~ **Rettet i P2-1 del A (2026-09-25), og linjen var forældet her:** scriptet kopierer nu hele `src/`-træet i stedet for en håndlavet filliste, og `test/tarball.test.js` låser det. `tools/install.sh:6` er derimod stadig fastsat til 0.1.4 mod `package.json`s 0.2.8 — en curl-bruger får altså en version tre minorer under npm-versionen, som mangler hele P1-13…P1-24's rettelser; nyeste publicerede `v*-cli` er v0.2.5-cli, så en ny release (❓ 10) er forudsætningen for at lukke det.
 
 ## Prioriteret kø
+
+### P1-85 — FÆRDIG 2026-09-28 (`ceo/clock-ahead-up-count`, `b51956a`) — Kundenapporten talte et pass fra 19 dage fremtiden som "1 up"
+
+Historien står i afsnittet øverst. Kort: `PASS_AGE.AHEAD` var en kendt tilstand,
+og `partition`/`summary` spurgte alligevel kun `stale` + `status`, så et pass med
+tidsstemplet 2026-10-17 i et dokument overskriftet *Generated 2026-09-28* blev
+talt som `1 up` — mod dokumentets egen definition af `up`. Nu en sjette spand
+(`ahead`), rækken beholder sit `UP (200)`, og P1-6's låse blev opdateret uden at
+slækkes. **VERIFICÉR DEPLOY: `report`/`--json` tæller ikke et pass foran uret som
+op — `8a5944a` 2026-09-28 ca. 05:35 UTC.**
+
+### Kandidater fra målingen i iteration 101 — målt grundlag, ikke gæt
+
+Rækkefølgen er efter hvad der griber flest brugere. Ingen er startet; alle er
+`I GANG`-fri, så næste iteration tager nr. 1.
+
+1. **P1-86 — De to gratislister tæller ikke et pass foran uret, men skriver
+   stadig `✅`.** Målt i samme kørsel: `status` → `✅ https://kunde.dk/ (200) …
+   ⚠️ 19 d ahead` og `watch --status` → `✅ up … @ 2026-10-17 … ⚠️ 19 d ahead`.
+   Advarslen er der, så det er ikke en løgn i samme forstand som rapportens var,
+   men P1-6's lås siger eksplicit *"the recorded verdict is not rewritten"* for
+   listerne, så det her er en **beslutning, ikke en fejl**: skal en forkert ure
+   give et andet mærke end ✅ på de to lister, eller står ✅ + advarsel?
+   **Acceptkriterium:** enten en målt beslutning skrevet her, eller ét
+   adfærdstest-lås der bekræfter at ✅ + advarsel er den valgte form.
+2. **P1-87 — Sytten af bænkens tilstande er ulæste.** `tools/measure-surfaces.mjs`
+   har otte håndskrevne tilstande; kun `clock-ahead` er læst siden P1-77.
+   Kør `cert-issuer-change`, `content-changed-old-read`, `healthy`,
+   `ssl-lapsed-since-pass`, `ssl-expired-at-pass`, `slow-old-page` og læs alle
+   fire flader i hver. **Acceptkriterium:** for hver tilstand enten en bekræftelse
+   på at alle flader er enige, eller en målt fejl med de to sætninger side om side.
+3. **P1-88 — GitHub Action'en har sin egen status-renderer og kender ingen
+   lukket dør.** Målt kilde: `action.yml` skriver `❌ DOWN` + rå `statusCode` i
+   job-summary'en og tæller 4xx/5xx i `down-count`, mens CLI'en siden P1-84 siger
+   *hvad* der svarede, og `--json` bærer `httpDownKind`/`httpDownNote`. En kunde
+   med et staging-site bag proxy får altså en rød build og ingen forklaring.
+   **Forbehold:** beskrivelsen siger eksplicit *"Fails the job if any URL is
+   unhealthy (HTTP 4xx/5xx)"*, så `down-count` og exit-koden er en del af
+   kontrakten. Den mindste ærlige rettelse er at **navngive** den lukkede dør i
+   summary-cellen uden at flytte tal eller exit. **Acceptkriterium:** målt først på
+   en rigtig lokal 401/403/429-server, så både før- og efterlinje står i planen.
+4. **P1-89 — `httpDownNote` hedder `down` og rummer `HTTP 200` på et UP-site.**
+   Målt i `--json`: `{"status": "up", "statusCode": 200, "httpDownKind": null,
+   "httpDownNote": "HTTP 200"}`. En maskinklient, der læser feltets *navn*, kan
+   tro at der står en fejl. **Acceptkriterium:** enten `null` på et up-site
+   (additivt, `httpDownKind` er allerede `null`) eller et dokumenteret
+   kontraktnotat om at feltet altid er efter `statusCode`.
 
 ### P1-84 — FÆRDIG 2026-09-28 (`ceo/closed-door-reason`) — `HTTP 401` var hele forklaringen, også i det dokument et bureau sender til kunden
 
