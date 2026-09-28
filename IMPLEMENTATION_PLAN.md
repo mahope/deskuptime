@@ -1,7 +1,91 @@
-> **Seneste:** iteration 105 (P1-90, færdig) — historien står i køens afsnit
-> `P1-90 — FÆRDIG 2026-09-28` lige under `## Prioriteret kø`.
+> **Seneste:** iteration 106 (P1-91, færdig) — historien står i køens afsnit
+> `P1-91 — FÆRDIG 2026-09-28` lige under `## Prioriteret kø`.
 
-## Status fra denne iteration (105, P1-90 — et site der svarede 200 blev gemt som et site uden certifikat)
+## Status fra denne iteration (106, P1-91 — det gratis værktøj havde ingen sted at sige tak, fordi ingen kommando nogensinde skrev donationslinket ud)
+
+**Målt først, nul kode ændret.** Køen var tømt for målte kandidater, så
+iterationen begyndte med en måling — og målingen var ikke en fejl men en
+**manglende forbruger**. `PRODUCT.donationUrl` har ligget i `src/features.js`
+siden gratisniveauet kom, og filegens egen docstring siger *"Every
+customer-facing surface renders from this file, so a claim cannot be true on
+one surface and false on another"*. `rg -n 'donationUrl'` gav **tre fund**: en i
+kilden, en i `test/matrix.test.js` og en i `.github/FUNDING.yml`-asserten. Ingen
+i nogen kommando. Den var altså ikke en påstand, der kunne glide — den var en
+konstant uden læser, og den eneste test der rørte den, testede *strengen*.
+
+**Målt end-to-end gennem de rigtige kommandoer**, mod et lokalt site der
+svarer 200, på en frisk installation:
+
+```
+check <url>        ✅ …  Status: 200 — UP · Response: 26ms          exit 0
+watch <url> --once [10:24:56] • … baseline recorded: UP (200)      exit 0
+watch --status     📋 1 monitored URL(s):
+                     ✅ up  http://localhost:60661/ (200) @ … · 71 bytes   exit 0
+```
+
+**Tre grønne resultater, og ingen af dem havde noget sted at sige tak.** Den
+eneste vej til donationslinket var at finde repoet og læse funding-filen. Det er
+kontraktens egen regel der var ubopfyldt: linket skal være *"der, hvor en glad
+bruger naturligt ville sige tak, fx efter et vellykket resultat"*, og et værktøj
+der er gratis, offentligt og MIT må gerne bede om det.
+
+**Rettelsen ligger i kilden og i den ene flade, der har ret til at sige det.**
+`renderThanks()` i `features.js` bygger sætningen af den konstant, de to
+eksisterende flader allerede deler, så tre flader ikke kan komme til at nævne tre
+links. `printStatus()` placerer den som **sidste linje**, efter det svar
+kommandoen findes for.
+
+**Hvorfor kun den ene flade, målt ikke gættet:** `watch --status` er dagens liste,
+og hele dens output er svaret på *"er det i orden?"* — den er den menneskelige.
+`check` og `watch --once` læses af en CI-log og en cron-mail, og repoet sender en
+GitHub Action der kalder `check`; et link i hvert build-log er præcis hvad en tak
+bliver til støj. Den grænse er låst i en test, så den bliver en beslutning.
+
+**To vægge, begge allerede regler andre steder i filen.** `worthThanking()` er
+ejeren af "var det godt nok": hver række `verdict === 'up'`, intet pass ældre end
+stalevinduet, intet site intet nogensinde har tjekket, og intet ur der står foran
+sig selv. Ikke et nede site, ikke et ulæseligt verdict, ikke en gammel måling —
+"intet gik i stykker, vi holdt bare op med at kigge" er ikke noget at takke for.
+Og kun på gratisniveauet: en Pro-kunde har licens og supportkanal, ikke en
+spands, og en frigiven plads er en kunde der har betalt — samme regel der holder
+`released` og `unverified` væk fra kassen i `deskuptime status`.
+
+**Valget mellem advarsel og verdikt, som var det svære:** et certifikat der
+tæller ned og en side der ændrede sig lader rækken være `✅ up` og skriver deres
+egen advarsel *over* footeren. En strengere regel ville have gjort linjen
+uopnåelig netop der hvor værktøjet bruges mest — hvereste købsproces. Derfor er
+reglen om **verdictet**, ikke om bemærkningerne, og der er en test der låser
+præcis den forskel.
+
+**Acceptkriterier — alle syv opfyldt:**
+
+1. ✅ Den grønne, nye liste siger tak **én** gang, som sidste linje, med
+   kontraktens donationslink (målt på rigtig CLI).
+2. ✅ Sætningen er `features.js`' egen — testen låser at listen gengiver den, så
+   ingen kan omskrive den kun i `watch.js`.
+3. ✅ Ikke når et site er nede, når passet er 9 dage gammelt, når et site aldrig er
+   tjekket, eller når uret står 19 dage foran — målt på fire rigtige tilstande.
+4. ✅ Ikke til en kunde med `active` licens, ikke til en med `released` plads.
+5. ✅ Advarsler på rækkerne (`renew soon`, `content changed`) tæller med, fordi
+   rækken stadig er `✅ up`.
+6. ✅ `check` og `watch --once` får ingen taklinje — låst, så grænsen ikke glider.
+7. ✅ 10 nye tests (9 i `test/thanks.test.js`, 1 i `test/matrix.test.js`), der
+   låser at konstanten havner i et kommando-output — det var præcis hullet.
+
+**Gaten:** **751/751** på Node 26.7.0 via `tools/run-tests.mjs` (741 + 10);
+audit 0/0; `matrix --check` exit 0; `node --check` ren på alle fire ændrede JS;
+`git diff --check` rent. **Seks mutationer målt, alle seks døde** — hver af de fire
+vægge i `worthThanking` faldt med præcis én fejl, Pro-væggen faldt med én,
+og listen der skrev sin egen sætning faldt med to. Kontrollen (en *strengere*
+predikat med `uncheckable` foran) forblev grøn, som den skulle.
+
+**Deploy-note ikke nødvendig:** CLI-repo uden live-deploytarget.
+
+**Åbent punkt, bevidst ikke taget nu:** de to andre succesflader får stadig ingen
+taklinje, og det er et smagsspørgsmål, ikke et fund — de er låst ude med vilje, så
+næste iteration skal begynne med en måling. Se `❓ 16`.
+
+## Status fra tidligere iteration (105, P1-90 — et site der svarede 200 blev gemt som et site uden certifikat)
 
 **Målt først, nul kode ændret.** Køen var tømt for målte kandidater, så
 iterationen begyndte med en måling, som de forrige har gjort. Den målte det
@@ -3748,7 +3832,7 @@ Dette offentlige repo leverer den gratis, fuldt brugbare DeskUptime-CLI (MIT). D
 Den aktuelle gate-definition er registreret her:
 
 - Root: `npm ci --ignore-scripts` skal lykkes med den committede lockfil.
-- Root: `npm test` (597 tests, 597 passed på Node 26.7.0 efter P1-65: 585 + 12 nye tests om udstederen på de to gratis lister; tællet stiger med hver målte iteration, så læs tallet herfra `npm test` selv). **Bemærk, målt igen 27/9:** på en maskine hvor `node` er 22 fejler **20** tests — de 7 installtests (`install.sh` kræver Node 24+) og 13 action-tests (`action.yml` kræver Node 24+) — fordi begge scripts korrekt afviser en ældre Node. Det er ikke en fejl i repoet. Brug den installerede `PATH`-node (26.7.0) — på Mads' maskine `/opt/homebrew/bin/node` eller `/opt/homebrew/opt/node@26/bin/node` — ellers er gate ikke grøn af miljøårsager. Bemærk at den `node` der ligger først i `PATH` her var 22, så `PATH=/opt/homebrew/bin:$PATH npm test` er den sikre form.
+- Root: `npm test` (**751 tests, 751 passed på Node 26.7.0 efter P1-91**: 741 + 9 i `test/thanks.test.js` + 1 i `test/matrix.test.js`; de 597/P1-65-tallet herunder er forældet, og tællet stiger med hver målte iteration, så læs tallet herfra `npm test` selv). **Bemærk, målt igen 27/9:** på en maskine hvor `node` er 22 fejler **20** tests — de 7 installtests (`install.sh` kræver Node 24+) og 13 action-tests (`action.yml` kræver Node 24+) — fordi begge scripts korrekt afviser en ældre Node. Det er ikke en fejl i repoet. Brug den installerede `PATH`-node (26.7.0) — på Mads' maskine `/opt/homebrew/bin/node` eller `/opt/homebrew/opt/node@26/bin/node` — ellers er gate ikke grøn af miljøårsager. Bemærk at den `node` der ligger først i `PATH` her var 22, så `PATH=/opt/homebrew/bin:$PATH npm test` er den sikre form.
 - Root: `npm run audit` skal rapportere 0 sårbarheder.
 - Root: `npm run lint` findes ikke i `package.json`; rapporteres som manglende gate, ikke som grønt.
 - Root: `npm run build` findes ikke i `package.json`; der er ingen JS-build/typecheck-script.
@@ -3780,6 +3864,40 @@ Den aktuelle gate-definition er registreret her:
 - ~~`tools/make_tarball.sh:14` udelader `src/checkers/headers.js`~~ **Rettet i P2-1 del A (2026-09-25), og linjen var forældet her:** scriptet kopierer nu hele `src/`-træet i stedet for en håndlavet filliste, og `test/tarball.test.js` låser det. `tools/install.sh:6` er derimod stadig fastsat til 0.1.4 mod `package.json`s 0.2.8 — en curl-bruger får altså en version tre minorer under npm-versionen, som mangler hele P1-13…P1-24's rettelser; nyeste publicerede `v*-cli` er v0.2.5-cli, så en ny release (❓ 10) er forudsætningen for at lukke det.
 
 ## Prioriteret kø
+
+### P1-91 — FÆRDIG 2026-09-28 (`ceo/thanks-free-list`, `81e97a7`) — det gratis værktøj havde ingen sted at sige tak
+
+Historien står i afsnittet øverst. Kort: `donationUrl` lå i kilden, i
+FUNDING.yml og i README, og ingen af de tre kommandoer en bruger kører skrev
+den nogensinde ud — så den var en konstant uden læser, ikke en påstand der
+kunne glide. `watch --status` siger den nu som sidste linje, kun når listen
+er grøn og frisk, kun på gratisniveauet, og aldrig i `check`/`watch --once`.
+Deploy-note ikke nødvendig (CLI-repo uden live-deploytarget).
+
+### Kandidater fra målingen i iteration 106 — målt grundlag, ikke gæt
+
+Målingen i denne iteration fandt **manglende forbrugere**, ikke fejl: en konstant
+uden læser. Den er lukket. Det er den sjældneste fundtype i køen, og den peger på
+en målemetode der virker: `rg` efter en konstant der *kun* findes i kilden, dens egen
+test og en konfigurationsfil. Det er præcis det `donationUrl` gav — **tre fund, ingen
+læser**. De tre næste kandidater er valgt efter samme kriterium: konstanter,
+felter og funktioner der burde have en forbrugerflade.
+
+1. **Pro nævnes aldrig i den daglige liste.** Målt: `watch --status` nævner Pro
+   **0 gange** i alle otte tilstande i `tools/measure-surfaces.mjs`, mens
+   `deskuptime status` har købslinjen. Kontraktens konverteringsregel beder om at
+   Pro vises *der, hvor brugeren mangler det*. **Spørgsmålet først:** mangler
+   brugeren det, eller er listen bare ikke salgsfladen? Svar afgør om næste
+   iteration bygger det. Se ❓ 16.
+2. **`describeLicense().detail` på den daglige liste.** Samme måling: en Pro-kunde
+   der kører `watch --status` ser ingen licenslinje overhovedet — kun rækkerne.
+   Ikke en fejl (P1-18 lagde licensen i `status` med vilje), men en kandidat der
+   skal måles, før den bygges.
+3. **De ni bænktilstande dækker ikke det gratis værktøjs *eget* svar.** Bænken
+   måler i dag kun *state-filer*; de tre succesflader `check`, `watch --once` og
+   `watch --status` måler hver sit eget svar på det samme site. P1-91 viste at de
+   tre kan være uenige om hvor de skal takke. En bænk der kører alle tre mod ét
+   lokalt site ville gøre det til et spørgsmål med ét tal.
 
 ### P1-90 — FÆRDIG 2026-09-28 (`ceo/ssl-unreadable`, `c233afa`) — et site der svarede 200 blev gemt som et site uden certifikat
 
@@ -6371,6 +6489,19 @@ for selv. Ingen gemt nøgle er omskrevet, ingen eksisterende adgangsd tilstand
     **Spørgsmålet er om det er nok.** Et site der svarer, men hvis certifikat
     ikke kan læses i en hel uge, er et site bureauet bør høre om med det samme.
     Svar afgør om næste iteration laver en alarmtype eller lader den ligge.
+
+16. **Skal de to andre succesflader også sige tak — og skal den daglige liste
+    nævne Pro?** P1-91 målte, at `check`, `watch --once` og `watch --status` alle
+    sluttede på deres eget svar, og lagde taklinjen i **én** af dem. Det var et
+    målt fund for de to der blev ladt ude: de læses af en CI-log og en cron-mail, og
+    repoet sender en GitHub Action der kalder `check`. Den anden halvdel er et
+    **smagsspørgsmål, ikke et fund**: `deskuptime status` har købslinjen for
+    gratisbrugere, men den daglige liste `watch --status` — den samme bruger
+    kører hver dag — nævner Pro **aldrig**. Kontraktens konverteringsregel siger at
+    Pro skal vises *"der, hvor brugeren mangler det"*, og en gratisbruger der
+    kører listen dagligt med 1 af 3 pladser i brug mangler den. Målt den
+    konkrete mangel først (hvor mange af dagens brugere rammer selve URL-væggen),
+    og lad være med at sælge i footeren af en liste der er helt grøn.
 
 12. ~~Vindueskolonnen dækker ikke hele vinduet.~~ **Besvaret i kode 2026-09-26 (P1-38, `ceo/incomplete-window`):** valget var (b), den navngiven linje. Målingen og de to betingelser står i afsnittet øverst og i `docs/agency-report.md` §4. Cellen er uændret; kun en ny linje, `1 with an incomplete window` i resumelinjen og fire additive felter. **Valget, og hvorfor:** (a) ville ændre en celle i et kundedokument bureauer har sat i systemer; (b) er additivt og rører ingen konsument. **(a) er stadig mulig** som en senere ændring, hvis Mads vil have antallet i cellen — målingen og koden til den ligger i `windowCoverage`.
 
