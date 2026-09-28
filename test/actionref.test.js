@@ -76,10 +76,31 @@ function git(args) {
   });
 }
 
-/** Does this ref name a commit in *this* repository? No network is consulted. */
-function resolves(ref) {
+/**
+ * Does this ref name a commit in *this* repository? No network is consulted.
+ *
+ * The two spellings are measured, not defensive. `actions/checkout` builds a
+ * local branch when it checks out a push, but a pull request arrives as a
+ * detached HEAD with only `refs/remotes/origin/main` present — verified in a
+ * throwaway clone: there `main^{commit}` fails and `origin/main^{commit}`
+ * answers. A lock that only knew the first spelling would turn this repository's
+ * own CI red on every pull request, which is the same mistake as a test that
+ * fails for a reason that is not a defect.
+ */
+function resolveRef(ref) {
+  for (const candidate of [ref, `origin/${ref}`]) {
+    try {
+      return git(['rev-parse', '--verify', '--quiet', `${candidate}^{commit}`]).trim();
+    } catch {
+      // Not that spelling. Try the next.
+    }
+  }
+  return null;
+}
+
+function isTag(ref) {
   try {
-    git(['rev-parse', '--verify', '--quiet', `${ref}^{commit}`]);
+    git(['show-ref', '--verify', '--quiet', `refs/tags/${ref}`]);
     return true;
   } catch {
     return false;
@@ -132,7 +153,7 @@ test('the ref a customer is told to copy exists in this repository', () => {
 
   for (const { surface, ref } of refs) {
     assert.ok(
-      resolves(ref),
+      resolveRef(ref) !== null,
       `${surface} tells a customer to use ${ACTION_OWNER}@${ref}, and no such ref exists in this repository ` +
         `(git rev-parse --verify "${ref}^{commit}" fails). GitHub answers that with ` +
         `"unable to find version '${ref}'", so the recipe fails before the tool ever runs.`,
@@ -140,35 +161,39 @@ test('the ref a customer is told to copy exists in this repository', () => {
   }
 });
 
-test('the recipe points at a branch, so it cannot pin an action older than the table beside it', () => {
+test('the recipe is not pinned to a release or a commit, so it cannot freeze an older action', () => {
   // Measured, not hypothetical: `v0.2.8` is a tag that resolves and carries an
   // action.yml, and pinning the recipe to it would document a `down-count` that
   // means "unreachable" while the row two lines below it says "HTTP 4xx/5xx or
-  // network error". The README's own sentence now says so in prose; this says
-  // it in code, and a raw sha fails for the same reason — it is a fixed point
+  // network error". The README's own sentence now says so in prose; this says it
+  // in code, and a raw sha fails for the same reason — it is a fixed point
   // nobody will ever come back and name.
+  //
+  // Known limit, kept here rather than pretended away: a depth-1 CI checkout
+  // fetches no tags at all, so there this lock cannot see one. It is strongest
+  // in the full clone the plan names as the gate, and the sentence in README
+  // covers a reader either way.
   for (const { surface, ref } of everyReference()) {
-    let isBranch = true;
-    try {
-      git(['rev-parse', '--verify', '--quiet', `refs/heads/${ref}`]);
-    } catch {
-      isBranch = false;
-    }
     assert.ok(
-      isBranch,
-      `${surface} pins the action to ${ref}, which is not a branch of this repository. A tag or a commit sha ` +
-        `freezes the action; this table documents the action on the default branch.`,
+      !/^[0-9a-f]{40}$/.test(ref),
+      `${surface} pins the action to a raw commit sha (${ref}); it is unmaintainable and ages into a ref nobody can name`,
+    );
+    assert.ok(
+      !isTag(ref),
+      `${surface} pins the action to the release tag ${ref}, whose action.yml is older than the input table ` +
+        `printed directly below the recipe.`,
     );
   }
 });
 
 test('the action at that ref takes the inputs the README documents and publishes the outputs it names', () => {
   const ref = referencedRefs(readme)[0];
-  assert.ok(ref, 'README never references the action');
+  const sha = ref ? resolveRef(ref) : null;
+  assert.ok(sha, 'README references no ref that exists in this repository');
 
   // Both sides: the ref a customer resolves, and the file in this working tree,
   // so renaming an input without touching the README fails here as well.
-  for (const source of [() => fileAtRef(ref, 'action.yml'), () => readFileSync(join(root, 'action.yml'), 'utf-8')]) {
+  for (const source of [() => fileAtRef(sha, 'action.yml'), () => readFileSync(join(root, 'action.yml'), 'utf-8')]) {
     const actionYml = source();
     const inputs = declaredNames(actionYml, 'inputs');
     const outputs = declaredNames(actionYml, 'outputs');

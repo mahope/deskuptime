@@ -44,16 +44,29 @@ svare ja på et tag ingen har pushet.
 som altid findes, og får to linjer der siger hvorfor `@main` er valgt og hvad
 der sker hvis man alligevel vil pinne. Fire nye tests i
 `test/actionref.test.js`: (1) hver ref i README og `docs/*.md` findes i dette
-repo; (2) den er en **branch** — målt, ikke hypotetisk: `v0.2.8` *findes* og
-*har* en `action.yml`, så en pin til den ville dokumentere et `down-count` der
-betyder "unreachable" i en tabel to linjer under der siger "HTTP 4xx/5xx or
-network error"; (3) den `action.yml` som ref'en *peger på* erklærer de inputs
-og outputs README dokumenterer — læst fra både ref'en og working tree, så også
-et rename i koden uden README fanger her; (4) alle flader nævner **én** ref, så
-opskriften ikke kan glide i to versioner. → **832/832** (828 + 4); audit 0/0;
-`matrix --check` tavs; `node --check` og `git diff --check` grønne. **Fire
-mutationer målt, alle fire døde** (3 / 1 / 1 / 2 fejl): `@v0` tilbage, pin til
-`v0.2.8`, et omdøbt input i tabellen, og en anden ref i `docs/`.
+repo; (2) den er **hverken et release-tag eller et råt sha** — målt, ikke
+hypotetisk: `v0.2.8` *findes* og *har* en `action.yml`, så en pin til den ville
+dokumentere et `down-count` der betyder "unreachable" i en tabel to linjer under
+der siger "HTTP 4xx/5xx or network error"; (3) den `action.yml` som ref'en
+*peger på* erklærer de inputs og outputs README dokumenterer — læst fra både
+ref'en og working tree, så også et rename i koden uden README fanger her; (4)
+alle flader nævner **én** ref, så opskriften ikke kan glide i to versioner. →
+**832/832** (828 + 4); audit 0/0; `matrix --check` tavs; `node --check` og
+`git diff --check` grønne. **Fire mutationer målt, alle fire døde** (2 / 1 / 1 /
+2 fejl): `@v0` tilbage, pin til `v0.2.8`, et omdøbt input i tabellen, og en anden
+ref i `docs/`.
+
+**Én fejl i min egen lås blev fundet og rettet samme dag, før den nåede nogen
+PR.** Den første version af test (2) krævede en *lokal branch*
+(`refs/heads/main`). Målt i en kastet klon med præcis et `pull_request`-checkouts
+form — detached HEAD, dybde 1 — findes der ingen `refs/heads/main`; kun
+`origin/main` findes, fordi `actions/checkout` bygger en lokal branch ved et
+push men ikke ved en PR. Låsen ville altså have gjort **repoets egen CI rød på
+hver pull request** for en årsag, der ikke er en fejl. Den spørger nu om
+ref'en er løs (findes, ikke tag, ikke sha) og læser `action.yml` via den
+**opløste sha**, så den er rigtig i begge checkoutformer — målt i den samme
+kastede klon, 4/4 grøn. Fem mutationer målt efter rettelsen, alle fem døde
+(2/1/1/1/2), inklusive et 40-tegns sha.
 
 **Valgt bevidst:** ikke at skrive `@v0.2.8` i stedet. Det ville løse den røde
 kørsel og samtidig stive tre ugers gammel `action.yml` ind i den mest brugte
@@ -4932,11 +4945,17 @@ gang — på en flade, hvis egen feature-tabel lover den som "✅ ✅ In both ti
 
 **Rettelse:** én linje (`@v0` → `@main`) og to forklarende linjer i README. Fire
 tests i `test/actionref.test.js` spørger det lokale git i stedet for en streng:
-(1) ref'en findes, (2) den er en branch, så opskriften ikke kan pine en release
-hvis `action.yml` er ældre end tabellen ved siden af, (3) den `action.yml` ref'en
-peger på erklærer de inputs/outputs README dokumenterer — læst fra både ref'en og
-working tree, (4) alle kundeflader nævner én ref. → **832/832** (828 + 4); audit
-0/0; `matrix --check` tavs. **Fire mutationer målt, alle fire døde** (3/1/1/2).
+(1) ref'en findes, (2) den er hverken et release-tag eller et råt sha, så
+opskriften ikke kan pine en release hvis `action.yml` er ældre end tabellen ved
+siden af, (3) den `action.yml` ref'en peger på erklærer de inputs/outputs README
+dokumenterer — læst fra både ref'en og working tree, (4) alle kundeflader nævner
+én ref. → **832/832** (828 + 4); audit 0/0; `matrix --check` tavs. **Fire
+mutationer målt, alle fire døde** (2/1/1/2).
+
+**Rettet samme dag:** låsens første version krævede en *lokal branch*, som et
+`pull_request`-checkout ikke har (målt i en kastet klon: kun `origin/main`) —
+den ville have gjort CI rød på hver PR. Nu løses ref'en til en sha og spørges
+om, om den er et tag. Fem mutationer efter rettelsen, alle døde.
 
 **Valgt bevidst:** ikke `@v0.2.8`. Den findes og har en `action.yml`, men
 `fail-on-down` og `down-count` betyder der "unreachable" mod README's
