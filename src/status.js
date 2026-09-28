@@ -2160,13 +2160,30 @@ export function readEntry(entry, { now = new Date(), url = '' } = {}) {
   // answered for by somebody else, so the row that carries the rotation is the
   // row that has to carry this. Asked of the one owner, like the two above.
   const certIssuer = readCertIssuerState(value, { now });
-  // A key that is not an address has no verdict to report. Its stored `wasUp`
-  // is whatever a hand-edited file, a botched restore or an old script left
-  // behind, and a monitoring pass skips the key entirely (P1-40) — so printing
-  // `✅ up` for one told a user their site was healthy on the strength of a
-  // value nothing can measure. Asked of the one owner, so the row says the same
-  // thing the named line below the list says.
-  const uncheckable = url !== '' && !isHttpUrl(url);
+  // A key no pass can send a request to has no verdict to report. Its stored
+  // `wasUp` is whatever a hand-edited file, a botched restore or an old script
+  // left behind, and a monitoring pass skips the key entirely (P1-40) — so
+  // printing `✅ up` for one told a user their site was healthy on the strength
+  // of a value nothing can measure. Asked of the one owner, so the row says the
+  // same thing the named line below the list says.
+  //
+  // Measured 2026-09-28, real CLI, a real state file, no HTTP: this asked
+  // `isHttpUrl`, which predates P1-71's credentials rule and *accepts* an
+  // address with a password in it. So the free surfaces — the two every user
+  // runs — printed a full healthy row about a key the pass skips by design:
+  //
+  //   Monitored URLs (1):
+  //     ✅ http://kunde.dk/ (200) · 512 bytes
+  //   ⚠️  Cannot be checked … 1 saved URL has a username and a password in it …
+  //       No monitored site could be checked on this pass.
+  //
+  // One output, two opposite claims, and the `(200)` and the byte count belong
+  // to a pass that can never happen: `fetch` refuses to send such a request
+  // (`urlCredentials` docstring). The client report already asked the stronger
+  // rule and got the row right, so the two faces disagreed about the same key.
+  // P1-40's own rule — what a pass skips is exactly what a command line refuses
+  // — has to be asked of the same owner here, or the weaker half comes back.
+  const uncheckable = url !== '' && !isCheckableUrl(url);
 
   return {
     verdict: uncheckable ? 'unknown' : verdictFor(value.wasUp),

@@ -6714,3 +6714,72 @@ krav ændret. **Ingen deploy-note** — CLI-repoet deployer ikke.
 rækken. `recordPass` tæller begge tal op og skriver dem med passet, så intet
 DeskUptime skriver kan frembringe det; `counters()` klemmer og reparerer en
 håndredigeret fil næste pass. En test låser den beslutning.
+
+## Status fra denne iteration (98, P1-82 — de to gratis-lister sagde `✅ http://kunde.dk/ (200) · 512 bytes` om en nøgle uden pass kan sende en request til, fire linjer under den linje der siger at intet kan tjekkes)
+
+**Målt først, nul kode ændret.** Rigtig CLI, rigtig `state.json` i en temp HOME, Pro fra
+den gemte licens, **intet HTTP** — nøglen kan slet ikke have et svar. Én nøgle
+`http://demo:pass@kunde.dk/` med `wasUp: true`, `lastStatus: 200`, `checks: 4` og en
+512-bytes indlæsning gav **én kommando, to modsigelser om den samme række**:
+
+```
+Monitored URLs (1):
+  ✅ http://kunde.dk/ (200) · 512 bytes
+⚠️  Cannot be checked — not a site that is down: 1 saved URL has a username and a
+    password in it … No monitored site could be checked on this pass.
+```
+
+`watch --status` gjorde det samme med `✅ up  http://kunde.dk/ (200) @ … · 512 bytes`.
+Tallet `(200)` og de 512 bytes tilhører et pass der aldrig kan ske: P1-71 fastslår at
+ingen request sendes til sådan en adresse, så de er hvad en håndredigeret fil eller en
+kedelig restore tilfældigvis siger. Det er P1-40's fejl i dens anden form — en
+`kunde.dk`-nøgle blev rettet 26/9 ved at spørge den ene ejer af "kan et pass sende en
+request her", men **`readEntry()` spurgte stadig den ældre, svagere `isHttpUrl()`**, som
+*accepterer* en adresse med adgangskoder i. Credentials-reglen kom efter rettelsen, og
+den halvdel der læser, blev ikke gået tilbage til.
+
+**Målingen fandt samtidig at kundenapporten allerede havde det rigtige** —
+`report.js:253` spørger `isCheckableUrl` og skriver `status: 'unknown'`. Så de to
+flader var uenige om den samme nøgle, og de gratis er de to en bruger kører.
+
+**Rettelsen er én kalden, samme form som P1-40:** `readEntry()` spørger nu den ene ejer.
+Den svagere regel er ikke slettet — `isCheckableUrl` er bygget på den — den må bare
+ikke afgøre, hvad en række påstår.
+
+**Efter:** rækken bærer grunden præcis som en `kunde.dk`-række har siden P1-40 —
+`· http://kunde.dk/ (200) — has a username or password in it, so no pass can check it
+— and the password is neither sent nor stored`, og `watch --status` siger `❔ unknown`.
+`kunde.dk` er tegn for tegn uændret; `https://godt.dk/` i samme fil er stadig `✅
+https://godt.dk/ (200) · 512 bytes`, og P1-40's regel overlever den strengere prøve —
+en ubrugelig nøgle tager ikke en sund nabo med. En adgangskode i query'en eller i
+stien (`https://kunde.dk/pw?pass=hunter2`) er ikke et credential, så den række må
+ stadig have et verdikt.
+
+**9 nye tests i `test/credentialrow.test.js`** → **706/706** (697 + 9); audit 0/0;
+`matrix --check` exit 0; `node --check` ren på alle JS; `git diff --check` rent.
+**Tre mutationer målt, alle tre døde:** den svagere regel tilbage (7 fejl), verdiktet
+ladt urørt (7 fejl), `uncheckable`-feltet væk (2 fejl). Den anden mutation vished først
+som 0 fejl, fordi min `sed` ikke matchede det hele udtryk — bekræftet og målt med
+python, samme fælde planen har noteret før.
+
+**Tre fejl i mine egne tests fundet af gaten, ikke formodet:** `readEntry()` tager
+`(entry, { url })` og ikke `{ url, value }`, så min første version læste tomme entries
+og slog fejl på de sunde nøgler; `unknownNote` er altid udfyldt (en læsbar tid giver
+en note om at være læsbar), så låsen måtte hænge på den ene sætning en række aldrig må
+bære; og `https://hunter2:kunde.dk/` *er* et credential — brugernavn alene — så den
+skulle have været på den anden side af låsen, sammen med query- og sti-caset der *er* på
+den rigtige side.
+
+**Målt og fundet samme iteration, endnu ikke rettet — ny opgave øverst i køen.**
+Kundenapportens række siger **`not a full address, so no pass can check it`** om
+`http://demo:pass@kunde.dk/`, og det er **forkert**: `status.js:2662`s egen kommentar
+siger præcis modsat — "`kunde.dk` er ikke en fuld adresse; `http://demo:pass@…` er det
+meget". Årsagen er samme form: `report.js:246` gemmer nøglen som `withoutCredentials(url)`
+*inden* den spørger `unusableUrlNote(..., { brief: true })` om grundformen, så den korte
+note ser en renset adresse og kan ikke skelne. Samme lighed findes i rapportens
+beskrivelseslinje og i resumetælleren (`· 1 not a full address`) og i fodnoten. De tre
+linjer skal have den samme eje af "hvorfor" som terminal-listerne nu har.
+
+**Næste:** ❓ 1–3, ❓ 14 og ❓ 16 afventer Mads. Nye opgaver skal stadig findes ved
+måling. Denne iteration fandt ingen fejl i købsvejen; Denne iteration målte ikke konverteringsrejsen —
+den gjorde målingen i forrige iteration, og det er den næste bør måle videre i stedet.
