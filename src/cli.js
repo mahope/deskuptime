@@ -427,9 +427,23 @@ if (command === 'headers') {
   // client's report, and an empty value used to make it vanish — the site sent
   // the header and the tool said it sent nothing.
   const disclosure = readDisclosure({ server: r.server, poweredBy: r.poweredBy });
+  // And the one fact the walk itself produced: did *another host* answer? `headers`
+  // is the only surface that follows the chain by hand, and it is the one surface
+  // that never asked the owner of that question — measured 2026-09-28, a site
+  // 301ing to a parked page on another host printed `Final: … — redirected` and
+  // exited 0, while `check` on the same URL named the host change. One reading,
+  // asked once, both surfaces, and the same field name `check --json` publishes,
+  // so one rule answers it for a bureau's script.
+  //
+  // `chain.measured` is the bar the five security headers are held to, and it is
+  // the owner's own rule for an unmeasurable reading: a host that never answered
+  // cannot be said to have answered at all. A chain we declined to follow has a
+  // `finalUrl` — the last address we *asked* — so passing it would claim a
+  // crossing nobody saw.
+  const redirect = readRedirectTarget({ url, finalUrl: chain.measured ? r.finalUrl : null });
 
   if (args.includes('--json')) {
-    console.log(JSON.stringify({ ...r, securityChecked: chain.measured, securityEmpty: security.empty, disclosureEmpty: disclosure.empty }, null, 2));
+    console.log(JSON.stringify({ ...r, offHostRedirect: redirect.offHost, securityChecked: chain.measured, securityEmpty: security.empty, disclosureEmpty: disclosure.empty }, null, 2));
     if (!r.healthy) process.exitCode = 2;
   } else if (r.error) {
     console.log(`🧭 ${safeText(url, { max: 0 })}`);
@@ -451,6 +465,12 @@ if (command === 'headers') {
   const finalPart = chain.finalUrlNote
     || `${safeText(r.finalUrl, { max: 0 })} (${r.statusCode || 'n/a'})${r.redirected ? ' — redirected' : ''}`;
   console.log(`   Final: ${finalPart}`);
+  // The owner's sentence, not a fourth description of the same fact: `check`,
+  // both lists, the report row and the alert line all print this one (P1-26/27).
+  // A redirect is still not a failure, so the exit code and the verdict stay.
+  if (redirect.offHost) {
+    console.log(`   ⚠️  ${safeText(redirect.note, { max: 0 })}`);
+  }
   if (!chain.measured) {
     console.log(`   ⬜ ${chain.securityNote}`);
   } else {
