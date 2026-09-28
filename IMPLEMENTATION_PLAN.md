@@ -1,5 +1,5 @@
-> **Seneste:** iteration 99 (P1-83, færdig) — historien står i køens afsnit
-> `P1-83 — FÆRDIG 2026-09-28` lige under `## Prioriteret kø`.
+> **Seneste:** iteration 100 (P1-84, færdig) — historien står i køens afsnit
+> `P1-84 — FÆRDIG 2026-09-28` lige under `## Prioriteret kø`.
 > Afsnittene for 97 og 98 er ældre og ligger henholdsvis øverst og nederst.
 
 ## Status fra denne iteration (97, P1-81 — målebænken skrev i den rigtige `~/.deskuptime`, fordi den gav `runPass` en nøgle, intet læser)
@@ -3402,6 +3402,84 @@ Den aktuelle gate-definition er registreret her:
 - ~~`tools/make_tarball.sh:14` udelader `src/checkers/headers.js`~~ **Rettet i P2-1 del A (2026-09-25), og linjen var forældet her:** scriptet kopierer nu hele `src/`-træet i stedet for en håndlavet filliste, og `test/tarball.test.js` låser det. `tools/install.sh:6` er derimod stadig fastsat til 0.1.4 mod `package.json`s 0.2.8 — en curl-bruger får altså en version tre minorer under npm-versionen, som mangler hele P1-13…P1-24's rettelser; nyeste publicerede `v*-cli` er v0.2.5-cli, så en ny release (❓ 10) er forudsætningen for at lukke det.
 
 ## Prioriteret kø
+
+### P1-84 — FÆRDIG 2026-09-28 (`ceo/closed-door-reason`) — `HTTP 401` var hele forklaringen, også i det dokument et bureau sender til kunden
+
+**Målt først, nul kode ændret.** Rigtig `watch --once` over en rigtig lokal server
+der svarer 200, 401, 403, 429 og 503, derefter den rigtige kundenapport over den
+state-fil passen selv skrev:
+
+```
+| …/401 | DOWN (401) | 0% (1 check, 1 failed) | … |
+**5 site(s) · 1 up · 4 down · 5 checks · 4 failed**
+```
+
+**Tre af de fire fejl var ikke Kundens hjemmeside.** 401 er en staget side bag en
+proxy, 403 er en side under en maintenance-plugin, 429 er et CDN der throttler en
+ukendt user agent. Ingen af dem er et nedbrud, og alle tre læst som ét på
+terminalen, i den DOWN-alarm kunden betaler for, i Pro-webhook-payloaden og i det
+dokument et bureau videresender med 0 % i. Statuskoden er en kendsgerning;
+sætningen bag den manglede, og `HTTP 401` er ingen grund — det er en
+genfindelse af det samme tal to gange.
+
+**Efter:**
+
+```
+baseline recorded: DOWN — HTTP 401 — the site asked for a username and password, so no pass can read it
+baseline recorded: DOWN — HTTP 503                                    ← uændret
+**5 site(s) · 1 up · 4 down · 5 checks · 4 failed · 3 answered with a closed door or a throttle**
+**3 sites answered with a closed door or a throttle rather than a page — the failure above is about access,
+ not about the site being down:** …/401 (HTTP 401 — …); …/429 (HTTP 429 — the site is rate-limiting this monitor …)
+```
+
+**Årsagen er samme fejl som P1-73 og P1-83: tre producenter af én sætning.** `ping.js`,
+`headers.js` og `content.js` skrev hver `HTTP ${status}` selv. Rettelsen er én ejer,
+`httpDownKind` + `httpDownNote` i `src/status.js` — samme form som `unusableUrlKind` og
+`certIssuerBefore`: et *faktum* at forgrene på og en sætning bygget af det, så de tre
+grene ikke kan få hver sin ordlyd. `404` og `5xx` er **ikke** med, med vilje: en side der
+svarer 404 er væk, en server der svarer 500 er brudt, og de beholder den rå kode de altid
+har haft. **`HTTP <kode> — `-præfikset er bevaret**, så en forbruger der matcher på koden
+matcher stadig; kun grunden bag den er ny.
+
+**Kundenapporten tæller fejlen stadig.** Rettelsen forklarer en fejl, den suspenderer
+den ikke: rækken beholder `DOWN (401)`, andelen 0 % og `4 failed` står, for det er sandt
+hvad maskinen så — og det er lige så vigtigt, at grunden er skrevet *under* tabellen, så
+ bureauet ikke fortæller kunden, at hans side er nede. Gruppen bygges af `httpDownNote`,
+ikke af egne ord, så et håndbygget site-objekt med en anden sætning får sin sætning i
+dokumentet (testet). To additive felter i `--json`: `httpDownKind` og `httpDownNote`.
+
+**Acceptkriterier — alle syv opfyldt:**
+
+1. ✅ 401/403/429 siger hver sin grund på `check`, `check --json`, `headers`,
+   `watch --once` (baseline *og* DOWN-transitionen) og i kundenapporten.
+2. ✅ `HTTP <kode> — `-præfikset bevaret; `statusCode` uændret i `--json`; exit 2 uændret.
+3. ✅ 404/5xx er tegn for tegn uændrede på alle flader (målt mod `main`).
+4. ✅ Kundenapporten: rækken, 0 %-andelen og failure-tælleren uændrede; én linje under
+   tabellen med hver sides egen grund + én tæller i resumetælleren.
+5. ✅ `--json` additive: `httpDownKind`, `httpDownNote`; `status`/`statusCode` uændrede.
+6. ✅ Rendererens linje er bygget af ejerenes ord — et håndbygget objekt med en muteret
+   sætning bringer den muterede sætning med i dokumentet.
+7. ✅ 12 nye tests i `test/httpdownreason.test.js` over rigtig lokal server, rigtig CLI,
+   rigtig rapport, intet stubbet.
+
+**Gaten:** **729/729** (717 + 12) på Node 26.7.0 via `tools/run-tests.mjs`; audit 0/0;
+`matrix --check` exit 0; `node --check` ren på alle fem JS; `git diff --check` rent.
+**Tre mutationer målt, alle tre døde:** `httpDownKind` svarer altid null (7 fejl),
+gruppen tager *alle* fejl (3 fejl), `ping.js` tilbage til den rå kode (3 fejl).
+
+**Én eksisterende test låste den gamle løgn og blev rettet, ikke brugt som undskyldning:**
+`test/status.test.js` hævdede `error === 'HTTP 403'` for netop det tilfælde. Den siger
+nu den nye sætning *og* hævder separat, at den stadig starter med `HTTP 403`, så
+"koden er stadig der" ikke kun er en bemærkning.
+
+**Fejl i min egen måling undervejs (to, begge fundet af de nye tests):** den lokale
+server lå i *samme* proces som `execFileSync` i min første bænk, så alle fem sites svarede
+"Request timed out" — en bænkfejl, der så ud som fem produktfejl. Og mine egne assertions
+havde `/closed door/ ` på hele dokumentet, som fodnoten nu også bruger ordene i, så de målte
+metodeteksten i stedet for linjen kunden læser.
+
+**Næste:** ❓ 1–3, ❓ 14 og ❓ 16 afventer Mads. Køen er tømt; nye opgaver skal findes ved
+måling.
 
 ### P1-83 — FÆRDIG 2026-09-28 (`ceo/report-key-reason`) — Kundenapporten kalder en nøgle med adgangskoder "ikke en fuld adresse"
 

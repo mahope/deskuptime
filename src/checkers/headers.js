@@ -10,6 +10,7 @@ import {
   CHAIN_STOP,
   DEFAULT_TIMEOUT_MS,
   describeFetchError,
+  httpDownNote,
   isHealthyStatus,
   readChain,
   readHttpsState,
@@ -151,7 +152,7 @@ export function checkHeaders(url, maxRedirects = 10, options = {}) {
         // Not an `error`: the request did not fail, the *reading* is unfinished,
         // and the sentence naming why comes from `readChain` in the terminal.
         errorType: healthy ? null : (chain.complete ? 'http_error' : 'redirect_incomplete'),
-        error: healthy ? null : (chain.complete ? `HTTP ${r.status}` : null),
+        error: healthy ? null : (chain.complete ? httpDownNote({ statusCode: r.status }) : null),
         forcesHttps: https.forcesHttps,
         startedHttp: https.startedHttp,
         // `?? null`, not `|| null`, for the same reason as the five above: a

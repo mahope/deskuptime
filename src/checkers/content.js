@@ -18,6 +18,8 @@
 
 import crypto from 'crypto';
 
+import { httpDownNote } from '../status.js';
+
 /** Enough for any real page's markup and <title>; far below a memory hazard. */
 export const MAX_CONTENT_BYTES = 2 * 1024 * 1024;
 
@@ -87,7 +89,7 @@ export async function checkContentChange(url, previousHash, { maxBytes = MAX_CON
     if (!response.ok) {
       return {
         fetched: false,
-        error: `HTTP ${response.status}`,
+        error: httpDownNote({ statusCode: response.status }),
         statusCode: response.status,
       };
     }

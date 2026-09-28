@@ -2707,6 +2707,63 @@ export function isHealthyStatus(statusCode) {
 }
 
 /**
+ * The HTTP error statuses whose answer is about *our* access rather than about
+ * the customer's website, as a fact a caller can branch on.
+ *
+ * Measured 2026-09-28, real `watch --once` over a real local server answering
+ * 200, 401, 403, 429 and 503, then the real client report over the state file
+ * that pass wrote. Three of the four failures read identically on every
+ * surface, and the sentence was the status code with a number glued on:
+ *
+ *   | …/401 | DOWN (401) | 0% (1 check, 1 failed) | … |
+ *   **5 site(s) · 1 up · 4 down · 5 checks · 4 failed**
+ *
+ * `HTTP 401` says the site wants a password. The row says the client's website
+ * is down at 0 %, the summary counts it as a failure, and the agency forwards
+ * the document to the customer it is about. A staged site behind a proxy, a
+ * WordPress page still under a maintenance plugin, a CDN in front of a site
+ * that rate-limits unknown user agents — three everyday situations that read as
+ * an outage, and none of them is a measurement of the customer's site.
+ *
+ * `404` and `5xx` are deliberately *not* here. A page that answers 404 is gone,
+ * and a server that answers 500 is broken; those are the site, and they keep
+ * the plain code they have always printed.
+ */
+export function httpDownKind(statusCode) {
+  switch (statusCode) {
+    case 401:
+      return 'auth-required';
+    case 403:
+      return 'not-allowed';
+    case 429:
+      return 'rate-limited';
+    default:
+      return null;
+  }
+}
+
+/**
+ * Why a pass failed, when the reason is our access and not the site — the one
+ * sentence every surface asks, so the terminal, the watch alert, the Pro webhook
+ * payload and the client report cannot each word the same closed door
+ * differently.
+ *
+ * The `HTTP <code> — ` prefix is kept, character for character, so the code
+ * stays in `check --json` and in every sentence that already printed it; only
+ * the reason behind it is new. A status with no such reason returns the code on
+ * its own, which is what every other status has always said.
+ */
+export function httpDownNote({ statusCode } = {}) {
+  const code = Number.isInteger(statusCode) ? `HTTP ${statusCode}` : 'HTTP error';
+  const reason = {
+    'auth-required': 'the site asked for a username and password, so no pass can read it',
+    'not-allowed': 'the site refused this request, so no pass can read it',
+    'rate-limited': 'the site is rate-limiting this monitor, so the check was throttled',
+  }[httpDownKind(statusCode)];
+  return reason ? `${code} — ${reason}` : code;
+}
+
+/**
  * `undici`'s two sentences for a request it refuses to *send*, because the
  * address has credentials in it — and the only sign the caller gets that a
  * redirect pointed at one.

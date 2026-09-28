@@ -6,6 +6,7 @@
 import {
   DEFAULT_TIMEOUT_MS,
   describeFetchError,
+  httpDownNote,
   isHealthyStatus,
 } from '../status.js';
 
@@ -48,7 +49,7 @@ function toHttpResult(response, start) {
 
   if (!result.healthy) {
     result.errorType = 'http_error';
-    result.error = `HTTP ${response.status}`;
+    result.error = httpDownNote({ statusCode: response.status });
   }
 
   return result;

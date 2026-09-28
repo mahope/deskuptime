@@ -276,7 +276,14 @@ test('check: a 403 that survives the GET retry is still DOWN', async (t) => {
   assert.equal(reachability.healthy, false);
   assert.equal(reachability.statusCode, 403);
   assert.equal(reachability.errorType, 'http_error');
-  assert.equal(reachability.error, 'HTTP 403');
+  // The code is still the first thing in the sentence, so a consumer that
+  // matched on `HTTP 403` keeps matching; the reason behind it is what the
+  // agency needed and did not get (measured 2026-09-28 — P1-84).
+  assert.equal(
+    reachability.error,
+    'HTTP 403 — the site refused this request, so no pass can read it',
+  );
+  assert.match(reachability.error, /^HTTP 403\b/);
   // The retry is what makes 403 worth having in the set: the GET answer decides.
   assert.deepEqual(methods, ['HEAD', 'GET']);
 });
