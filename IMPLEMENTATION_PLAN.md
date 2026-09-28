@@ -1,6 +1,90 @@
-> **Seneste:** iteration 102 (P1-88, færdig) — historien står i køens afsnit
-> `P1-88 — FÆRDIG 2026-09-28` lige under `## Prioriteret kø`.
+> **Seneste:** iteration 103 (P1-87, færdig) — historien står i køens afsnit
+> `P1-87 — FÆRDIG 2026-09-28` lige under `## Prioriteret kø`.
 > Afsnittene for 97 og 98 er ældre og ligger henholdsvis øverst og nederst.
+
+## Status fra denne iteration (103, P1-87 — målebænken målte et certifikat der ikke var udløbet, og kaldte det et udløbet)
+
+**Målt først, nul kode ændret.** Alle ni tilstande i `tools/measure-surfaces.mjs`
+kørt, alle fire flader læst i hver — den måling P1-87 bad om. **Otte af ni nåede
+den tilstand de er navngivet efter. Den niende nåede den ikke:**
+
+```
+ssl-lapsed-since-pass  (sslValidDays: 9, lastChecked 5 d ago)
+  status:   ✅ … (200) — SSL ⚠️ 9d — renew soon ⚠️ stale — last check 5 d ago
+  rapport:  | … | UP (200) ⚠️ stale — last check 5 d ago | … | ⚠️ 9 d — renew soon | … |
+  resume:   **1 site(s) · … · 1 SSL expiring soon · 1 stale (no check in the last 2 d)**
+```
+
+**Et certifikat med 9 dage tilbage, læst for 5 dage siden, har 4 dage tilbage.**
+Deadline var ikke overskredet, så P1-79's `mayHaveExpired`-gren blev aldrig
+indgået. De fire flader var enige — og enigheden var om den *almindelige*
+"renew soon"-vej. En iteration af "læs alle fire flader i hver tilstand" kunne
+altså ikke have læst den gren, og dens negative resultat var en kendsgerning om
+en anden fil. Det er P1-81's anden slags løgn: et instrument der ikke kan se
+sin egen måling.
+
+**Efter** — tilstanden er `2 d` tilbage læst `5 d` siden, så fristen røg 3 dage
+forinden, og alle fire flader siger ejeren ordret:
+
+```
+  status:   ✅ https://kunde.dk/ (200) — SSL 🔴 may be expired — last reading: 2 d left, checked 5 d ago
+  rapport:  | … | 🔴 may be expired — last reading: 2 d left, checked 5 d ago | … |
+  resume:   **1 site(s) · … · 1 SSL may be expired · 1 stale (no check in the last 2 d)**
+  json:     "sslMayHaveExpired": true, "sslExpiringSoon": false
+```
+
+**Ingen produktregel flyttede sig** — P1-79 var rigtig; den var aldrig nået. Og
+den er stadig ikke en fornyelse at planlægge: den tælles i `SSL may be expired`
+og **ikke** i `SSL expiring soon`, fordi en lapset læsning er en læsning der skal
+tages igen, ikke en frist der endnu er i fremtiden.
+
+**Rettelsen er i instrumentet, fordi instrumentet var fejlen.** Hver tilstand
+bærer nu `expect`: en funktion af den entry bænken skrev, formuleret som den
+regnestykke navnet påstår — N dage tilbage læst D dage siden er udløbet kun når
+N − D ≤ 0. Bænken tjekker den **før** den printer en eneste flade, siger
+hvad der mangler i præcis de ord, og **exit 1**. Fladerne printes stadig: det er
+ målt, ikke at nægte at måle.
+
+**Acceptkriterier — alle syv opfyldt:**
+
+1. ✅ Hver af de ni tilstande har et `expect`, og bænken exit 0 på alle ni.
+2. ✅ En tilstand der ikke måler sit eget navn melder det og exit 1 (målt ved at
+   sætte `sslValidDays` tilbage til `9`: exit 1 + *"the certificate still has
+   4.0 d to run after the pass"*).
+3. ✅ Fladerne printes stadig, også når tilstanden er forkert målt — målt på
+   mutanten ovenfor.
+4. ✅ Den lapsede gren nås på alle fire flader med ejerens egen sætning.
+5. ✅ `SSL may have expired` i resumet, `SSL expiring soon` **ikke**.
+6. ✅ `sslMayHaveExpired: true` og `sslExpiringSoon: false` i `--json`.
+7. ✅ 3 nye tests i `test/benchstates.test.js`; scenarierne læses af bænken selv
+   (ukendt navn → dens egen liste), ikke ved at scanne dens kildekode.
+
+**Gaten:** **735/735** (732 + 3) på Node 26.7.0 via `tools/run-tests.mjs`; audit
+0/0; `matrix --check` exit 0; `node --check` ren på alle JS; `git diff --check`
+rent. **To mutationer målt, begge døde:** `sslValidDays: 2` → `9` (2 fejl, præcis
+den fejl denne opgave fjerner) og guarden `process.exit(notReached ? 1 : 0)` →
+`process.exit(0)` (1 fejl).
+
+**Én fejl i min egen test, fundet af gaten:** jeg delte bænkens fire flader på
+første ord, så `report --json` svarede for `report` — den søgte efter
+`sslMayHaveExpired: true` i den Markdown, den ikke kunne finde. Nøglerne er nu
+hele labelen, og testen hævder de fire nøgler i rækkefølge, så et nyt
+overlappende label ikke kan skjule sig igen.
+
+**P1-86 er samtidig besvaret, målt i samme kørsel** (kandidat 1 i køen):
+`node tools/measure-surfaces.mjs clock-ahead` giver
+`✅ https://kunde.dk/ (200) — SSL 89d ⚠️ 19 d ahead of this machine's clock` på
+`status` og `✅ up … @ 2026-10-17T… ⚠️ 19 d ahead of this machine's clock` på
+`watch --status`. **Beslutning: ✅ + advarsel er den valgte form, og den er
+begrundet, ikke tilfældig.** P1-7's lås siger at listerne *ikke må beslutte
+selv* — en liste der lægger et nyt mærke på ud fra en urfejl, beslutter selv om
+et pass fandt sted, og det er præcis det P1-26/P1-27/P1-60/P1-65/P1-66/P1-75
+har lukket hver især. Det samme gælder `stale`: rapporten tæller et gammelt pass
+uden for `up` (P1-6) og listerne skriver alligevel det gemte ✅ med alderen ved
+siden. `ahead` arver den behandling, og P1-85 gjorde rapportens tælling til
+første regel. Ingen lister har nogen tæller, så ingen af dem kan tælle et pass
+foran uret som "op" — det var den eneste måde P1-86 kunne have været en løgn,
+og den findes ikke.
 
 ## Status fra denne iteration (102, P1-88 — GitHub Actionens summary skrev `❌ DOWN | 401` og lod nummeret være forklaringen)
 
@@ -3583,26 +3667,30 @@ talt som `1 up` — mod dokumentets egen definition af `up`. Nu en sjette spand
 (`ahead`), rækken beholder sit `UP (200)`, og P1-6's låse blev opdateret uden at
 slækkes. Deploy-note ikke nødvendig: CLI-repo uden live-deploytarget.
 
+### P1-87 — FÆRDIG 2026-09-28 (`ceo/bench-lapsed-state`) — målebænken målte et certifikat med fire dage tilbage og kaldte det udløbet
+
+Historien står i afsnittet øverst. Kort: ni tilstande læst på alle fire flader,
+den niende nåede ikke den tilstand den er navngivet efter (`9 d` tilbage læst
+`5 d` siden = 4 dage endnu at løbe), så P1-79's lapsede-gren var aldrig læst.
+Nu bærer hver tilstand sit eget `expect` i regnestykke, bænken siger hvad der
+mangler og exit 1. Fladerne printes stadig. Deploy-note ikke nødvendig
+(CLI-repo uden live-deploytarget).
+
 ### Kandidater fra målingen i iteration 101 — målt grundlag, ikke gæt
 
-Rækkefølgen er efter hvad der griber flest brugere. Ingen er startet; alle er
-`I GANG`-fri, så næste iteration tager nr. 1.
+Rækkefølgen er efter hvad der griber flest brugere. Kandidater 1 og 2 er
+lukket 2026-09-28 (se afsnittet øverst); nr. 4 er åben.
 
-1. **P1-86 — De to gratislister tæller ikke et pass foran uret, men skriver
-   stadig `✅`.** Målt i samme kørsel: `status` → `✅ https://kunde.dk/ (200) …
-   ⚠️ 19 d ahead` og `watch --status` → `✅ up … @ 2026-10-17 … ⚠️ 19 d ahead`.
-   Advarslen er der, så det er ikke en løgn i samme forstand som rapportens var,
-   men P1-6's lås siger eksplicit *"the recorded verdict is not rewritten"* for
-   listerne, så det her er en **beslutning, ikke en fejl**: skal en forkert ure
-   give et andet mærke end ✅ på de to lister, eller står ✅ + advarsel?
-   **Acceptkriterium:** enten en målt beslutning skrevet her, eller ét
-   adfærdstest-lås der bekræfter at ✅ + advarsel er den valgte form.
-2. **P1-87 — Sytten af bænkens tilstande er ulæste.** `tools/measure-surfaces.mjs`
-   har otte håndskrevne tilstande; kun `clock-ahead` er læst siden P1-77.
-   Kør `cert-issuer-change`, `content-changed-old-read`, `healthy`,
-   `ssl-lapsed-since-pass`, `ssl-expired-at-pass`, `slow-old-page` og læs alle
-   fire flader i hver. **Acceptkriterium:** for hver tilstand enten en bekræftelse
-   på at alle flader er enige, eller en målt fejl med de to sætninger side om side.
+1. ~~**P1-86 — De to gratislister tæller ikke et pass foran uret, men skriver
+   stadig `✅`.**~~ **BESVARET 2026-09-28 (se afsnittet øverst):** ✅ + advarsel er
+   den valgte form. P1-7's lås siger at listerne ikke må beslutte selv, `stale`
+   har præcis samme behandling (P1-6), ingen af listerne har en tæller der
+   kunne tælle et umuligt pass som "op", og rapporten — den eneste flade med en
+   tæller — gør P1-85's regel. Ingen kode ændret, ingen ny påstand.
+2. ~~**P1-87 — Sytten af bænkens tilstande er ulæste.**~~ **FÆRDIG 2026-09-28**
+   (se afsnittet øverst). De ni er læst; otte nåede deres navngivne tilstand, den
+   niende (`ssl-lapsed-since-pass`) nåede ikke sin, og bænken tjekker nu det
+   selv og exit 1, hvis en tilstand ikke måler hvad den hedder.
 3. ~~**P1-88 — GitHub Action'en har sin egen status-renderer og kender ingen
    lukket dør.**~~ **FÆRDIG 2026-09-28** (se afsnittet over dette). Målt kilde: `action.yml` skriver `❌ DOWN` + rå `statusCode` i
    job-summary'en og tæller 4xx/5xx i `down-count`, mens CLI'en siden P1-84 siger

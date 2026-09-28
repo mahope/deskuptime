@@ -23,6 +23,8 @@ import { tempHome } from '../test/helpers/env.mjs';
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const CLI = join(ROOT, 'src', 'cli.js');
 
+const DAY_MS = 86_400_000;
+
 function hoursAgo(n) {
   return new Date(Date.now() - n * 3600_000).toISOString();
 }
@@ -30,7 +32,23 @@ function daysAgo(n) {
   return hoursAgo(n * 24);
 }
 
-/** The scenarios: one state file each, described by the fact under test. */
+/** Whole days between an ISO stamp and now, as a float — the reader's arithmetic. */
+function daysSince(iso, now) {
+  return (now.getTime() - Date.parse(iso)) / DAY_MS;
+}
+
+/** The scenarios: one state file each, described by the fact under test.
+ *
+ * P1-87: each scenario also carries `expect` — a function of the entry the bench
+ * wrote and `now`, returning `null` when the file really is in the state its
+ * name claims, or a sentence saying why it is not. A bench that quietly measures
+ * the wrong state is worse than no bench: P1-79's lapsed-certificate branch was
+ * never actually reached by `ssl-lapsed-since-pass`, because a certificate with
+ * 9 days left that was read 5 days ago still had 4 days to run — so four
+ * surfaces were measured against the *ordinary* "renew soon" path for a whole
+ * iteration and read as agreeing. The arithmetic is written here, in the bench,
+ * out of the values it wrote, so the reader is told rather than left to spot it.
+ */
 const SCENARIOS = {
   // A site whose *last pass* succeeded but which has since been redirected to
   // another host. The pass wrote `lastFinalUrl`; who says so out loud?
@@ -43,6 +61,9 @@ const SCENARIOS = {
       lastFinalUrl: 'https://parket.example/',
       sslValidDays: 89,
     },
+    expect: (e, now) => (e.lastFinalUrl && new URL(e.lastFinalUrl).host !== new URL(e.url).host
+      ? null
+      : `lastFinalUrl (${e.lastFinalUrl}) is on the same host as the URL`),
   },
   // A site whose certificate was replaced and whose authority changed hands.
   'cert-issuer-change': {
@@ -60,6 +81,9 @@ const SCENARIOS = {
       lastCertFingerprint: 'aa:bb:cc',
       certRotationCount: 1,
     },
+    expect: (e, now) => (e.sslIssuer && e.certIssuerBefore && e.sslIssuer !== e.certIssuerBefore
+      ? null
+      : `the two issuers are the same string (${e.sslIssuer} / ${e.certIssuerBefore})`),
   },
   // A pass recorded a moment ago, but the *page* was last read days ago and it
   // has been changed since. Who says the page changed?
@@ -75,6 +99,9 @@ const SCENARIOS = {
       lastContentLength: 4096,
       lastContentChangedAt: daysAgo(5),
     },
+    expect: (e, now) => (e.lastContentChangedAt && daysSince(e.lastContentReadAt, now) > 2
+      ? null
+      : 'the page was read on the last pass, so there is no old reading to report'),
   },
   // Every measured fact at once, all current.
   healthy: {
@@ -90,18 +117,26 @@ const SCENARIOS = {
       sslValidDays: 89,
       sslIssuer: 'Ganske Cloud A/S',
     },
+    expect: (e, now) => (daysSince(e.lastChecked, now) < 1 && daysSince(e.lastContentReadAt, now) < 1
+      ? null
+      : 'the pass, or the page reading, is not from the last day'),
   },
-  // The pass read a certificate with 9 days left, but that was 5 days ago. The
-  // deadline has passed since. The free lists own a `mayHaveExpired` reading —
-  // does the paid one?
+  // The pass read a certificate with 2 days left, but that was 5 days ago: the
+  // deadline passed 3 days ago. The free lists own a `mayHaveExpired` reading —
+  // does the paid one? (P1-87: this was `9 d left` read `5 d ago`, which still
+  // had 4 days to run and so never reached the branch it was named for.)
   'ssl-lapsed-since-pass': {
     'https://kunde.dk/': {
       url: 'https://kunde.dk/',
       wasUp: true,
       lastStatus: 200,
       lastChecked: daysAgo(5),
-      sslValidDays: 9,
+      sslValidDays: 2,
       sslIssuer: 'Ganske Cloud A/S',
+    },
+    expect: (e, now) => {
+      const left = e.sslValidDays - daysSince(e.lastChecked, now);
+      return left <= 0 ? null : `the certificate still has ${left.toFixed(1)} d to run after the pass`;
     },
   },
   // The pass measured the certificate as already expired.
@@ -116,6 +151,7 @@ const SCENARIOS = {
       sslExpiredDays: 3,
       sslIssuer: 'Ganske Cloud A/S',
     },
+    expect: (e, now) => (e.sslValidDays < 0 && e.sslExpired ? null : 'the certificate is not expired at the pass'),
   },
   // A pass time ahead of this machine's clock.
   'clock-ahead': {
@@ -123,9 +159,12 @@ const SCENARIOS = {
       url: 'https://kunde.dk/',
       wasUp: true,
       lastStatus: 200,
-      lastChecked: new Date(Date.now() + 19 * 86_400_000).toISOString(),
+      lastChecked: new Date(Date.now() + 19 * DAY_MS).toISOString(),
       sslValidDays: 89,
     },
+    expect: (e, now) => (Date.parse(e.lastChecked) > now.getTime()
+      ? null
+      : 'the pass is not dated ahead of this machine\'s clock'),
   },
   // A site that stopped being watched, with a DOWN verdict from its last pass.
   'stale-down': {
@@ -137,6 +176,9 @@ const SCENARIOS = {
       checks: 412,
       checksUp: 400,
     },
+    expect: (e, now) => (daysSince(e.lastChecked, now) > 2 && e.wasUp === false
+      ? null
+      : 'the site is not a stopped loop with a DOWN verdict'),
   },
   // Response time recorded, and a page read long ago that has *not* changed.
   'slow-old-page': {
@@ -154,6 +196,9 @@ const SCENARIOS = {
       checks: 100,
       checksUp: 100,
     },
+    expect: (e, now) => (daysSince(e.lastContentReadAt, now) > 2 && daysSince(e.lastChecked, now) < 1
+      ? null
+      : 'the page reading is not older than the pass that is fresh'),
   },
 };
 
@@ -206,6 +251,22 @@ writeFileSync(
 );
 
 console.log(`\n### scenario: ${name}\n`);
+
+// The scenario's name is a claim about the file the bench just wrote, so the
+// bench checks it before anyone reads a single surface. A scenario that does
+// not measure what it is called is still measured and still printed — the
+// reading may be worth having — but it is reported as the wrong measurement and
+// the process exits non-zero, so neither a human nor `npm test` can read four
+// agreeing surfaces as proof about a state that was never reached.
+const notReached = typeof state.expect === 'function'
+  ? Object.values(state).filter(entry => entry && typeof entry === 'object')
+    .map(entry => state.expect(entry, new Date()))
+    .find(why => why)
+  : 'the scenario declares no `expect`, so nothing says what it measures';
+if (notReached) {
+  console.log(`⚠️  scenario "${name}" does not measure what its name says: ${notReached}\n`);
+}
+
 for (const [label, args] of [
   ['status', ['status']],
   ['watch --status', ['watch', '--status']],
@@ -218,3 +279,5 @@ for (const [label, args] of [
   if (r.err.trim()) console.log(`[stderr] ${r.err.trim()}`);
   console.log('');
 }
+
+process.exit(notReached ? 1 : 0);
