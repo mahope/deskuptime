@@ -1,8 +1,53 @@
-> **Seneste:** iteration 108 (P1-93, færdig) — historien står i køens afsnit
-> `P1-93 — FÆRDIG 2026-09-28` lige under `## Prioriteret kø`. Næste opgave er
-> `P1-94`: mål de fixtures, der endnu har et fast ur.
+> **Seneste:** iteration 109 (P1-94, færdig) — historien står i køens afsnit
+> `P1-94 — FÆRDIG 2026-09-28` lige under `## Prioriteret kø`. Næste opgave er en
+> ny målt opgave: køen er tømt for målte kandidater igen.
 
-## Status fra denne iteration (106, P1-91 — det gratis værktøj havde ingen sted at sige tak, fordi ingen kommando nogensinde skrev donationslinket ud)
+## Status fra denne iteration (109, P1-94 — to filers ur gik ikke røde, men en Pro-licens gjorde)
+
+**Målt først, og målingen var to gange min fejl.** P1-94 sagde "syv filer med et
+fast ur, mål hvilke der går røde". Jeg målede alle syv i stedet for at tro på
+tallet, og min egen måle-bygning var rød to gange før den var rigtig: en regex
+der flyttede `2026-09-25T23:30` men ikke dagenøglen `'2026-09-25'` den blev
+påstandt mod, og en der skrev sekunderne to gange. Begge opførte fejl der ikke
+eksisterede (56 af dem i det første tilfælde). Begge blev kastet væk efter
+måling, som i P1-92 og P1-93.
+
+**Svaret er to filer, ikke syv, og årsagen er ikke den forudsåede.** Ikke en
+sætning hvis alder driver — det var P1-93's fejl. En **Pro-licens der falder ud
+af sin 7-dages nådeperiode**: `src/license.js` ager `validatedAt` mod væggens ur,
+så et state-fil med et fast tidspunkt giver den rigtige `report` en licens der
+holder til dag syv. Det ligner ikke en alder, fordi rapporten aldrig produceres:
+exit 1, tom stdout.
+
+**Den anden fejl lå i samme fil og var en anden slags dør** — `lastChecked` også
+fast, så passen faldt uden for det `--days 7`-vindue, testen selv beder om, og
+rapporten skrev den sætning, linje 357 siger den ikke må indeholde.
+
+**Reglen under begge er målt, ikke opfundet:** et stempel som en børneproces
+ager skal være maskinens ur. Det er den eneste forskel på de syv filer — de fem
+grønne håndterer licensen til `buildReport`, som ikke læser `state.license`.
+
+**Det vigtigste fund er dog låsen, ikke fejlene.** Fire mutationer døde, som
+forventet. Den femte — `validatedNow()` sat til et fast tidspunkt — **overlevede
+alle fire målinger**, fordi et fast tidspunkt skrevet i dag stadig er inden for
+vinduet i dag. Låset var dødt indtil det udløb, præcis som de fejl det låser.
+Begge hjælpere fik derfor et drift-lås (målt: 15 605 161 ms), og så døde den
+femte mutation med.
+
+**Gaten:** **761/761** på Node 26.7.0 (759 + 2); `matrix --check` exit 0; audit
+0/0; `node --check` ren; `git diff --check` rent. **Ingen fil i `src/` rørt** —
+fire filer, alle i `test/`. CI var grøn på `main` før start (ét kald).
+
+**Deploy-note ikke nødvendig:** CLI-repo uden live-deploytarget.
+
+**Åbent punkt, bevidst ikke taget nu:** de to mutationer der døde, døde på
+*navn* — låset i `de to filer der blev målt røde henter licensen fra ejeren`
+tjekker importen og feltet. En ny fil med samme sygdom, som ingen scanner kender,
+ville gå fri. Det er den blinde plads P1-92 og P1-93 også lod ved, og den er
+bevidst: en regex-scanning af `test/` træfjer om de tyve filer der med vilje giver
+læser og skriver samme ur. Se ❓ 18.
+
+## Status fra tidligere iteration (106, P1-91 — det gratis værktøj havde ingen sted at sige tak, fordi ingen kommando nogensinde skrev donationslinket ud)
 
 **Målt først, nul kode ændret.** Køen var tømt for målte kandidater, så
 iterationen begyndte med en måling — og målingen var ikke en fejl men en
@@ -4077,18 +4122,106 @@ for ved kaldet (2 fejl, rækkerne får `ahead of this machine's clock` igen).
 
 **Deploy-note ikke nødvendig:** CLI-repo uden live-deploytarget.
 
-### P1-94 — NÆSTE — mål de tidsstemplede fixtures, der endnu står med et fast tidspunkt
+### P1-94 — FÆRDIG 2026-09-28 (`ceo/license-clock`) — to filers ur gik ikke røde, men en Pro-licens gjorde
 
-De 20 filer P1-93 bevidst lod stå, har hver sin begrundelse (samme `now` til
-læser og skriver), og det er ikke målt endnu hvilke af dem der på en dag
-skal have et fast ur. Den næste iteration skal **måle** det — ikke regex-scane
-det: samme metode som P1-93, en rigtig kommando på to forankringer, og en fil
-der kan bevise at den er grøn. Kandidater med et fast ur *og* en børneproces:
-`history` (NOW 25/9), `report` (NOW 25/9), `statusline` (NOW 26/9),
-`contentchange` (NOW 27/9), `httpdownreason` (06:00), `reportkeyreason` (06:00),
-`certrotationcount` (27/6). `certrotationcount` er grønt siden juni med et ur
-fra 27/6, så ur-et alene er ikke nok til at røde — målingen skal finde den anden
-faktor, ellers er denne opgave lukket som `BLOCKED: ikke målt`.
+**Målt først, nul kode ændret.** Køen havde P1-94 som `NÆSTE`, og den havde en
+forudsigelse: syv filer med et fast ur, der en dag skulle blive røde. Jeg målte
+alle syv i stedet for at tro på den.
+
+**Målemetoden er P1-93's, kørt med vilje.** Et fixture med et fast tidspunkt
+adfører sig i dag præcis som det vil gøre N dage frem, fordi uret er flyttet. Så
+jeg byggede en kopi af træet, hvor **alle** ISO-literaler i hver fil er flyttet
+N dage tilbage, og kørte den rigtige testfil. Første forsøg var **min egen måling,
+ikke koden**: et regex der skiftede `2026-09-25T23:30` men ikke dagenøglen
+`'2026-09-25'` den blev påstandt mod, og opførte 56 fejl der ikke eksisterede.
+Andet forsøg skrev sekunderne to gange. Begge blev kastet væk efter måling. Den
+tredje flytter dato og klokkeslæt sammen, fordi et frosset fixture *alle* sine
+literaler har stående fast.
+
+**Resultatet er ikke syv, det er to.** Svine over horisonten:
+
+```
+              +1d  +7d  +30d  +90d  +365d
+history          0    1     1     1      1
+reportkeyreason  0    1     1     1      1
+statusline       0    0     0     0      0
+contentchange    0    0     0     0      0
+httpdownreason   0    0     0     0      0
+certrotationcount 0    0     0     0     0
+```
+
+**Og årsagen er ikke den, planen forudså.** Ikke en sætning hvis alder driver,
+men **en Pro-licens der falder ud af sin 7-dages nådeperiode**. `src/license.js`
+holder en valideret Pro-status i `OFFLINE_GRACE_MS` (7 dage), så en licensserver
+der er nede aldrig låser en betalende kunde ude, og det ager `validatedAt` mod
+**væggens ur**. Et state-fil med et fast tidspunkt giver derfor den rigtige
+`report` en licens der holder til dag syv:
+
+```
+$ deskuptime report
+❌ Error: the client report needs an active Pro license. This machine is
+   unverified with the license server (not verified for 10 days; …)
+```
+
+Det ligner ikke en alder, fordi **rapporten aldrig produceres** — exit code 1 og
+tom stdout. En test der kiggede på output ville ikke have set noget.
+
+**Den anden fejl lå i samme testfil og var en anden slags dør.** `history.test.js`
+skrev også `lastChecked: NOW.toISOString()` i sit state-fil. Fra dag otte faldt
+passen *uden for det `--days 7`-vindue, testen selv beder om*, og rapporten
+skrev `— (no pass in the last 7 d)` — den sætning linje 357 siger den **ikke**
+må indeholde. Rapporten havde ret; fixture'et var en udløbet fiktion.
+
+**De fem grønne er korrekte, og det er værd at vide hvorfor.** De håndterer
+licensen til `buildReport`, som per sit eget kontrakt slet ikke læser
+`state.license` (src/report.js:152). Et fast `now` til en in-process læser er
+determinisme købt med vilje. Så reglen under begge fejl er den samme og er
+målt, ikke opfundet: **et stempel som en børneproces ager skal være maskinens
+ur.** Den er den eneste forskel på de syv.
+
+**Rettelsen ligger i én delt ejer.** `test/helpers/clock.mjs` fik
+`validatedNow()` og `checkedNow()`, som begge stempler ved kaldet. `NOW` ligger
+fast i begge filer, fordi `buildReport` får den som `{ now }` — de to ure er
+med vilje forskellige, og skellet er rettelsen.
+
+**Acceptkriterier — alle syv opfyldt:**
+
+1. ✅ De to målt røde filer er grønne ved **+1, +7, +30, +90 og +365 dage**,
+   målt med den samme måling der fandt dem (var 1/1 fra +7d).
+2. ✅ Syv filer målt, to fundet — ikke de syv planen forudså.
+3. ✅ `certrotationcount` er målt til +365d og **stadig grøn**: den anden faktor
+   findes ikke. Den er korrekt, ikke uafklaret — lukket som besvaret, ikke
+   `BLOCKED`.
+4. ✅ Låset er en måling: `test/clockgate.test.js` kører den rigtige `report` på
+   fire licenser der kun adskiller sig i forankringen, og fejler med exit code og
+   kommandoens egen sætning.
+5. ✅ Nådevinduet er målt fra **produktets** konstant, ikke hardkodet: 6 d → exit
+   0, 8 d → exit 1.
+6. ✅ `checkedNow()` er låst på den test der kører kommandoen, ikke med et
+   forbud mod `NOW` i hele filen — `history.test.js:285` har to sites med fast
+   `lastChecked` og er korrekt, fordi den læser er in-process.
+7. ✅ Gaten grøn: **761/761** (759 + 2 nye); `matrix --check` exit 0; audit 0/0;
+   `node --check` ren på alle fire filer; `git diff --check` rent. **Ingen fil i
+   `src/` rørt.**
+
+**Fem mutationer målt, fire døde og den femte afdøde låsen:**
+
+| mutation | dør? |
+|---|---|
+| `reportkeyreason` tilbage til fast `validatedAt` | ✅ 1 fejl |
+| `history`'s `lastChecked` tilbage til `NOW` | ✅ 1 fejl |
+| `OFFLINE_GRACE_MS` → 0 | ✅ 1 fejl |
+| `validatedNow()` → fast tidspunkt | ❌ **0 fejl** — overlevede alt |
+| `checkedNow()` → fast tidspunkt | ❌ **0 fejl** — overlevede alt |
+
+**Den fjerde mutation overlevede, og det er den interessante.** Alle fire
+målinger ovenfor består, fordi et fast tidspunkt *skrevet i dag* stadig er
+inden for vinduet *i dag* — låset var dødt indtil det udløb, præcis som de fejl
+det låser. Derfor fik begge hjælpere et drift-lås på samme måde som `ANCHOR`
+har det i P1-93: stemplet skal ligge mindre end 60 s fra maskinens ur. Med det
+døde M4 og M5 begge, med drift-tallet i fejlteksten (15 605 161 ms).
+
+**Deploy-note ikke nødvendig:** CLI-repo uden live-deploytarget.
 
 ### P1-91 — FÆRDIG 2026-09-28 (`ceo/thanks-free-list`, `81e97a7`) — det gratis værktøj havde ingen sted at sige tak
 
@@ -6733,6 +6866,8 @@ for selv. Ingen gemt nøgle er omskrevet, ingen eksisterende adgangsd tilstand
 0. **Skal `src/features.js` også være source of truth for siten og det private desktoprepo?** Matrixen er nu én fil i dette repo, og den private desktop-app plus `deskuptime.com` har hver deres egen matrix. Hvis de skal følge med automatisk, er vejen et lille public npm-pakke (`@mahope/product-matrix`) som alle tre repoer importerer. Uden beslutning fortsætter de to andre overflader med at være håndskrevne — og det er præcis den drift, del A lukker her.
 
 17. **⚠️ Min `~/.deskuptime/state.json` og `history.json` er væk, og det er min skyld — to gange.** P1-81 (iteration 97) fandt, at `tools/measure-e2e.mjs` skrev begge filer i den **rigtige** home i stedet for sin egen midlertidige, fordi den gav `runPass` en `home`-nøgle, mens kun `env` flytter filerne. Det skete kl. 05:01 den 28. september under min egen kørsel af bænken. **Så slettede min egen test dem kl. 05:05:** den første version af den nye `test/benchhome.test.js` tog `process.env.HOME` som sit "ambient"-mål og kaldte `rmSync` på det, og fordi jeg kørte mutationerne med `node --test` direkte i stedet for gaten, var det den rigtige home. Det er præcis den ulykke P1-58 blev bygget for at lukke, genindført i den iteration der lagde en lås på den. **Mappen `~/.deskuptime` er tom lige nu.** Filerne kan ikke genskabes herfra; licensnøgle og overvågningsliste skal genskabes med `deskuptime activate <key>` og `deskuptime watch <url>`, og `history.json` bygger sig selv op igen over de næste 30 døgn. **Jeg har ikke gjort det for dig** — det er din maskine og din licens, og du skal vide at den er væk, før du opdager det ved næste `deskuptime status`. Den endelige kode er sikker (testen bruger sin egen `tempHome`), og fejlen er rettet og låst med tre tests, inklusive den der *kører bænken under en observeret HOME* — men skaden kan ikke fortrykkes.
+
+18. **Skal låset på ur-drift udvides til at finde *nye* filer med samme sygdom?** P1-94 lod målingen vise, at kun to af syv kandidater gik røde, og låste dem på navn — to mutationer døde på importen, ikke på adfærd. Låset kan altså ikke se en fil, der endnu ikke findes, med et fast ur i et state-fil, den kører en børneproces på. Jeg lod bevidst en regex-scanning ligge: den ville råbe om de tyve filer, der med vilje giver læser og skriver samme øjeblik, og P1-92 og P1-93 har begge skrevet den og kastet den væk efter måling. **Spørgsmålet er om det kan løses uden falske alarmer** — måske ved at køre hver testfil to gange med forskudt `TZ` frem for forskudt ur, fordi et ur-bundet ur kun fejler på *døgnkrydsninger*, ikke på urets stilling.
 
 1. Hvad er den endelige gratis/Pro-matrix? Skal desktoptray og lokale notifications være gratis, eller kun Pro? README, kode og mission peger i dag i forskellige retninger.
 2. Skal Pro email og Slack/Discord/Teams implementeres nu, eller skal de forblive uden for matrixen, indtil de er bygget? P0-5 har fjernet dem fra alle overflader i dette repo og noteret dem som ikke-implementeret; **live-siten `deskuptime.com` hævder stadig email for Desktop Pro**, og rettelsen ligger uden for dette repo (P0-12 er `BLOCKED`). Svar på spørgsmålet afgør både næste CLI-opgave og sitens claim.

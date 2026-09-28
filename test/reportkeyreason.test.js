@@ -33,6 +33,7 @@ import { join } from 'node:path';
 import { isCheckableUrl, readEntry, unusableUrlKind, unusableUrlNote } from '../src/status.js';
 import { buildReport, renderReportJson, renderReportMarkdown } from '../src/report.js';
 import { tempHome } from './helpers/env.mjs';
+import { validatedNow } from './helpers/clock.mjs';
 
 const CLI = join(import.meta.dirname, '..', 'src', 'cli.js');
 const KEY = '0123456789abcdef0123456789abcdef';
@@ -59,7 +60,7 @@ const claimedHealthy = {
   lastContentReadAt: '2026-09-27T10:00:00.000Z',
 };
 
-const license = { key: KEY, instance: 'p183', plan: 'pro', status: 'active', validatedAt: NOW.toISOString() };
+const license = validatedNow({ key: KEY, instance: 'p183' });
 
 function report(urls) {
   return buildReport({ urls, license }, { now: NOW, title: 'Acme' });

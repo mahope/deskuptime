@@ -53,8 +53,11 @@ import { promisify } from 'node:util';
 
 import { getStateFile } from '../src/watch.js';
 import { passAge } from '../src/status.js';
+import { OFFLINE_GRACE_MS } from '../src/license.js';
 import { assertTempHome, tempHome } from './helpers/env.mjs';
-import { ANCHOR, daysBefore, MS_PER_DAY } from './helpers/clock.mjs';
+import { ANCHOR, checkedNow, daysBefore, validatedNow, MS_PER_DAY } from './helpers/clock.mjs';
+
+const OFFLINE_GRACE_DAYS = Math.round(OFFLINE_GRACE_MS / MS_PER_DAY);
 
 const run = promisify(execFile);
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
@@ -160,4 +163,105 @@ test('de tre filer der blev målt røde har ingen fast tidspunkt mere', () => {
     assert.match(source, /import \{ ANCHOR, daysBefore \} from '\.\/helpers\/clock\.mjs';/, `${file} uses the shared clock`);
     assert.match(source, /return daysBefore\(days, BASE\);/, `${file} derives its stamps from the anchor`);
   }
+});
+
+test('en Pro-licens til en børneproces følger maskinens ur, fordi kommandoen ager den', async (t) => {
+  // P1-94. A second clock, and a different door from the one above. The plan
+  // expected these fixtures to rot by printing a sentence whose age drifts; they
+  // do not, and the reason is worth stating because it is invisible from the
+  // file. `src/license.js` keeps a validated Pro status for `OFFLINE_GRACE_MS` —
+  // 7 days, so a license server outage never locks a paying customer out — and
+  // it ages `validatedAt` against the *wall* clock. A state file written with a
+  // fixed instant therefore hands the real `report` a license that stops
+  // working on the eighth day:
+  //
+  //   ❌ Error: the client report needs an active Pro license. This machine is
+  //      unverified with the license server (not verified for 10 days; …)
+  //
+  // Note what the failure is *not*: no sentence drifts, because the report is
+  // never produced. Exit code 1, empty stdout. A test watching output would see
+  // nothing to complain about.
+  const runReport = async license => {
+    const { home, options } = tempHome(t, 'deskuptime-licgate-');
+    assertTempHome(options, 'the licence-clock tests');
+    const stateFile = getStateFile({ env: { HOME: home } });
+    writeFileSync(stateFile, JSON.stringify({ urls: { [SITE]: { wasUp: true, lastStatus: 200 } }, license }, null, 2));
+    return run(process.execPath, [CLI, 'report'], { env: { ...process.env, ...options } })
+      .then(() => ({ code: 0, stdout: '', stderr: '' }), error => ({ code: error.code ?? 1, stdout: error.stdout ?? '', stderr: error.stderr ?? '' }));
+  };
+
+  // The door, measured: one command, one licence shape, and the only difference
+  // between the two runs is which clock wrote `validatedAt`. The fixed one is
+  // what these two files used to hold.
+  const fresh = await runReport(validatedNow());
+  assert.equal(fresh.code, 0, `a licence validated now must produce a report: ${fresh.stderr}`);
+
+  const stale = await runReport({
+    key: '0123456789abcdef0123456789abcdef',
+    instance: 'p-old',
+    plan: 'pro',
+    status: 'active',
+    validatedAt: daysBefore(10),
+  });
+  assert.equal(stale.code, 1, 'the same licence, validated 10 d ago, is refused — that is the door');
+  assert.match(stale.stderr, /needs an active Pro license/);
+  assert.match(stale.stderr, /not verified for 10 days/, 'and it says how old, so a reader can tell a clock from a bug');
+
+  // The grace window is the product's, not the fixture's, and the helper is
+  // pinned to it: a stamp inside the window still produces a report, one a day
+  // past it does not. This is what makes `validatedNow` a measurement rather
+  // than a way of writing `new Date().toISOString()` in three places.
+  const insideWindow = await runReport({ ...validatedNow(), validatedAt: daysBefore(OFFLINE_GRACE_DAYS - 1) });
+  assert.equal(insideWindow.code, 0, `a licence ${OFFLINE_GRACE_DAYS - 1} d old is still inside the grace window`);
+  const pastWindow = await runReport({ ...validatedNow(), validatedAt: daysBefore(OFFLINE_GRACE_DAYS + 1) });
+  assert.equal(pastWindow.code, 1, `a licence ${OFFLINE_GRACE_DAYS + 1} d old is not`);
+
+  // The control, and the one that closes the last hole: both runs above pass with
+  // a *literal* in `validatedNow`, because a literal written today is still
+  // inside the window today. Measured — the mutation survives everything above.
+  // So the helpers are pinned to the wall clock the same way `ANCHOR` is, by the
+  // drift it would show, which is what catches a regression on the day it is
+  // written rather than seven days later.
+  for (const [name, stamp] of [['validatedNow', validatedNow().validatedAt], ['checkedNow', checkedNow()]]) {
+    const drift = Math.abs(Date.now() - Date.parse(stamp));
+    assert.ok(drift < 60_000, `${name}() must stamp this machine's clock, not a stored instant (drift ${drift} ms)`);
+  }
+});
+
+test('de to filer der blev målt røde henter licensen fra ejeren', () => {
+  // Pinned by name, like the three above, and for the same reason: the lock is
+  // the measurement, this is the receipt. `test/httpdownreason.test.js` is
+  // listed as what it is *not* — it holds a fixed `NOW` and stays green at
+  // +365d, because its licence only ever reaches `buildReport`, which does not
+  // read `state.license`. A file that keeps a literal is not automatically
+  // wrong; a file that hands a literal to a child process is.
+  for (const file of ['test/history.test.js', 'test/reportkeyreason.test.js']) {
+    const source = readFileSync(join(ROOT, file), 'utf8');
+    assert.match(source, /from '\.\/helpers\/clock\.mjs';/, `${file} takes its stamps from the shared clock`);
+    assert.match(source, /validatedNow\(\{/, `${file} builds its licence from the machine's clock`);
+    assert.doesNotMatch(
+      source,
+      /plan: 'pro'[^}]*validatedAt: NOW\.toISOString\(\)/,
+      `${file} must not hand a fixed instant to a command that ages it`,
+    );
+  }
+
+  // The second door in `history.test.js` was a different field with the same
+  // disease, so it is pinned by name too: a `lastChecked` a child process ages
+  // is the same bug wearing a different key, and the two were fixed together.
+  //
+  // Scoped to the test that runs the command, and deliberately *not* a blanket
+  // ban on `lastChecked: NOW.toISOString()`. `history.test.js:285` holds two
+  // sites stamped that way and is correct: it hands `buildReport` the same `NOW`
+  // in `{ now }`, so the reader and the writer share one clock and the age is
+  // deterministic on purpose. The distinction the whole of P1-94 turns on is
+  // *who ages the stamp* — a child process can only use this machine's clock.
+  const history = readFileSync(join(ROOT, 'test/history.test.js'), 'utf8');
+  assert.match(history, /lastChecked: checkedNow\(\)/, 'the pass stamp the report ages is the machine\'s too');
+  const daysTest = history.slice(history.indexOf("test('--days is validated"));
+  assert.doesNotMatch(
+    daysTest,
+    /lastChecked: NOW\.toISOString\(\)/,
+    'the one test that runs `report` in a child process must not stamp its pass from the file\'s clock',
+  );
 });
