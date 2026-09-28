@@ -1,8 +1,97 @@
-> **Seneste:** iteration 116 (P1-101, færdig) — historien står i køens afsnit
-> `P1-101 — FÆRDIG 2026-09-28` lige under `## Prioriteret kø`. Køen er igen tom
+> **Seneste:** iteration 117 (P1-102, færdig) — historien står i køens afsnit
+> `P1-102 — FÆRDIG 2026-09-28` lige under `## Prioriteret kø`. Køen er igen tom
 > for målte kandidater; de målte fund er under `## ❓ Til Mads`.
 
-## Status fra denne iteration (116, P1-101 — den Pro-grænse der navngiver et flertal sagde "webhook alerts needs")
+## Status fra denne iteration (117, P1-102 — `check` fandt ingen grundlinje for et site det overvågede, fordi adressen var skrevet som en browser viser den)
+
+**Målt først, nul kode ændret.** Køen var tømt, så målingen gik på den kommando
+en CI-job og et bureau bruger *inden* de overvåger: `check`. Rigtig CLI, rigtige
+lokale servere, rigtig temp-HOME, licensserveren stubbet. Ét site, overvåget
+uden skråstreg, tjekket med skråstreg — den form en adresseolinje viser, og den
+brugeren kopierer:
+
+```
+$ deskuptime watch http://127.0.0.1:62057 --once
+  [7:47:58 PM] • http://127.0.0.1:62057 baseline recorded: UP (200) — 24ms
+…siden ændrede siden sig…
+$ deskuptime check http://127.0.0.1:62057
+  🔄 Content: 56 bytes — changed since the reading today     ← fandt den
+$ deskuptime check http://127.0.0.1:62057/
+  — Content: 56 bytes — no reading to compare against      ← mistede den
+```
+
+**Én fejl, to baseliner, to sætninger der ligner hinanden for meget.**
+Certifikatet brød på præcis samme måde, og det er den dyrere af de to — et
+bureau spørger hver uge "er det stadig *kundens* certifikat?", og `check`, den
+kommando der svarer, sagde `no earlier certificate to compare against` om et
+site det havde overvåget hele tiden:
+
+```
+$ deskuptime check https://127.0.0.1:62163      ⏸️ Cert: same certificate as … seen today
+$ deskuptime check https://127.0.0.1:62163/     — Cert: no earlier certificate to compare against
+```
+
+**Årsagen er ikke en skrivefejl, men to kommandoer der spurgte det samme
+spørgsmål og fik forskellige svar.** `watch` og `unwatch` spørger
+`findUrlKey()`, som læser adressen som `new URL()` gør — så skråstreg, skema i
+store bogstaver og en standardport er det samme site. `check` slog `state.urls`
+op med præcis den streng brugeren skrev, og læste `undefined` på alt andet.
+**Misset var lydløst**, fordi den sætning det faldt videre til — "no reading to
+compare against" — er ord for ord den ærlige sætning for et site, der aldrig er
+overvåget. Den eneste ting, der kunne have fortalt brugeren at skrivemåden var
+problemet, sagde ingenting.
+
+**Rettelsen er, at `check` spørger samme ejer.** Den lærer ikke en anden regel
+for hvordan det samme site ser ud: `findUrlKey` importeres fra `status.js`, hvor
+de to andre kommandoer allerede henter det. Bevægelsen er det interessante —
+det er præcis samme formfejl som P1-46 lukkede i `watch`/`unwatch`, og den
+overlevede her, fordi den fik tre optagelser og kun to blev rettet.
+
+**Acceptkriterier — alle syv opfyldt:**
+
+1. ✅ `check` med skråstreg finder den gemte læsning for et site overvåget uden
+   (målt gennem rigtig CLI + rigtig server + rigtig state-fil).
+2. ✅ Det samme i `--json`: `contentChanged: true` og et `contentBaselineReadAt`,
+   hvor de før var `null`.
+3. ✅ De to skrivemåder af ét site får **samme dom** — låsen sammenligner dommene
+   med hinanden, så en ny måde at miste på kan ikke lægge sig i den ene gren.
+4. ✅ Skema i store bogstaver og standardport er målt som det samme spørgsmål som
+   skråstregen, gennem `findUrlKey` direkte.
+5. ✅ Certifikat-grundlinjen er målt gennem rigtig TLS med rigtig fixture
+   (`test/helpers/certs.mjs`): efter rettelsen siger den samme kommando
+   `same certificate as the certificate seen today`.
+6. ✅ **To ting blev bevaret, og de er målt for sig:** et site der aldrig er
+   overvåget siger stadig `no reading to compare against` (ellers ville
+   rettelsen opfinde en grundlinje den ikke har), og `state.json` er uændret af
+   `check` — læsningen gennem `findUrlKey` blev ikke en skriver.
+7. ✅ **Tre mutationer målt, alle tre døde** (3 / 3 / 3 fejl): tilbage til
+   eksakt-nøgle-opslaget (den oprindelige fejl), nøglen findes men entry læses
+   fra den typede adresse, og `findUrlKey` importeres men spørgs ikke.
+
+**Gaten:** **803/803** på Node 26.7.0 via `tools/run-tests.mjs` (797 + 6);
+`matrix --check` exit 0; audit 0/0; `node --check` ren; `git diff --check` rent.
+
+**Ingen deploy-note:** CLI-repo uden live-deploytarget, og ingen side blev
+ændret, så der er ingen trafik-baseline at skrive.
+
+**To filer rørt:** `src/cli.js` (import + opslag på 3 linjer) og den nye
+`test/checkbaseline.test.js`.
+
+**⚠️ En fejl begået i denne iteration, noteret fordi den næste iteration
+ellers ville møde den samme.** Min egen kommando var
+`git commit … --amend` i stedet for `git commit`, fordi jeg ville fjerne en
+fejltaglig trailer. Den *amend'ede* P1-101's commit i stedet for at lave en ny,
+fordi jeg var på min egen branch men med en arbejdsstilling, der sådan slap
+forkert. Resultatet var en branch hvis parent var `e9544fe` i stedet for
+`6c5ed19`. **Ingen skade blev gjort:** `main` og `origin/main` stod begge på
+`6c5ed19` hele vejen, og den forkerede commit blev kasseret med
+`git branch -f` + `git reset --hard` (det tabte de arbejdsændringer jeg havde
+lavet, som jeg så skrev igen). **Regel til næste iteration:** squash-merge-kontrakten
+forbryder `git commit --amend` på en opgave-branch. Skal en besked rettes,
+erstat den med `git commit --amend` **kun** hvis den nuværende commit er din
+egen, og ellers: kør `git log --oneline -3` og tjek parent før du rører noget.
+
+## Status fra tidligere iteration (116, P1-101 — den Pro-grænse der navngiver et flertal sagde "webhook alerts needs")
 
 **Målt først, nul kode ændret.** Køen var tømt, så målingen gik på de to Pro-flader
 — de eneste to steder i CLI'en hvor en kunde kan få at vide, at noget koster
@@ -4446,10 +4535,34 @@ Den aktuelle gate-definition er registreret her:
 
 ## Prioriteret kø
 
-> **Køen er tom for målte kandidater** (iteration 116). De målte fund fra den
+> **Køen er tom for målte kandidater** (iteration 117). De målte fund fra den
 > iteration ligger i afsnittet ovenfor og i `❓ Til Mads`. Næste iteration skal
 > **måle først** og finde sin egen opgave — den metode der har fundet de sidste
-> 93 opgaver. Se `❓ Til Mads` for de konkrete, målbare kandidater.
+> 94 opgaver. Se `❓ Til Mads` for de konkrete, målbare kandidater.
+
+### P1-102 — FÆRDIG 2026-09-28 (`ceo/check-baseline`) — `check` fandt ingen grundlinje for et site det overvågede, fordi adressen var skrevet som en browser viser den
+
+**Målt først, nul kode ændret.** Se afsnittet øverst. Kort fortalt: rigtig CLI,
+rigtige lokale servere, rigtig temp-HOME. Ét site overvåget som
+`http://host:62057` og tjekket som `http://host:62057/` sagde
+`no reading to compare against` — ord for ord det, et aldrig overvåget site
+siger. Samme fejl i certifikat-grundlinjen målt gennem rigtig TLS.
+
+**Årsagen:** `watch` og `unwatch` spørger `findUrlKey()`, som læser adressen som
+`new URL()`. `check` slog `state.urls` op med præcis den streng brugeren skrev
+og læste `undefined` på alt andet. Misset var lydløst, fordi den sætning det
+faldt videre til er den ærlige sætning for et andet tilfælde.
+
+**Fix:** `check` spørger `findUrlKey()` — samme ejer, ingen anden regel lært.
+6 nye tests i `test/checkbaseline.test.js`, alle gennem rigtig CLI + rigtig
+server; to af dem låser bevarelser (aldrig-overvåget site, read-only) → **803/803**
+(797 + 6); audit 0/0; `matrix --check` 0; `node --check` og `git diff --check`
+grønne. **Tre mutationer målt, alle døde** (3/3/3 fejl).
+
+**Mønsteret er værd at huske:** P1-46 lukkede præcis denne formfejl i `watch` og
+`unwatch` og lod den stå i `check`. Der lå ingen lås mod at den samme fejl kom
+tilbage i en tredje kommando, fordi ingen test spurgte `check` om en grundlinje
+i en anden skrivemåde. Det er argumentet i ❓ 21.
 
 ### P1-101 — FÆRDIG 2026-09-28 (`ceo/gate-verb`) — den Pro-grænse der navngiver et flertal sagde "webhook alerts needs"
 
@@ -7711,6 +7824,21 @@ for selv. Ingen gemt nøgle er omskrevet, ingen eksisterende adgangsd tilstand
     tak-siden har brug for det. Sig til hvis du vil have `Lifetime` i `status`; det
     er den samme størrelse arbejde som P1-99.
 18. **Skal låset på ur-drift udvides til at finde *nye* filer med samme sygdom?** P1-94 lod målingen vise, at kun to af syv kandidater gik røde, og låste dem på navn — to mutationer døde på importen, ikke på adfærd. Låset kan altså ikke se en fil, der endnu ikke findes, med et fast ur i et state-fil, den kører en børneproces på. Jeg lod bevidst en regex-scanning ligge: den ville råbe om de tyve filer, der med vilje giver læser og skriver samme øjeblik, og P1-92 og P1-93 har begge skrevet den og kastet den væk efter måling. **Spørgsmålet er om det kan løses uden falske alarmer** — måske ved at køre hver testfil to gange med forskudt `TZ` frem for forskudt ur, fordi et ur-bundet ur kun fejler på *døgnkrydsninger*, ikke på urets stilling.
+
+21. **Skal der låses mod at *én* formfejl kommer tilbage i en tredje kommando?**
+    P1-46 fandt, at `https://kunde.dk` og `https://kunde.dk/` var to sites, og
+    rettede `watch` og `unwatch`. P1-102 fandt samme fejl to dage senere, i
+    `check` — fordi de to rettede steder lærte hver sin, lokal regel, og ingen
+    lås spurgte om den tredje kommando. Den konkrete kode er nu én ejer
+    (`findUrlKey`), så *den* fejl kan ikke komme tilbage. Det der kan komme
+    tilbage er **en ny** formfejl i en ny kommando, og intet i gaten ville se
+    den. Måden at finde ud af det er at køre hver overflade med to skrivemåder
+    af det samme site og kræve samme svar — en bænkbred ændring i
+    `tools/measure-e2e.mjs` (en ekstra skrivemåde pr. scenario) plus en test der
+    læser bænken. **Spørgsmålet er om det er værd at gøre permanent** — jeg har
+    gjort det for `check` i denne iteration som seks tests, men ikke for
+    `status`, `report` og `headers`, og jeg ved ikke om de har den samme fejl
+    uden at have målt dem.
 
 1. Hvad er den endelige gratis/Pro-matrix? Skal desktoptray og lokale notifications være gratis, eller kun Pro? README, kode og mission peger i dag i forskellige retninger.
 2. Skal Pro email og Slack/Discord/Teams implementeres nu, eller skal de forblive uden for matrixen, indtil de er bygget? P0-5 har fjernet dem fra alle overflader i dette repo og noteret dem som ikke-implementeret; **live-siten `deskuptime.com` hævder stadig email for Desktop Pro**, og rettelsen ligger uden for dette repo (P0-12 er `BLOCKED`). Svar på spørgsmålet afgør både næste CLI-opgave og sitens claim.

@@ -18,7 +18,7 @@ import { buildReport, renderReportJson, renderReportMarkdown } from './report.js
 import { readFileSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
-import { invalidHttpUrls, invalidUrlMessage, partitionUsableUrls, readCertCoverage, readCertIdentity, readCertRotation, readChain, readContentComparison, readContentState, readDisclosure, readEntry, readHeaderSource, readRedirectTarget, readSecurityHeaders, readSslIssuer, readSslState, readSslTls, contentSkipNote, unusableUrlNote, withoutCredentials, CERT_VERDICT, CONTENT_VERDICT, SECURITY_HEADER, STALE_AFTER_DAYS } from './status.js';
+import { invalidHttpUrls, invalidUrlMessage, partitionUsableUrls, readCertCoverage, readCertIdentity, readCertRotation, readChain, readContentComparison, readContentState, readDisclosure, readEntry, readHeaderSource, readRedirectTarget, readSecurityHeaders, readSslIssuer, readSslState, readSslTls, contentSkipNote, findUrlKey, unusableUrlNote, withoutCredentials, CERT_VERDICT, CONTENT_VERDICT, SECURITY_HEADER, STALE_AFTER_DAYS } from './status.js';
 import { formatMs, machinesInUse, safeText } from './display.js';
 import { DEFAULT_WINDOW_DAYS, HISTORY_DAYS, historyReadErrorMessage, readHistoryFile } from './history.js';
 import { FREE, PRODUCT, proExtras, renderHelpPro } from './features.js';
@@ -136,7 +136,17 @@ if (command === 'check') {
   const baselineReadAt = new Map();
   const baselineCerts = new Map();
   for (const url of urls) {
-    const entry = stored.urls[url];
+    // `findUrlKey()` — the owner `watch` and `unwatch` already ask — and not
+    // `stored.urls[url]`, which found the key only when the address was typed
+    // character for character as it was saved. Measured 2026-09-28: a site
+    // watched as `http://host:62057` and checked as `http://host:62057/` — the
+    // form a browser's address bar shows, and the one a user copies — read as
+    // `no reading to compare against` and `no earlier certificate to compare
+    // against`, which is word for word what a site this machine has never
+    // watched also says. One site, three answers, and the miss was silent: the
+    // sentence it fell through to is the honest one for a different case.
+    const key = findUrlKey(stored.urls, url);
+    const entry = key === null ? null : stored.urls[key];
     if (!entry || typeof entry !== 'object') continue;
     if (typeof entry.lastHash === 'string' && entry.lastHash !== '') contentHashes.set(url, entry.lastHash);
     if (typeof entry.lastContentReadAt === 'string' && entry.lastContentReadAt !== '') baselineReadAt.set(url, entry.lastContentReadAt);
