@@ -1,3 +1,7 @@
+> **Seneste:** iteration 99 (P1-83, færdig) — historien står i køens afsnit
+> `P1-83 — FÆRDIG 2026-09-28` lige under `## Prioriteret kø`.
+> Afsnittene for 97 og 98 er ældre og ligger henholdsvis øverst og nederst.
+
 ## Status fra denne iteration (97, P1-81 — målebænken skrev i den rigtige `~/.deskuptime`, fordi den gav `runPass` en nøgle, intet læser)
 
 **Køen var tømt**, så dette er en målt research-iteration. Den begyndte med den
@@ -3399,49 +3403,81 @@ Den aktuelle gate-definition er registreret her:
 
 ## Prioriteret kø
 
-### P1-83 — NÆSTE — Kundenapporten kalder en nøgle med adgangskoder "ikke en fuld adresse"
+### P1-83 — FÆRDIG 2026-09-28 (`ceo/report-key-reason`) — Kundenapporten kalder en nøgle med adgangskoder "ikke en fuld adresse"
 
-**Begrundelse:** Målt 2026-09-28 i P1-82, samme state-fil som P1-82 rettede — **ikke
-rettet i den iteration**, fordi den lå i en anden fil og en ren plan-commit ikke er
-en produktforbedring. Bureauets kundedokument er den mest synlige flade overhovedet, og
-den siger noget faktisk forkert om en nøgle.
-
-**Den målte sætning.** Rapporten skriver for rækken:
+**Resultat:** Alle fire flader siger nu den rigtige grund for hver nøgle. Målt før
+rettelsen (rigtig `buildReport` + `renderReportMarkdown` over `kunde.dk` og
+`http://demo:hemmeligt@kunde.dk/` i én state-fil):
 
 ```
 | http://kunde.dk/ | not a full address, so no pass can check it | … |
-**One listed URL is not a full address, so no monitoring pass can check it …**
-**1 site(s) · … · 1 not a full address**
+**3 site(s) · … · 2 not a full address**
+**2 listed URLs are not a full address, so no monitoring pass can check them …**
 ```
 
-`http://demo:pass@kunde.dk/` **er** en fuld adresse. `src/status.js:2662`s egen
-kommentar siger det præcis: "`kunde.dk` er ikke en fuld adresse; `http://demo:pass@…`
-er det meget" — og den lange note, terminal-listerne bruger, siger det rigtigt. Kun
-rapporten tager den anden sætning, og den gør det tre steder.
+Efter:
 
-**Årsagen er samme form som P1-82, omvendt:** `report.js:246` gemmer nøglen som
-`withoutCredentials(url)` — korrekt, det er det læseren skal se — **inden** den spørger
-`unusableUrlNote([site.url], { brief: true })` om grundformen. Den korte note får en
-renset adresse, `hasUrlCredentials` er `false`, og den vælger den forkerte sætning.
+```
+| http://kunde.dk/ | has a username or password in it, so no pass can check it — and the password is neither sent nor stored | … |
+**3 site(s) · … · 1 not a full address · 1 with a username or password in it**
+**2 listed URLs cannot be checked …:** http://kunde.dk/ — has a username or password in it, …; kunde.dk — not a full address, so no pass can check it
+```
 
-**Acceptkriterier:**
+**Årsagen er P1-82 omvendt, og den lå i én linje.** `report.js` gemmer nøglen som
+`withoutCredentials(url)` — korrekt, det er læserens — og **derefter** spurgte
+`unusableUrlNote([site.url])` om grundformen. Den rensede adresse har ingen
+adgangskoder, så ejeren svarede med den anden sætning. Rettelsen er samme form som
+`certIssuerBefore` og `contentReadAt`: **spørgningen flyttes til det sted, hvor
+råden endnu findes** — `uncheckableNote` + `uncheckableKind` bygges i `.map()` på
+`url`, og de tre celler læser kun feltet. Råden forlader aldrig `buildReport`, og
+begge felter er ejerens egne ord, så ingen af dem kan rumme adgangskoden.
 
-1. Rapportens status-celle, beskrivelseslinje, resumetæller og fodnot siger den **rigtige**
-   grund for hver ubrugelig nøgle: adgangskoder for `http://demo:pass@…`, "ikke en fuld
-   adresse" for `kunde.dk`.
-2. Grundformen stilles på den **rå** nøgle, aldrig på den rensede, der læseren ser — så
-   passwordet stadig ikke kan nå en celle.
-3. Nøgler uden adgangskoder er tegn for tegn uændrede; `test/uncheckable.test.js`'s tre
-   `not a full address`-låse på en `kunde.dk`-nøgle bliver stående.
-4. `report --json` er uændret: `status: "unknown"` og `uncheckable: true` er allerede
-   rigtige for begge former.
-5. Deterministisk test over begge nøgleformer i Markdown og i `--json`; målingen fra
-   P1-82 genbruges som fixture.
+**Ny ejer, `unusableUrlKind(url)` i `src/status.js`:** `'credentials'` eller
+`'not-address'` som *fakta* at forgrene på. `unusableUrlReason()` og den korte
+sætning bygges nu af den, så de to sætninger ikke kan komme fra hver sin regel.
+Tallet i resumetælleren kommer fra feltet, ikke fra et mønster på sætningen.
 
-**Målt, før rettelsen:** `| http://kunde.dk/ | not a full address, so no pass can check
-it |` + `· 1 not a full address`, med `status: "unknown"` i `--json` — samme række, to
-sætninger, i det samme dokument.
+**Ingen tilbagegang for nøgler uden adgangskoder — målt, ikke håbet.** En rapport
+over `godt.dk` + `kunde.dk` + `ftp://gammel.dk/` er **tegn for tegn identisk** med
+`main` på alle linjer undtagen fodnoten, der med vilje nu dækker begge former. Én
+grund i hele gruppen ⇒ den gamle indledning ("One listed URL is not a full
+address…") og nøglerne som liste, så det normale bureau-dokument ikke ændrer
+ordlyd, fordi en adgangskodenøgle kan findes. To grunde ⇒ indledningen dropper
+grunden, og **hver nøgle bærer sin egen**. `test/uncheckable.test.js`'s tre
+`not a full address`-låse står uændrede, og `report --json` har stadig
+`status: "unknown"` og `uncheckable: true` for begge former (plus de to additive
+felter).
 
+**Acceptkriterier — alle fem opfyldt:**
+
+1. ✅ Status-celle, beskrivelseslinje, resumetæller og fodnot siger den rigtige grund
+   for hver ubrugelig nøgle.
+2. ✅ Grundformen stilles på den **rå** nøgle i `buildReport`, aldrig på den rensede;
+   lås i `test/reportkeyreason.test.js` forbyder `unusableUrlNote([site.url]`, og to
+   tests hævder at intet output indeholder adgangskoden.
+3. ✅ Nøgler uden adgangskoder er tegn for tegn uændrede — målt ved diff mod `main` på
+   en rapport med to sådanne nøgler; kun fodnoten ændres, og den skal.
+4. ✅ `report --json` uændret for de to eksisterende felter; de to nye er additive.
+5. ✅ 11 deterministiske tests over begge nøgleformer i Markdown og i `--json`, med
+   P1-82's fixture (samme `claimedHealthy`, samme adgangskode).
+
+**11 nye tests i `test/reportkeyreason.test.js`** → **717/717** (706 + 11); audit
+0/0; `matrix --check` exit 0; `node --check` og `git diff --check` grønne på Node
+26.7.0. **Fem mutationer målt, alle døde** (3/2/3/1/6 fejl): cellen spørger den
+redigerede nøgle igen, resumetælleren tæller alle som "ikke en fuld adresse",
+gruppen antager én grund, fodnoten får sin gamle sætning, og ejeren svarer altid
+`not-address`. To af dem er kildefscan — cellen må ikke spørge om den redigerede
+nøgle, og de to sætninger må ikke få hver sin `hasUrlCredentials` — fordi
+adfærdstesten alene ikke kan se *hvilken streng* der blev spurgt.
+
+**Fejl i min egen måling undervejs:** `sites` er sorteret efter status, ikke efter
+state-filen, så to af mine assertions på `sites[0]` pegede på den forkerte række
+og blev rettet til opslag på URL. Én lås på hele dokumentet (`/username or
+password/`) faldt, fordi fodnoten med vilje nævner begge former — låsen blev
+snævret til de tre linjer en kunde læser.
+
+**Næste:** ❓ 1–3, ❓ 14 og ❓ 16 afventer Mads. Nye opgaver skal findes ved måling;
+køen er tømt.
 
 ### P0-1 — AFSLUTTET I DETTE REPO — Desktop sikkerhed (flyttet til privat repo)
 
@@ -5796,6 +5832,22 @@ for selv. Ingen gemt nøgle er omskrevet, ingen eksisterende adgangsd tilstand
 
 ## Iterationslog
 
+- **Iteration 99 (P1-83, målt + fix):** køens øverste opgave, målt i P1-82 og ikke
+  rettet der. Rigtig `buildReport`/`renderReportMarkdown` over én state-fil med
+  `kunde.dk` og `http://demo:hemmeligt@kunde.dk/`: **tre flader sagde "ikke en fuld
+  adresse" om en fuld adresse** — status-celle, beskrivelseslinje og resumetæller.
+  Årsagen var P1-82 omvendt: rapporten spurgte den *redigerede* nøgle om grundformen,
+  fordi den gemmer nøglen som `withoutCredentials(url)` ét felt over. **Fix:** den nye
+  ejer `unusableUrlKind(url)` i `status.js` giver `'credentials'`/`'not-address'` som
+  fakta, begge sætninger bygges af den, og rapporten måler på den **rå** nøgle i
+  `buildReport` — `uncheckableNote` + `uncheckableKind`, som de tre celler kun læser.
+  Ét års grund i gruppen ⇒ gamle ordlyd (bureau-dokumentet er tegn for tegn uændret,
+  kun fodnoten dækker nu begge former); to grunde ⇒ hver nøgle bærer sin egen.
+  11 nye tests → **717/717** (706 + 11); audit 0/0; `matrix --check` 0; `node --check`
+  og `git diff --check` grønne. **Fem mutationer, alle døde** (3/2/3/1/6 fejl), to af
+  dem kildefscan fordi adfærdstesten alene ikke kan se hvilken streng der blev spurgt.
+  `ceo/report-key-reason`. Ingen exit-kode, matrix-række eller claim ændret; intet i en
+  opgradering flytter sig uden ny JSON-felt-liste.
 - **Iteration 97 (P1-81, målt + fix):** køen var tømt, så research-iteration. Målingen startede på den konverteringsrejse produktfasen prioriterer — installation → første kommando → gratisgrænse → køb — med rigtig CLI på frisk temp-HOME: `--help`, `status`, fjerde URL, `--interval 45`, `--webhook` uden licens, `report` uden licens, `--interval 30`. **Alle syv pegede på kontraktens Payment Link, ingen svarede i stilhed; ingen rettelse fundet i købsvejen.** Målingen gik så videre til de to instrumenter denne iteration bruger, og `tools/measure-e2e.mjs` viste sig at skrive **begge** filer i den rigtige `~/.deskuptime` af den der kørte den: `getStateFile()`/`getHistoryFile()` læser `env` ud af options, `runPass(state, { home })` giver dem intet `env`, og de falder tilbage på `process.env`. Målt med rigtig `runPass` over rigtig lokal server og `process.env.HOME` rettet mod en stand-in: `opts.home` efterlod temp-HOME tom og fyldte den reelle. Samme fejl gjorde bænken til en løgn — rapporten skrev `— (last check missing from the history file)` om et site den lige havde lavet 3 passer for. **Fix:** `env` i stedet for `home` + kommentar der siger hvorfor. **Målt efter:** bænken skriver intet i den arvende HOME, og `Uptime (window)` stiger 1 → 2 → 3 checks gennem passerne. 3 nye tests i `test/benchhome.test.js` → **697/697** (694 + 3); audit 0/0; `matrix --check` 0; `node --check`, `git diff --check` grønne. **Målingen af låsen var det vigtigste fund:** første runde døde M1/M2, men **M6 (scan slettet + fejl tilbage) gav 2/2 grønne** — adfærdstesten testede `runPass`, ikke bænken der kalder den. Anden runde kører bænken som levende barn under en observeret HOME: **syv mutationer, seks døde** (1/2/1/2/2/1), M7 korrekt grøn. Hver mutation difset mod originalen. **Én fejl i min egen test fundet af gaten:** den første version observerede `process.env.HOME` — suitens *fælles* HOME som `node --test` kører filer i parallel på — og fejlede kun i hele suiten, af en grund uden forbindelse til fundet. Nu får testen sin egen HOME og flytter `process.env` for sin varighed. **Og netop derfor slettede den rigtige home:** fordi jeg kørte mutationerne med `node --test` **direkte** i stedet for gaten, var `process.env.HOME` Mads' rigtige home, og `rmSync` i den version slettede hans `state.json` og `history.json` kl. 05:05. Mappen `~/.deskuptime` er tom. Det er P1-58's ulykke, genindført af mig i den iteration der lagde en lås på den — se `❓ 17`. Den endelige kode er sikker og låst; skaden er det ikke. **Skade på Mads' filer målt:** `~/.deskuptime/state.json` og `history.json` skrevet kl. 05:01 af min kørsel af bænken, med 127.0.0.1-fixtures blandt virkelige sites. `ceo/bench-home-isolation`. **Ingen produktkode, ingen status, exit-kode, matrix-række eller claim ændret.**
 
 - **Iteration 96 (P1-80, målt + fix):** ❓ 1–3, ❓ 14 og ❓ 16 stadig ubesvarede, så målingen gik på den **ændrede sides titel**. Rigtig `runPass` over to rigtige lokale servere, rigtig state-fil, rigtig rapport og rigtig modtager på den betalte kanal, Pro fra den gemte licens (intet kald til mahope.tools): kanalen skrev `page title: "Acme — home" → "Acme — shop" (same size, 95 bytes)`, og `status`, `watch --status` og kundenapporten skrev alle tre `page title: "Acme — shop"` — den ensidige form, som efter ordet *changed* læses som en beskrivelse af siden i dag. Titlen var målt to steder og gemt ét: `readContentChange` sammenlignede `entry.lastTitle` med den nye og citerede begge, men returnerede kun `titleChanged`; samme pass skrev `lastTitle = den nye`, og den gamle var væk. En alarm er engang, de tre lister er et genlæst arkiv. Fix: `readContentChange` giver `previousTitle`/`title` tilbage fra det kald der målte dem, `runPass` skriver `contentTitleBefore` hvor ændringen måles (samme form som `certIssuerBefore`, P1-64, og `contentReadAt`, P1-78) — **og rydder den på samme betingelse**, fordi parret tilhører en *ændring* og ikke siden: en titel der flytter sig uden byte-ændring, eller en ændring uden titelskift, ville ellers arve en gammel pil. `delete` ikke `= null`. Efter: alle fire flader siger præcis den sætning kanalen sendte; en state-fil skrevet før rettelsen giver den ensidige sætning uændret. Parret sammenlignes gennem `safeText`, så to titler der kun adskiller sig ved en escape eller et nul-tegn ikke giver en pil der peger på sig selv (P1-70 arvet). Additivt `contentTitleBefore` i `--json`. 11 nye tests i `test/titlepair.test.js` → **694/694** (683 + 11); audit 0/0; `matrix --check` 0; `node --check`, `git diff --check` grønne. **Syv mutationer målt, seks døde** (6/1/1/4/2/1 fejl); den syvende (`before === after` før `safeText`) **overlever som ækvivalent** — to ens strenge printer altid ens. Hver mutation blev difset mod originalen, fordi fem i en tidligere iteration vished ud som "0 fejl". **Tre eksisterende låse opdateret, ikke slækket** — de låste den ensidige sætning, som er præcis denne fejl: de to rejse-tests i `contentchange.test.js` kræver nu `page title: "Side A" → "Free iPhone!!"` på den betalte linje og på begge gratis lister, og `status.test.js`'s `deepEqual` på ejeren får de to nye felter. Låsen på "kun ejeren skriver sætningen" (4 forekomster) er urørt. **To fejl i mine egne tests fundet af gaten:** `pageCheck` havde en tæller inde i hjælperen, så et nyt kald pr. `runPass` genstartede den og gjorde næste pass til en baseline (testen påstod en ændring den aldrig frembragte); og en alder-påstand regnede fra `BASE` mens rapporten fik `new Date()`. To målebænke lagt til: `tools/measure-e2e.mjs` (to rigtige servere, rigtig modtager, alle fire flader) og `tools/measure-surfaces.mjs` (otte håndskrevede tilstande) — de kører under temp-HOME og påstår intet. `ceo/content-title-pair`. **Ingen status, exit-kode, uptime-tal, Content-celle eller alarm flytter sig.** **Næste:** ❓ 1–3, ❓ 14, ❓ 16; ellers en målt opgave.

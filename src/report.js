@@ -27,7 +27,7 @@
 import { PRODUCT } from './features.js';
 import { DEFAULT_WINDOW_DAYS, windowCoverage, windowSummary } from './history.js';
 import { markdownCell as cell } from './display.js';
-import { SSL_WARN_DAYS, STALE_AFTER_DAYS, clockAheadNote, contentBytesNote, expiredNote, isCheckStale, isCheckableUrl, passAge, readCertIssuerState, readCertRotationState, readContentChangeState, readPassTime, readRedirectTarget, readResponseMs, readSslState, readStatusCode, sslLapsedNote, staleAgeNote, unknownNote, unusableUrlNote, verdictFor, withoutCredentials } from './status.js';
+import { SSL_WARN_DAYS, STALE_AFTER_DAYS, clockAheadNote, contentBytesNote, expiredNote, isCheckStale, isCheckableUrl, passAge, readCertIssuerState, readCertRotationState, readContentChangeState, readPassTime, readRedirectTarget, readResponseMs, readSslState, readStatusCode, sslLapsedNote, staleAgeNote, unknownNote, unusableUrlKind, unusableUrlNote, verdictFor, withoutCredentials } from './status.js';
 
 export const DEFAULT_REPORT_TITLE = 'Website uptime report';
 const MAX_TITLE_LENGTH = 120;
@@ -163,6 +163,11 @@ export function buildReport(state, { title, now = new Date(), history, windowDay
     .filter(([url, entry]) => typeof url === 'string' && url && entry && typeof entry === 'object')
     .map(([url, entry]) => {
       const { checks, failures } = counters(entry);
+      // One reading of the raw key, for the three fields that answer "can a
+      // pass send a request to this at all" — asked once, on the key as it is
+      // stored, because the document's own `url` is the redacted form and the
+      // shape cannot be seen through it (P1-83).
+      const checkable = isCheckableUrl(url);
       // One reading of the certificate, from the one owner — the same call the
       // terminal surfaces make. The report used to carry its own copy of the
       // day-count rule, and it had no way to say a certificate had *lapsed*:
@@ -250,8 +255,19 @@ export function buildReport(state, { title, now = new Date(), history, windowDay
         // `kunde.dk` that no pass has ever been able to check (P1-40). The row is
         // "status unknown" with the reason, and the key is counted apart from
         // the sites.
-        uncheckable: !isCheckableUrl(url),
-        status: isCheckableUrl(url) ? verdictFor(entry?.wasUp) : 'unknown',
+        uncheckable: !checkable,
+        // The reason, asked of the one owner — and asked here, on the **raw**
+        // key, which is the only place in this document the shape can still be
+        // seen. Measured 2026-09-28 (P1-83): every cell below asked the owner
+        // about the *redacted* key from the line above, `hasUrlCredentials` is
+        // `false` on that form, and this document called
+        // `http://demo:pass@kunde.dk/` "not a full address" in three places — a
+        // full address, and the same sentence the two terminal lists were
+        // measured past in P1-82. The raw key stops here: both fields are the
+        // owner's own words, and neither carries the password.
+        uncheckableNote: checkable ? null : unusableUrlNote([url], { brief: true }),
+        uncheckableKind: checkable ? null : unusableUrlKind(url),
+        status: checkable ? verdictFor(entry?.wasUp) : 'unknown',
         stale,
         ageDays: pass.ageDays,
         statusCode: readStatusCode(entry.lastStatus),
@@ -590,8 +606,12 @@ function statusCell(site) {
     : site.status === 'down'
       ? `DOWN${site.statusCode ? ` (${site.statusCode})` : ''}`
       // Asked about the fact, not about the readable time — see `unknownNote`.
+      // The note itself was measured on the raw key where the document still
+      // has it (`uncheckableNote`); this is only the reader's copy of it, and a
+      // site object built by hand rather than by `buildReport` has none — so it
+      // gets the fact without a reason, never a reason this surface guessed.
       : site.uncheckable
-        ? unusableUrlNote([site.url], { brief: true })
+        ? site.uncheckableNote ?? 'cannot be checked'
         : unknownNote({ passRecorded: site.passRecorded, ageDays: site.ageDays, clockAhead: site.clockAhead });
   // A 200 from another host is still a 200 — the row keeps its verdict — but the
   // customer reading this must see whose server answered, or "UP" is a claim
@@ -855,17 +875,33 @@ export function renderReportMarkdown(report) {
       `**The two sources disagree for ${afterPass.length} site${afterPass.length === 1 ? '' : 's'} — the window column counts checks on days that are newer than the last recorded pass, so the "Last check" column is the one to believe:** ${afterPass.map(site => cell(`${site.url} (${counted(site.windowPassesAfter, 'day')} of recorded checks after the last pass)`)).join(', ')}`,
     ];
 
-  // A key that is not an address gets a row of dashes in the table, which a
+  // A key that no pass can check gets a row of dashes in the table, which a
   // client reads as "we checked this site and have nothing to report" — or as a
-  // site the agency forgot. It is neither: no pass can check it. Named out
-  // loud, with the same words the terminal uses for the same key.
+  // site the agency forgot. It is neither. Named out loud, with the same words
+  // the terminal uses for the same key.
   const uncheckable = report.sites.filter(site => site.uncheckable);
+  // The two reasons counted apart, so the line and the summary can name the one
+  // that applies. `kunde.dk` is not a full address; `http://demo:pass@kunde.dk/`
+  // very much is, it is just one no pass may send a request to. A hand-built
+  // site object has no kind and keeps the wording it always had.
+  const notAddress = uncheckable.filter(site => site.uncheckableKind !== 'credentials').length;
+  const credentialed = uncheckable.length - notAddress;
+  const uncheckableReason = ' — the row above is empty because nothing was measured, not because the site was quiet:** ';
+  // One reason across the group: the lead-in carries it, the keys follow as
+  // they always have. Two reasons: the lead-in drops the reason and every key
+  // carries **its own** — measured 2026-09-28, this line said "not a full
+  // address" for all of them, so a bureau's customer document called a working
+  // address broken, and for the wrong reason (P1-83).
+  const oneReason = credentialed === 0;
+  const uncheckableHead = oneReason
+    ? `${uncheckable.length === 1 ? 'One listed URL is' : `${uncheckable.length} listed URLs are`} not a full address, so no monitoring pass can check ${uncheckable.length === 1 ? 'it' : 'them'}`
+    : `${counted(uncheckable.length, 'listed URL cannot be checked', 'listed URLs cannot be checked')}`;
+  const uncheckableNamed = oneReason
+    ? uncheckable.map(site => cell(site.url)).join(', ')
+    : uncheckable.map(site => cell(`${site.url} — ${site.uncheckableNote ?? 'no reason given'}`)).join('; ');
   const uncheckableLines = uncheckable.length === 0
     ? []
-    : [
-      '',
-      `**${uncheckable.length === 1 ? 'One listed URL is' : `${uncheckable.length} listed URLs are`} not a full address, so no monitoring pass can check ${uncheckable.length === 1 ? 'it' : 'them'} — the row above is empty because nothing was measured, not because the site was quiet:** ${uncheckable.map(site => cell(site.url)).join(', ')}`,
-    ];
+    : ['', `**${uncheckableHead}${uncheckableReason}${uncheckableNamed}`];
 
   return [
     `# ${cell(report.title)}`,
@@ -876,7 +912,7 @@ export function renderReportMarkdown(report) {
     `|${' --- |'.repeat(HEADERS.length)}`,
     ...(rows.length > 0 ? rows : [`| ${['_no monitored sites_', '—', '—', '—', '—', '—', '—', '—'].join(' | ')} |`]),
     '',
-    `**${report.summary.sites} site(s) · ${buckets.up} up · ${buckets.down} down${unknownWords(buckets)} · ${counted(report.summary.checks, 'check')} · ${report.summary.failures} failed${expiring.length > 0 ? ` · ${expiring.length} SSL expiring soon` : ''}${expired.length > 0 ? ` · ${expired.length} SSL EXPIRED` : ''}${lapsed.length > 0 ? ` · ${lapsed.length} SSL may be expired` : ''}${rotated.length > 0 ? ` · ${rotated.length === 1 ? '1 certificate replaced' : `${rotated.length} certificates replaced`}` : ''}${issuerChanged.length > 0 ? ` · ${issuerChanged.length} from a new certificate authority` : ''}${changedContent.length > 0 ? ` · ${changedContent.length} content changed` : ''}${stale.length > 0 ? ` · ${stale.length} stale (no check in the last ${STALE_AFTER_DAYS} d)` : ''}${crossed.length > 0 ? ` · ${crossed.length} answered by another host` : ''}${gaps.length > 0 ? ` · ${gaps.length} with an incomplete window` : ''}${uncheckable.length > 0 ? ` · ${uncheckable.length} not a full address` : ''}**`,
+    `**${report.summary.sites} site(s) · ${buckets.up} up · ${buckets.down} down${unknownWords(buckets)} · ${counted(report.summary.checks, 'check')} · ${report.summary.failures} failed${expiring.length > 0 ? ` · ${expiring.length} SSL expiring soon` : ''}${expired.length > 0 ? ` · ${expired.length} SSL EXPIRED` : ''}${lapsed.length > 0 ? ` · ${lapsed.length} SSL may be expired` : ''}${rotated.length > 0 ? ` · ${rotated.length === 1 ? '1 certificate replaced' : `${rotated.length} certificates replaced`}` : ''}${issuerChanged.length > 0 ? ` · ${issuerChanged.length} from a new certificate authority` : ''}${changedContent.length > 0 ? ` · ${changedContent.length} content changed` : ''}${stale.length > 0 ? ` · ${stale.length} stale (no check in the last ${STALE_AFTER_DAYS} d)` : ''}${crossed.length > 0 ? ` · ${crossed.length} answered by another host` : ''}${gaps.length > 0 ? ` · ${gaps.length} with an incomplete window` : ''}${notAddress > 0 ? ` · ${notAddress} not a full address` : ''}${credentialed > 0 ? ` · ${credentialed} with a username or password in it` : ''}**`,
     ...expiredLines,
     ...lapsedLines,
     ...attention,
@@ -889,7 +925,7 @@ export function renderReportMarkdown(report) {
     ...afterPassLines,
     ...uncheckableLines,
     '',
-    `Uptime is the share of completed monitoring passes that answered HTTP 200–399. "Uptime (all)" counts every pass since the site was added${since ? ` (earliest ${shortTime(since)})` : ''}; "Uptime (window)" counts the passes recorded in the last ${windowDays} days. A site with no completed pass yet shows — rather than 100%. Where a pass *is* on the row — a status, a response time, a last-check time — the — names the state file's missing check counter instead, because that pass ran and only the counter is not there; \`counterNotRecorded\` in \`--json\` is the same fact as a boolean. "Uptime (window)" is counted from a separate daily history file, so a row can show a recent check with an empty window column; that column then names the file that is missing the pass rather than claiming the site was not monitored. The two files can also disagree the other way, with the history file holding recorded checks on days that are newer than the last pass in the state file; such a site is named below the table with the number of those days, so the window column is never read as checks this machine ran after it stopped watching. A site that was already being monitored when the window opened, but has fewer recorded days than the window, is named below the table with both counts, so the share and the period are not read as covering days nobody watched. The counts in the summary line are a partition: every site is in exactly one of up, down, not checked, status unknown or stale. "Up" and "down" describe sites checked within the last ${STALE_AFTER_DAYS} days; a site whose monitoring stopped is counted as stale and keeps the status from its last pass in the table, named with the age of that pass. "Status unknown" means a pass ran but its result cannot be read from the state file. A listed URL that is not a full address can never be measured at all: it is named below the table and counted separately, so its empty row is never read as a site that was simply quiet. The SSL column is what the last pass read, so its day count is the deadline the certificate had at that moment. A reading less than a day old is shown as measured; one old enough that the certificate may have lapsed since is named as such and is not counted as a renewal to schedule — run \`deskuptime check <url>\` for a fresh reading. A certificate that was replaced since monitoring is named below the table with the age it had when this report was generated; the SSL column counts down from the certificate that answered last, so it cannot show that it is a different one from the client's. The same line carries that certificate's serial number, because the issuer above and the serial are what a security review asks for as a pair, and a renewal that changed nothing else is the one case where the number is still worth reading. A certificate that now answers from an authority other than the one the site answered with when monitoring started is named the same way, with both names: a renewal keeps its issuer, and a hijack keeps every number above looking healthy. \`sslIssuer\` in \`--json\` names the authority behind the certificate the SSL column counts down from. The Content column is what the last pass that actually read the page saw: a page over the content-check limit is never read, so it shows — rather than a size, and a size left by an earlier pass is never presented as this check's measurement. A size that is not from today says how old it is, because the check in the last column can be hours old while the page was last read days ago, and a row that quoted a number without saying when would read as a measurement of now. \`contentReadAt\` in \`--json\` is that time. "Changed" is a change measured since the site was added, and it is named below the table with the age it had when this report was generated — a page that was altered and then left alone is still a page a customer should know about, and the uptime columns do not cover it.`,
+    `Uptime is the share of completed monitoring passes that answered HTTP 200–399. "Uptime (all)" counts every pass since the site was added${since ? ` (earliest ${shortTime(since)})` : ''}; "Uptime (window)" counts the passes recorded in the last ${windowDays} days. A site with no completed pass yet shows — rather than 100%. Where a pass *is* on the row — a status, a response time, a last-check time — the — names the state file's missing check counter instead, because that pass ran and only the counter is not there; \`counterNotRecorded\` in \`--json\` is the same fact as a boolean. "Uptime (window)" is counted from a separate daily history file, so a row can show a recent check with an empty window column; that column then names the file that is missing the pass rather than claiming the site was not monitored. The two files can also disagree the other way, with the history file holding recorded checks on days that are newer than the last pass in the state file; such a site is named below the table with the number of those days, so the window column is never read as checks this machine ran after it stopped watching. A site that was already being monitored when the window opened, but has fewer recorded days than the window, is named below the table with both counts, so the share and the period are not read as covering days nobody watched. The counts in the summary line are a partition: every site is in exactly one of up, down, not checked, status unknown or stale. "Up" and "down" describe sites checked within the last ${STALE_AFTER_DAYS} days; a site whose monitoring stopped is counted as stale and keeps the status from its last pass in the table, named with the age of that pass. "Status unknown" means a pass ran but its result cannot be read from the state file. A listed URL that no pass can send a request to can never be measured at all — neither one that is not a full address nor one that carries a username or password, which is a full address the tool may not use: each is named below the table with the reason it cannot be checked and counted separately, so its empty row is never read as a site that was simply quiet. The SSL column is what the last pass read, so its day count is the deadline the certificate had at that moment. A reading less than a day old is shown as measured; one old enough that the certificate may have lapsed since is named as such and is not counted as a renewal to schedule — run \`deskuptime check <url>\` for a fresh reading. A certificate that was replaced since monitoring is named below the table with the age it had when this report was generated; the SSL column counts down from the certificate that answered last, so it cannot show that it is a different one from the client's. The same line carries that certificate's serial number, because the issuer above and the serial are what a security review asks for as a pair, and a renewal that changed nothing else is the one case where the number is still worth reading. A certificate that now answers from an authority other than the one the site answered with when monitoring started is named the same way, with both names: a renewal keeps its issuer, and a hijack keeps every number above looking healthy. \`sslIssuer\` in \`--json\` names the authority behind the certificate the SSL column counts down from. The Content column is what the last pass that actually read the page saw: a page over the content-check limit is never read, so it shows — rather than a size, and a size left by an earlier pass is never presented as this check's measurement. A size that is not from today says how old it is, because the check in the last column can be hours old while the page was last read days ago, and a row that quoted a number without saying when would read as a measurement of now. \`contentReadAt\` in \`--json\` is that time. "Changed" is a change measured since the site was added, and it is named below the table with the age it had when this report was generated — a page that was altered and then left alone is still a page a customer should know about, and the uptime columns do not cover it.`,
     '',
     `Generated on one machine, without an account: no page content, response headers or license data is included, and nothing was uploaded.`,
   ].join('\n');

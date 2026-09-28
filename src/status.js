@@ -2657,9 +2657,21 @@ export function partitionUsableUrls(urls) {
   return { usable, unusable };
 }
 
+/**
+ * Which of the two reasons a saved key can never be checked, as a fact a caller
+ * can branch on — the same question the two sentences below answer in words.
+ * `kunde.dk` is not a full address; `http://demo:pass@kunde.dk/` very much is,
+ * it is just one no pass may send a request to, so a document that counts the
+ * two as one calls a full address "not a full address". Measured 2026-09-28 in
+ * the client report (P1-83), the only surface that did.
+ */
+export function unusableUrlKind(url) {
+  return hasUrlCredentials(url) ? 'credentials' : 'not-address';
+}
+
 /** Why a saved key can never be checked, in words, without its credentials. */
 function unusableUrlReason(url) {
-  return hasUrlCredentials(url)
+  return unusableUrlKind(url) === 'credentials'
     ? `has ${urlCredentials(url)} in it, which is never sent and never stored`
     : 'is not a full address';
 }
@@ -2678,7 +2690,7 @@ export function unusableUrlNote(unusable, { checked = null, brief = false } = {}
   // names the key itself: a row in a status list, a cell in a client report.
   // `kunde.dk` is not a full address; `http://demo:pass@…` very much is, so the
   // sentence names the real reason instead of calling both the same thing.
-  if (brief) return unusable.some(hasUrlCredentials)
+  if (brief) return unusable.some(url => unusableUrlKind(url) === 'credentials')
     ? 'has a username or password in it, so no pass can check it — and the password is neither sent nor stored'
     : 'not a full address, so no pass can check it';
   const skipped = unusable.length === 1 ? '1 saved URL' : `${unusable.length} saved URLs`;
