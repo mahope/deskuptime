@@ -3865,6 +3865,64 @@ Den aktuelle gate-definition er registreret her:
 
 ## Prioriteret kø
 
+### P1-92 — NÆSTE (målt i denne iteration, kode ikke ændret) — ét test gør gaten rød med en fejl, der ikke handler om koden
+
+**Målt, ikke gættet.** Ét kald til CI'en ved iterationens start (aldrig polling)
+på `main`:
+
+```
+completed  failure  Notér P1-90 og mål den næste iterations grundlag  606166c
+completed  success  Lad et ulæseligt certifikat sige det …          c233afa
+```
+
+**606166c er en plan-commit.** Den rørte kun `IMPLEMENTATION_PLAN.md`, så den kan
+ikke have bragt noget i `src/`. Loggen siger hvorfor den så stred:
+
+```
+test/certrotation.test.js:145  målt på et rigtigt certifikat: checkSSL læser begge identitetsfelter
+  AssertionError: målingen skal nå et certifikat: read ECONNRESET
+  tests 741 · pass 740 · fail 1
+```
+
+Linje 146 er `await checkSSL('https://example.com', { timeoutMs: 10_000 })` — et
+**håndtryk til det offentlige internet som en del af gaten**. En `ECONNRESET` fra
+`example.com` gør kørslen rød, og intet i diffen kan have forårsaget den. Den
+samme commit er grøn lokalt (751/751) og grøn i den forrige kørsel, hvilket er
+præcis et flak-mønster: **gaten kan sige "rød" uden at sige noget om koden.**
+
+Det er den anden gang i kort tid, at gaten er målt som utroværdig — P1-67 målte i
+iteration 83 at den havde været rød siden P1-58, og P1-75 (iteration 89) fandt
+at den var rød på maskinens `node` og ikke på koden. **En port til det offentlige
+internet i gaten er den samme klasse fejl: miljøet bestemmer farven.**
+
+**Rettelsen er allerede skrevet andre steder i dette repo.** `test/helpers/certs.mjs`
+kan lave et rigtigt, selvsigneret certifikat (`selfSignedFixture`), og både
+`test/ssltruth.test.js` og `test/certondown.test.js` bruger det til at læse et
+*rigtigt* certifikat fra en lokal server. Testen her vil det samme: samme
+påstand — "checkSSL læser begge identitetsfelter fra et rigtigt certifikat" —
+uden at røre det offentlige internet.
+
+**Acceptkriterier:**
+
+1. ✅ `test/certrotation.test.js:146` peger på en lokal HTTPS-server med et
+   certifikat fra `certs.mjs`, ikke på `example.com`. Målt: `rg -n 'example\.com'
+   test/` giver ingen SSL-måling tilbage.
+2. ✅ Testen siger **stadig** hvad den siger i dag: et serial der er hex, et
+   fingerprint på 64 tegn, og at SHA-1 ikke er det hashet sammenligningen stoler
+   på. Den skal ikke svækkes til et lokalt stub-brev.
+3. ✅ Hele suiten kører med **netværket afbrudt** (lokalt: `NODE_OPTIONS`-fri
+   offline-kørsel mod ingen DNS) og er grøn. Det er den hånd, der gør
+   løsningen målbar.
+4. ✅ `rg -n "https://(www\.)?[a-z]+\.(com|org|net|io|dk)" test/` er tomt for alt
+   der *måler* — de tests der gerne læser en offentlig side skal kunne findes
+   vednavn, så den næste der kommer ved et uheld, kan spørgs om.
+5. ✅ 751/751 lokalt, audit 0/0, `matrix --check` exit 0.
+
+**Ikke taget nu, bevidst:** Jeg er i den 40. minut, og en port der rører
+`certs.mjs`, to testfils og måske et hjælpe-script er ikke en opgave man afleverer
+halv. Den står derfor som **første linje i køen** med målingen vedhæftet, så næste
+iteration starter med den og har alle 45 minutter.
+
 ### P1-91 — FÆRDIG 2026-09-28 (`ceo/thanks-free-list`, `81e97a7`) — det gratis værktøj havde ingen sted at sige tak
 
 Historien står i afsnittet øverst. Kort: `donationUrl` lå i kilden, i
