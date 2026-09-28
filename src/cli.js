@@ -18,7 +18,7 @@ import { buildReport, renderReportJson, renderReportMarkdown } from './report.js
 import { readFileSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
-import { invalidHttpUrls, invalidUrlMessage, partitionUsableUrls, readCertCoverage, readCertIdentity, readCertRotation, readChain, readContentComparison, readContentState, readDisclosure, readEntry, readRedirectTarget, readSecurityHeaders, readSslIssuer, readSslState, readSslTls, contentSkipNote, unusableUrlNote, withoutCredentials, CERT_VERDICT, CONTENT_VERDICT, SECURITY_HEADER, STALE_AFTER_DAYS } from './status.js';
+import { invalidHttpUrls, invalidUrlMessage, partitionUsableUrls, readCertCoverage, readCertIdentity, readCertRotation, readChain, readContentComparison, readContentState, readDisclosure, readEntry, readHeaderSource, readRedirectTarget, readSecurityHeaders, readSslIssuer, readSslState, readSslTls, contentSkipNote, unusableUrlNote, withoutCredentials, CERT_VERDICT, CONTENT_VERDICT, SECURITY_HEADER, STALE_AFTER_DAYS } from './status.js';
 import { formatMs, machinesInUse, safeText } from './display.js';
 import { DEFAULT_WINDOW_DAYS, HISTORY_DAYS, historyReadErrorMessage, readHistoryFile } from './history.js';
 import { FREE, PRODUCT, proExtras, renderHelpPro } from './features.js';
@@ -417,16 +417,26 @@ if (command === 'headers') {
   // missing all five, and a bureau pipes this output straight into a client's
   // report. `securityChecked` is the sentence the JSON could not say.
   const chain = readChain({ stopReason: r.stopReason, statusCode: r.statusCode, steps: r.steps });
+  // Whose response the five headers and the two stack fields came from. A walk
+  // that left the host read them off the *answering* host, so a parked or
+  // hijacked client domain reported the stranger's HSTS and the stranger's
+  // `X-Powered-By` as findings about the client, in a sheet byte-identical to
+  // the one for the stranger itself (measured 2026-09-28 — see
+  // `readHeaderSource`). The site's own first response is the only reading that
+  // belongs to the site, so a crossed walk reads that instead. A redirect inside
+  // one host keeps the final reading: same site, same answer.
+  const source = readHeaderSource({ url, finalUrl: chain.measured ? r.finalUrl : null, measured: chain.measured });
+  const reading = source.crossed && r.ownReading ? r.ownReading : { security: r.security, server: r.server, poweredBy: r.poweredBy };
   // Same deal for the five headers: one reading, asked once, and both surfaces
   // read it. The terminal could not say "sent with no value" and the JSON could
   // not either, because an empty value had been collapsed into `null` — the very
   // value a header that never arrived has.
-  const security = readSecurityHeaders(r.security);
+  const security = readSecurityHeaders(reading.security);
   // And the two fields that say what a site is built on, read the same way: one
   // reading, asked once. `X-Powered-By exposed` is a warning a bureau puts in a
   // client's report, and an empty value used to make it vanish — the site sent
   // the header and the tool said it sent nothing.
-  const disclosure = readDisclosure({ server: r.server, poweredBy: r.poweredBy });
+  const disclosure = readDisclosure({ server: reading.server, poweredBy: reading.poweredBy });
   // And the one fact the walk itself produced: did *another host* answer? `headers`
   // is the only surface that follows the chain by hand, and it is the one surface
   // that never asked the owner of that question — measured 2026-09-28, a site
@@ -443,7 +453,28 @@ if (command === 'headers') {
   const redirect = readRedirectTarget({ url, finalUrl: chain.measured ? r.finalUrl : null });
 
   if (args.includes('--json')) {
-    console.log(JSON.stringify({ ...r, offHostRedirect: redirect.offHost, securityChecked: chain.measured, securityEmpty: security.empty, disclosureEmpty: disclosure.empty }, null, 2));
+    // `headersFrom` is the sentence the JSON could not say about *whose* sheet
+    // this is. A script compares it with the host it asked; it differs exactly
+    // when another host answered, and it is `null` when there is no reading at
+    // all. Positive, not a boolean, so it is usable without knowing the rule.
+    //
+    // The three published fields are the *chosen* reading, not whatever the last
+    // response carried — otherwise this branch would keep shipping the
+    // stranger's `security` next to a `headersFrom` naming the client, which is
+    // the same lie one field over. `ownReading` is the walk's internal bookkeeping
+    // and is dropped: the two readings must not both be in the document.
+    const { ownReading, ...rest } = r;
+    console.log(JSON.stringify({
+      ...rest,
+      server: reading.server,
+      poweredBy: reading.poweredBy,
+      security: reading.security,
+      offHostRedirect: redirect.offHost,
+      headersFrom: source.host,
+      securityChecked: chain.measured,
+      securityEmpty: security.empty,
+      disclosureEmpty: disclosure.empty,
+    }, null, 2));
     if (!r.healthy) process.exitCode = 2;
   } else if (r.error) {
     console.log(`🧭 ${safeText(url, { max: 0 })}`);
@@ -470,6 +501,9 @@ if (command === 'headers') {
   // A redirect is still not a failure, so the exit code and the verdict stay.
   if (redirect.offHost) {
     console.log(`   ⚠️  ${safeText(redirect.note, { max: 0 })}`);
+  }
+  if (source.note) {
+    console.log(`   ⚠️  ${safeText(source.note, { max: 0 })}`);
   }
   if (!chain.measured) {
     console.log(`   ⬜ ${chain.securityNote}`);

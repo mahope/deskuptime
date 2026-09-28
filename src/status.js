@@ -200,6 +200,63 @@ export function readRedirectTarget({ url = '', finalUrl = null } = {}) {
   };
 }
 
+/**
+ * Whose response the five security headers and the two stack fields belong to.
+ *
+ * Measured 2026-09-28 with the real CLI against two real local servers — a
+ * client domain that 301s to a parking page, a hijacked domain or a registrar's
+ * "did you mean" page:
+ *
+ *   $ deskuptime headers http://127.0.0.1:65108/
+ *      301 → http://127.0.0.1:65107/parked
+ *      Final: http://127.0.0.1:65107/parked (200) — redirected
+ *      ⚠️  answered by another host — the response came from 127.0.0.1:65107, …
+ *      ⚠️  X-Powered-By exposed: PHP/8.2.1
+ *      ✅ strict-transport-security: max-age=63072000
+ *      ✅ content-security-policy: default-src 'none'
+ *      ✅ x-content-type-options: nosniff
+ *      ✅ x-frame-options: DENY
+ *      ✅ referrer-policy: no-referrer
+ *
+ * Every line after the `Final:` is the **stranger's**, printed as the client's.
+ * The sheet was byte-identical to what `headers` prints when asked about
+ * 127.0.0.1:65107 itself, and `headers --json` put those five values in
+ * `security` next to `offHostRedirect: true` and nothing that says whose they
+ * are. So a bureau scanning a client domain — the exact job this command exists
+ * for — could write `✅ HSTS: max-age=63072000` and `X-Powered-By exposes
+ * PHP/8.2.1` into a customer's report about a host it does not control, and a
+ * script reading `security` had no field to notice. The warning was one line
+ * above a list that confirmed everything.
+ *
+ * The fix is not a better warning: the site's own server *did* answer, on the
+ * first hop, and its headers are the only reading that can be attributed to the
+ * site. So when the walk left the host, the five headers and the two stack fields
+ * are read from that first response — the site's own 301 — and `host` says so.
+ * A redirect inside one host keeps the final reading, because that is the same
+ * site answering: `www.acme.dk → acme.dk` is the common case and must not move.
+ *
+ * `host` is the asked host, or `null` when there is no reading to attribute —
+ * a walk that got no response at all publishes no `security` values to own.
+ *
+ * @param {object} [state] — `{ url, finalUrl, measured }`
+ * @returns {{ host: string|null, crossed: boolean, askedHost: string|null, answeredHost: string|null, note: string }}
+ */
+export function readHeaderSource({ url = '', finalUrl = null, measured = true } = {}) {
+  const askedHost = hostKey(url);
+  const answeredHost = hostKey(finalUrl);
+  const both = measured && askedHost !== null && answeredHost !== null;
+  const crossed = both && askedHost !== answeredHost;
+  return {
+    host: measured && askedHost !== null ? askedHost : null,
+    crossed,
+    askedHost,
+    answeredHost,
+    note: crossed
+      ? `the five security headers and the stack are ${askedHost}'s own — they were read from its first response, not from ${answeredHost}`
+      : '',
+  };
+}
+
 /** A page title, but only a real one: a string with something in it. */
 function titleText(value) {
   return typeof value === 'string' && value.trim() !== '' ? value.trim() : null;
