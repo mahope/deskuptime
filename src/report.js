@@ -404,6 +404,14 @@ export function buildReport(state, { title, now = new Date(), history, windowDay
         // had until the pair was kept. Additive and `null` for every state file
         // written before the pair existed, so nothing a consumer reads moves.
         contentTitleBefore: content.previousTitle,
+        // Whether the pass that measured this change saw the page's title stay put.
+        // `contentTitle` and `contentTitleBefore` alone cannot say: with no before
+        // the two are the same absence for a state file that predates the pair and
+        // for a change whose title did not move, and a consumer rendering the
+        // first beside `contentTitle` would name a title the change did not touch.
+        // Additive, `false` for every file written before the pass recorded it, so
+        // nothing a consumer reads moves.
+        contentTitleUnchanged: content.titleUnchanged,
         // The owner's own sentence, carried through rather than rebuilt. The
         // first version had the report assemble it from the site's fields, and
         // the two sets of names did not match — the line rendered as

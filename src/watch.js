@@ -737,6 +737,32 @@ export async function runPass(state, opts = {}) {
       if (change.titleChanged) entry.contentTitleBefore = change.previousTitle;
       else delete entry.contentTitleBefore;
 
+      // The other half of that absence, and the reason the readers named a title
+      // the change never touched. A change whose title did not move — a nonce, a
+      // CSRF token, a live counter, a price that re-renders — measured that fact
+      // here, and `delete` above threw it away: the readers were left with only
+      // `lastTitle`, which is the page as it is *now*, so all three of them fell
+      // through to their one-sided form and printed a title the change did not do.
+      // Measured 2026-09-28 with the real loop and a real page, no code changed:
+      //
+      //   channel: content changed — same size (68 bytes): the page's bytes differ
+      //   status:  🔄 content changed today — page title: "Acme — home"
+      //   report:  🔄 content changed today — page title: "Acme — home"
+      //
+      // The channel says the title did not move; the three readers say it did, by
+      // naming it. For an agency the sentence is the evidence they hand a
+      // customer — "the title changed" is what a defaced homepage looks like — so
+      // a title the change did not do is worse than no title at all.
+      //
+      // It is written and cleared on the same condition as the pair above, and it
+      // is *absent* rather than `false` for every state file written before it
+      // existed, so those keep the one-sided form — which is all they can honestly
+      // say. The distinction is the whole point: "we never kept a before" and "we
+      // measured, and the title did not move" are two different facts about the
+      // same empty pair, and only one of them is allowed to name a title.
+      if (change.titleChanged) delete entry.contentTitleUnchanged;
+      else entry.contentTitleUnchanged = true;
+
       // Whether the change is *sent* is a second question, and it has one owner
       // too: a page that renders a per-request value (a CSRF nonce, a
       // cache-buster, a live counter) differs on every pass, and every difference
@@ -824,7 +850,14 @@ export async function runPass(state, opts = {}) {
       // was re-read and its title is now this, with nothing measured to pair it
       // against". Between them the pair can only ever describe the newest
       // measured change, and the sentence it produces cannot be one pass stale.
-      if (title !== entry.lastTitle && result.content?.changed !== true) delete entry.contentTitleBefore;
+      if (title !== entry.lastTitle && result.content?.changed !== true) {
+        delete entry.contentTitleBefore;
+        // The same reason, for the same sentence: the pair is gone because this
+        // pass re-read the page, so the "the title did not move" note from an older
+        // change describes a title that has since moved. Left behind it would
+        // silence the title on a *later* change that did move it.
+        delete entry.contentTitleUnchanged;
+      }
       entry.lastTitle = title;
     }
   }

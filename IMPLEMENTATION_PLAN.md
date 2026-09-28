@@ -1,8 +1,83 @@
-> **Seneste:** iteration 117 (P1-102, færdig) — historien står i køens afsnit
-> `P1-102 — FÆRDIG 2026-09-28` lige under `## Prioriteret kø`. Køen er igen tom
+> **Seneste:** iteration 118 (P1-103, færdig) — historien står i køens afsnit
+> `P1-103 — FÆRDIG 2026-09-28` lige under `## Prioriteret kø`. Køen er igen tom
 > for målte kandidater; de målte fund er under `## ❓ Til Mads`.
 
-## Status fra denne iteration (117, P1-102 — `check` fandt ingen grundlinje for et site det overvågede, fordi adressen var skrevet som en browser viser den)
+## Status fra denne iteration (118, P1-103 — en ændring hvis titel ikke flyttede sig blev meldt som en der gjorde)
+
+**Målt først, nul kode ændret.** Køen var tømt, så målingen gik på den del af
+historien der *allerede* var rettet: P1-80s titelpar. Rigtig CLI, rigtig løbe, rigtig
+temp-HOME. Ét site, en side hvor **kroppen** ændrede sig og `<title>` ikke gjorde
+det — en nonce, et CSRF-token, en pris der gengives med de samme tal:
+
+```
+$ deskuptime watch http://127.0.0.1:50827 --once     ← baseline
+$ deskuptime watch http://127.0.0.1:50827 --once     ← kroppen +1 byte, titlen samme
+  kanal : content changed — same size (68 bytes): the page's bytes differ
+  status: 🔄 content changed today — page title: "Acme — home"          ← fandt den
+  watch : 🔄 content changed today — page title: "Acme — home"
+  rapport: 🔄 content changed today — page title: "Acme — home"
+```
+
+**Fire flader, én ændring, to domme.** Kanalen måler begge sider af titlen og siger
+`the page's bytes differ` — den *kan* ikke finde et par, fordi der ikke er et. De tre
+lister holdt kun `lastTitle`, som er siden som den er *nu*, og faldt igennem til
+deres ensidige form. Læst som en sætning er `page title: "Acme — home"` lige efter
+ordet *changed* præcis den sætning, et bureau læser, når en kundes forside er
+hacked. Det er P1-80s fejl peget omvendt: der beskrev sætningen siden i stedet for
+ændringen, her beskriver den en ændring, der ikke skete.
+
+**Årsagen er to forskellige ting som var én fravær.** "Vi gemte aldrig en
+forrige titel" (en fil fra før parret fandtes) og "vi gemte ingen, fordi titlen
+blev stående" (en målt ændring uden titelskift) så ensidige ud, og kun den første
+må navngive en titel. Passen målte forskellen og kastede den væk: `readContentChange`
+returnerer `titleChanged: false`, og `watch.js` slettede parret og stoppede der.
+
+**Rettelsen er at passen beholder det, og at listerne spørger.** Nyt felt
+`contentTitleUnchanged` i state-filen, sat og ryddet på præcis samme betingelse som
+parret — fordi notatet tilhører en *ændring*, ikke siden. Ejeren
+(`contentChangeNote`) får et tredje spørgsmål: `titlePairNote` giver pilen, og når
+der ikke er noget par *og* notatet siger at titlen blev målt og ikke flyttede sig,
+nævner sætningen ingen titel. **Et læsbart par slår stadig notatet** — to titler der
+virkelig adskiller sig er en ændring notatet ikke kan tale for, og en håndskrevet
+fil kan rumme begge.
+
+**Acceptkriterier — alle syv opfyldt:**
+
+1. ✅ En målt ændring uden titelskift navngiver ingen titel på nogen af de fire
+   flader (målt gennem rigtig CLI + rigtig løbe + rigtig state-fil).
+2. ✅ Kanalen og de tre lister siger det samme om den ændring — kanalens egen
+   sætning er målt i samme test og er urørt.
+3. ✅ `report --json` får ét additivt felt `contentTitleUnchanged`, så et system
+   ellers ikke kan skelne de to tilstande; `contentTitle` er stadig siden som den
+   er nu, og `contentTitleBefore` er stadig `null`.
+4. ✅ Notatet ryddes væk, når en senere ændring *flytter* titlen — ellers ville det
+   tie på den ændring et bureau mest har brug for navngivet (målt).
+5. ✅ **Alt fra P1-80 er urørt, målt for sig:** en ændring der flytter titlen giver
+   stadig `"Acme — home" → "Acme — shop"` på alle fire flader.
+6. ✅ **En fil fra før flaget eksisterede er urørt:** intet felt, `false` i JSON, og
+   den ensidige sætning — som for netop sådanne filer er alt den kan sige.
+7. ✅ **Fire mutationer målt, alle fire døde** (3 / 3 / 2 / 1 fejl): passen glemmer
+   notatet, ejeren spørger ikke, notatet overlever en ny titel, notatet slår et
+   læsbart par.
+
+**Én eksisterende test rettet, og det er værd at sige hvorfor.** `titlepair.test.js`
+`'en ændring hvis titel ikke flyttede sig, efterlader ingen pil fra en tidligere
+ændring'` sluttede med at kræve den *gamle* sætning: `— page title: "Acme — shop"`
+for en ændring der netop målte, at titlen ikke flyttede sig. Testens egen forklaring
+sigter mod pilen fra et tidligere pass, og den del er stadig dækket og stadig grøn.
+Sidste linje var ikke en beskyttelse af pilen; den var en fældelse af den her fejl.
+Den er rettet, og kommentaren siger nu eksplicit hvorfor.
+
+**Gaten:** **809/809** på Node 22.23.2 via `tools/run-tests.mjs` (803 + 6 nye);
+`matrix --check` exit 0; audit 0/0; `node --check` ren; `git diff --check` rent.
+
+**Ingen deploy-note:** CLI-repo uden live-deploytarget, og ingen side blev
+ændret, så der er ingen trafik-baseline at skrive.
+
+**Fire filer rørt:** `src/watch.js` (to cleare + notatet), `src/status.js` (ejeren
++ læsningen), `src/report.js` (ét additivt JSON-felt) og de to testfiler.
+
+## Status fra tidligere iteration (117, P1-102 — `check` fandt ingen grundlinje for et site det overvågede, fordi adressen var skrevet som en browser viser den)
 
 **Målt først, nul kode ændret.** Køen var tømt, så målingen gik på den kommando
 en CI-job og et bureau bruger *inden* de overvåger: `check`. Rigtig CLI, rigtige
@@ -4535,10 +4610,42 @@ Den aktuelle gate-definition er registreret her:
 
 ## Prioriteret kø
 
-> **Køen er tom for målte kandidater** (iteration 117). De målte fund fra den
+> **Køen er tom for målte kandidater** (iteration 118). De målte fund fra den
 > iteration ligger i afsnittet ovenfor og i `❓ Til Mads`. Næste iteration skal
 > **måle først** og finde sin egen opgave — den metode der har fundet de sidste
-> 94 opgaver. Se `❓ Til Mads` for de konkrete, målbare kandidater.
+> 95 opgaver. Se `❓ Til Mads` for de konkrete, målbare kandidater.
+
+### P1-103 — FÆRDIG 2026-09-28 (`ceo/title-unchanged`) — en ændring hvis titel ikke flyttede sig blev meldt som en der gjorde
+
+**Målt først, nul kode ændret.** Se afsnittet øverst. Kort fortalt: rigtig CLI,
+rigtig løbe, rigtig temp-HOME. Én side hvor kroppen ændrede sig og `<title>` ikke
+gjorde det. Kanalen skrev `the page's bytes differ`; alle tre lister skrev
+`🔄 content changed today — page title: "Acme — home"` — den sætning et bureau
+læser, når en kundes forside er hacked.
+
+**Årsagen:** to forskellige ting var ét fravær. "Vi gemte aldrig en forrige titel"
+(en fil fra før P1-80) og "vi gemte ingen, fordi titlen blev målt og ikke flyttede
+sig" (en nonce, et CSRF-token) faldt begge videre til den ensidige form, og kun
+den første må navngive en titel. Passen målte forskellen — `readContentChange`
+returnerer `titleChanged: false` — og `watch.js` slettede parret og stoppede der.
+
+**Fix:** passen beholder det som `contentTitleUnchanged`, sat og ryddet på samme
+betingelse som parret, fordi notatet tilhører en ændring og ikke siden. Ejeren
+`contentChangeNote` spørger det, når der ikke er noget par. Ét additivt felt i
+`report --json`. 6 nye tests i `test/titleunchanged.test.js`, hvoraf fire måler
+gennem rigtig løbe og rigtig state-fil → **809/809** (803 + 6); audit 0/0;
+`matrix --check` 0; `node --check` og `git diff --check` grønne. **Fire
+mutationer målt, alle døde** (3/3/2/1 fejl).
+
+**Én eksisterende test rettet, fordi den låste fejlen:** `titlepair.test.js`
+sluttede med at kræve den gamle sætning for en netop målt *uændret* titel. Dens
+egen forklaring handler om en gammel pil, og den del er urørt.
+
+**Mønsteret er værd at huske:** P1-80 rettede den halve, hvor parret *kan* dannes.
+Den anden halve — at et par *ikke* kan dannes, fordi titlen ikke flyttede sig — var
+aldrig et spørgsmål, fordi "ingen par" så ud som én ting. Det er samme fejl som ❓ 21
+beskriver for skrivemåder: **et fravær der dækker to forskellige fakta kan kun
+løses ved at huske hvilken.**
 
 ### P1-102 — FÆRDIG 2026-09-28 (`ceo/check-baseline`) — `check` fandt ingen grundlinje for et site det overvågede, fordi adressen var skrevet som en browser viser den
 
@@ -7839,6 +7946,30 @@ for selv. Ingen gemt nøgle er omskrevet, ingen eksisterende adgangsd tilstand
     gjort det for `check` i denne iteration som seks tests, men ikke for
     `status`, `report` og `headers`, og jeg ved ikke om de har den samme fejl
     uden at have målt dem.
+
+22. **Er der andre steder, hvor ét fravær dækker to forskellige fakta?**
+    P1-103 er samme sygdom som ❓ 21, men hvor fejlen ikke lå i en ny kommando —
+    den lå i en *faktisk tilstand* der aldrig var opfundet. "Vi gemte aldrig en
+    forrige titel" og "vi gemte ingen, fordi titlen blev målt og ikke flyttede sig"
+    så ensidige ud, og alle tre lister sagde i en uge til et bureau at en kundes
+    forside var ændret i titlen, når det eneste der ændrede sig var et CSRF-token.
+    **Mønstret er generelt, og intet i gaten ser det:** hver gang en læser har
+    valgt *mellem* to tilstande med `??` eller `||`, og kun den ene må sige noget,
+    er der en mulighed for at den anden er en helt anden historie. De tre kandidater
+    jeg fandt ved at lede i koden, ikke ved at gætte:
+    - `contentChangeNote()` — **fundet og rettet i P1-103** (`titlePairNote()` ?? ensidig form).
+    - `readContentChangeState()` — `previousTitle` læses med `titleText()`, som
+      returnerer `null` både når feltet mangler og når det er tomt. Målt i P1-103,
+      samme tale: en håndskrevet `contentTitleBefore: ""` er en fil *uden* par, og
+      det er den ærlige sætning for den — så ingen fejl her, men kun fordi
+      forskellen er uden betydning. Det er ikke et argument for at de andre er
+      lige sådan.
+    - `unusableUrlNote()` og `unknownNote()` — begge vælger en sætning ud fra to
+      eller tre felter. **Disse to har jeg ikke målt**, og de er præcis den slags
+      sted fejlen fra ❓ 21 lever i.
+    **Spørgsmålet er om det er værd at måle de to sidste nu.** De er billige at måle
+    med rigtig CLI og rigtig state-fil, og svaret afgør om ❓ 21 og ❓ 22 er ét
+    problem eller to.
 
 1. Hvad er den endelige gratis/Pro-matrix? Skal desktoptray og lokale notifications være gratis, eller kun Pro? README, kode og mission peger i dag i forskellige retninger.
 2. Skal Pro email og Slack/Discord/Teams implementeres nu, eller skal de forblive uden for matrixen, indtil de er bygget? P0-5 har fjernet dem fra alle overflader i dette repo og noteret dem som ikke-implementeret; **live-siten `deskuptime.com` hævder stadig email for Desktop Pro**, og rettelsen ligger uden for dette repo (P0-12 er `BLOCKED`). Svar på spørgsmålet afgør både næste CLI-opgave og sitens claim.

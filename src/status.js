@@ -494,6 +494,14 @@ export function readContentChangeState(entry, { now = new Date() } = {}) {
     // holds a "before" equal to the current title has no pair, and the sentence
     // is the one-sided one, which is true rather than an arrow onto itself.
     previousTitle: titleText(value.contentTitleBefore),
+    // The pass measured this change and the page's title did not move. The third
+    // shape an empty pair can have, and the one the one-sided sentence is not
+    // allowed to cover: "we never kept a before" and "we kept none, because the
+    // title stayed" are two different facts, and only the second one knows the
+    // title did not change. `true`/`false`, not an absence — a state file written
+    // before the pass recorded this has no field, and `null` is that. It is read
+    // here rather than re-derived, so the sentence and the flag cannot disagree.
+    titleUnchanged: value.contentTitleUnchanged === true,
     // The sentence, built here from exactly the fields just decided, so a
     // caller cannot assemble it from a different set. Measured: the first
     // version had the report hand a *site* object to a function that read the
@@ -506,6 +514,7 @@ export function readContentChangeState(entry, { now = new Date() } = {}) {
       aheadMs: reading.aheadMs,
       title: value.lastTitle,
       previousTitle: value.contentTitleBefore,
+      titleUnchanged: value.contentTitleUnchanged === true,
     }),
   };
 }
@@ -519,14 +528,28 @@ export function readContentChangeState(entry, { now = new Date() } = {}) {
  * rather than "no change": that would be the false all-clear P1-21 removed from
  * `check --json`, and a page nobody has read deserves no sentence at all.
  */
-export function contentChangeNote({ changed = false, ageDays = null, aheadMs = 0, title = null, previousTitle = null } = {}) {
+export function contentChangeNote({ changed = false, ageDays = null, aheadMs = 0, title = null, previousTitle = null, titleUnchanged = false } = {}) {
   if (changed !== true) return '';
   if (Number.isFinite(aheadMs) && aheadMs > 0) return `🔄 content changed — last change ${clockAheadNote(aheadMs)}`;
   const when = ageDays === null ? 'at an unreadable time' : ageDays === 0 ? 'today' : `${ageDays} d ago`;
   // The arrow when the pass kept both sides, the single title when it could not.
   // Same owner as the alert's own pair (`readContentChange`), so the channel and
   // the three readers cannot describe one change two ways.
-  const named = titlePairNote(title, previousTitle) ?? (titleText(title) === null ? '' : ` — page title: "${titleText(title)}"`);
+  //
+  // And nothing at all when the pass measured the change and the title did not
+  // move. That is a third case, and it is not the same as having no before: it
+  // means the pair is empty *because the title was measured and stayed*, so the
+  // one-sided form below would name a title the change did not do — and name it
+  // exactly the way a defaced homepage's would be named. `titleUnchanged` is
+  // absent for every state file written before the pass recorded it, so those keep
+  // the one-sided sentence, which is all they can honestly say.
+  //
+  // A readable pair still wins, because it is the stronger evidence: a hand-edited
+  // or restored file can carry both, and two titles that really do differ are a
+  // change the flag cannot talk about.
+  const pair = titlePairNote(title, previousTitle);
+  if (pair === null && titleUnchanged === true) return `🔄 content changed ${when}`;
+  const named = pair ?? (titleText(title) === null ? '' : ` — page title: "${titleText(title)}"`);
   return `🔄 content changed ${when}${named}`;
 }
 
