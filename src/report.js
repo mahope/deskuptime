@@ -27,7 +27,7 @@
 import { PRODUCT } from './features.js';
 import { DEFAULT_WINDOW_DAYS, windowCoverage, windowSummary } from './history.js';
 import { markdownCell as cell } from './display.js';
-import { SSL_WARN_DAYS, STALE_AFTER_DAYS, clockAheadNote, contentBytesNote, expiredNote, httpDownKind, httpDownNote, isCheckStale, isCheckableUrl, passAge, readCertIssuerState, readCertRotationState, readContentChangeState, readPassTime, readRedirectTarget, readResponseMs, readSslState, readStatusCode, sslLapsedNote, staleAgeNote, unknownNote, unusableUrlKind, unusableUrlNote, verdictFor, withoutCredentials } from './status.js';
+import { PASS_AGE, SSL_WARN_DAYS, STALE_AFTER_DAYS, clockAheadNote, contentBytesNote, expiredNote, httpDownKind, httpDownNote, isCheckStale, isCheckableUrl, passAge, readCertIssuerState, readCertRotationState, readContentChangeState, readPassTime, readRedirectTarget, readResponseMs, readSslState, readStatusCode, sslLapsedNote, staleAgeNote, unknownNote, unusableUrlKind, unusableUrlNote, verdictFor, withoutCredentials } from './status.js';
 
 export const DEFAULT_REPORT_TITLE = 'Website uptime report';
 const MAX_TITLE_LENGTH = 120;
@@ -422,7 +422,7 @@ export function buildReport(state, { title, now = new Date(), history, windowDay
     // observed result stays on the site as `status`, and `stale` says why it is
     // not counted. DOWN is deliberately not filtered the same way: a customer
     // must still see a site that was last seen down.
-    up: sites.filter(site => site.status === 'up' && !site.stale).length,
+    up: sites.filter(site => site.status === 'up' && !site.stale && !isPassAhead(site)).length,
     down: sites.filter(site => site.status === 'down').length,
     unknown: sites.filter(site => site.status === 'unknown').length,
     stale: sites.filter(site => site.stale).length,
@@ -432,6 +432,11 @@ export function buildReport(state, { title, now = new Date(), history, windowDay
     // `unknown`, and how many of the unknown sites never had a pass at all.
     staleDown: sites.filter(site => site.stale && site.status === 'down').length,
     staleUnknown: sites.filter(site => site.stale && site.status === 'unknown').length,
+    // Additive, and disjoint from the four above: a pass whose recorded time is
+    // later than this machine's own clock. `passAge` already refuses to call such
+    // a pass "checked today", so counting it as a current `up` here was the only
+    // place left that treated a reading from the future as a reading from now.
+    ahead: buckets.ahead,
     neverChecked: buckets.neverChecked,
     checks: sites.reduce((total, site) => total + site.checks, 0),
     failures: sites.reduce((total, site) => total + site.failures, 0),
@@ -566,6 +571,24 @@ function uptimeCell(site) {
 }
 
 /**
+ * "The recorded pass is dated ahead of this machine's clock" — one fact, read
+ * from the state the pass owner already resolved (`PASS_AGE.AHEAD`).
+ *
+ * The fallback on `clockAhead` is for a site object built by hand rather than by
+ * `buildReport`: the sentence and the state are the same fact, and a hand-built
+ * object may carry only the one. It is not a second rule — a report built by
+ * `buildReport` always carries both, and the state is the only thing named here
+ * (the literal belongs to `PASS_AGE`, which is the one place that may write it).
+ *
+ * @param {object} site
+ * @returns {boolean}
+ */
+function isPassAhead(site) {
+  if (typeof site?.passState === 'string') return site.passState === PASS_AGE.AHEAD;
+  return Boolean(site?.clockAhead);
+}
+
+/**
  * The disjoint buckets the summary line is written from.
  *
  * The line is the first thing a customer reads and it is the only place the
@@ -590,7 +613,7 @@ function uptimeCell(site) {
  * by moving them here.
  */
 export function siteBuckets(sites) {
-  const buckets = { up: 0, down: 0, unknown: 0, stale: 0, neverChecked: 0 };
+  const buckets = { up: 0, down: 0, unknown: 0, stale: 0, ahead: 0, neverChecked: 0 };
   for (const site of Array.isArray(sites) ? sites : []) {
     if (!site || typeof site !== 'object') continue;
     // `buildReport` states it as its own fact, because its `lastChecked` is the
@@ -599,6 +622,8 @@ export function siteBuckets(sites) {
     if (!(site.passRecorded ?? !site.lastChecked)) buckets.neverChecked++;
     if (site.stale === true) {
       buckets.stale++;
+    } else if (isPassAhead(site)) {
+      buckets.ahead++;
     } else if (site.status === 'up') {
       buckets.up++;
     } else if (site.status === 'down') {
@@ -845,6 +870,19 @@ export function renderReportMarkdown(report) {
       `**Monitoring data is stale for ${stale.length} site${stale.length === 1 ? '' : 's'} — no pass in the last ${STALE_AFTER_DAYS} days:** ${stale.map(site => cell(site.ageDays === null ? site.url : `${site.url} (${site.ageDays} d)`)).join(', ')}`,
     ];
 
+  // A pass dated in the future is the one reading whose time cannot be believed:
+  // the document's own header can be older than the check it reports, and then
+  // "1 up" and "Last check 2026-10-17" describe a check that has not happened yet.
+  // Kept out of `up` for that reason, and named here with the owner's own
+  // sentence, because the fix is a clock and not a site.
+  const ahead = report.sites.filter(site => isPassAhead(site));
+  const aheadLines = ahead.length === 0
+    ? []
+    : [
+      '',
+      `**${counted(ahead.length, 'site has its last check dated ahead of this machine’s clock', 'sites have their last check dated ahead of this machine’s clock')} — that pass cannot have run yet, so it is not counted as up above:** ${ahead.map(site => cell(`${site.url} (${site.clockAhead || 'last check is in the future'})`)).join('; ')}`,
+    ];
+
   // The same rule for a site that answered, but from somewhere else. Uptime
   // percentages look best precisely because nobody reads them closely, so a row
   // that quietly says "UP (200) ⚠️ answered by …" would pass a glance while the
@@ -937,7 +975,7 @@ export function renderReportMarkdown(report) {
     `|${' --- |'.repeat(HEADERS.length)}`,
     ...(rows.length > 0 ? rows : [`| ${['_no monitored sites_', '—', '—', '—', '—', '—', '—', '—'].join(' | ')} |`]),
     '',
-    `**${report.summary.sites} site(s) · ${buckets.up} up · ${buckets.down} down${unknownWords(buckets)} · ${counted(report.summary.checks, 'check')} · ${report.summary.failures} failed${expiring.length > 0 ? ` · ${expiring.length} SSL expiring soon` : ''}${expired.length > 0 ? ` · ${expired.length} SSL EXPIRED` : ''}${lapsed.length > 0 ? ` · ${lapsed.length} SSL may be expired` : ''}${rotated.length > 0 ? ` · ${rotated.length === 1 ? '1 certificate replaced' : `${rotated.length} certificates replaced`}` : ''}${issuerChanged.length > 0 ? ` · ${issuerChanged.length} from a new certificate authority` : ''}${changedContent.length > 0 ? ` · ${changedContent.length} content changed` : ''}${stale.length > 0 ? ` · ${stale.length} stale (no check in the last ${STALE_AFTER_DAYS} d)` : ''}${crossed.length > 0 ? ` · ${crossed.length} answered by another host` : ''}${closedDoor.length > 0 ? ` · ${closedDoor.length} answered with a closed door or a throttle` : ''}${gaps.length > 0 ? ` · ${gaps.length} with an incomplete window` : ''}${notAddress > 0 ? ` · ${notAddress} not a full address` : ''}${credentialed > 0 ? ` · ${credentialed} with a username or password in it` : ''}**`,
+    `**${report.summary.sites} site(s) · ${buckets.up} up · ${buckets.down} down${unknownWords(buckets)} · ${counted(report.summary.checks, 'check')} · ${report.summary.failures} failed${expiring.length > 0 ? ` · ${expiring.length} SSL expiring soon` : ''}${expired.length > 0 ? ` · ${expired.length} SSL EXPIRED` : ''}${lapsed.length > 0 ? ` · ${lapsed.length} SSL may be expired` : ''}${rotated.length > 0 ? ` · ${rotated.length === 1 ? '1 certificate replaced' : `${rotated.length} certificates replaced`}` : ''}${issuerChanged.length > 0 ? ` · ${issuerChanged.length} from a new certificate authority` : ''}${changedContent.length > 0 ? ` · ${changedContent.length} content changed` : ''}${stale.length > 0 ? ` · ${stale.length} stale (no check in the last ${STALE_AFTER_DAYS} d)` : ''}${ahead.length > 0 ? ` · ${ahead.length} checked ahead of this machine’s clock` : ''}${crossed.length > 0 ? ` · ${crossed.length} answered by another host` : ''}${closedDoor.length > 0 ? ` · ${closedDoor.length} answered with a closed door or a throttle` : ''}${gaps.length > 0 ? ` · ${gaps.length} with an incomplete window` : ''}${notAddress > 0 ? ` · ${notAddress} not a full address` : ''}${credentialed > 0 ? ` · ${credentialed} with a username or password in it` : ''}**`,
     ...expiredLines,
     ...lapsedLines,
     ...attention,
@@ -945,13 +983,14 @@ export function renderReportMarkdown(report) {
     ...issuerLines,
     ...changedLines,
     ...staleLines,
+    ...aheadLines,
     ...crossedLines,
     ...gapLines,
     ...afterPassLines,
     ...closedDoorLines,
     ...uncheckableLines,
     '',
-    `Uptime is the share of completed monitoring passes that answered HTTP 200–399. "Uptime (all)" counts every pass since the site was added${since ? ` (earliest ${shortTime(since)})` : ''}; "Uptime (window)" counts the passes recorded in the last ${windowDays} days. A site with no completed pass yet shows — rather than 100%. Where a pass *is* on the row — a status, a response time, a last-check time — the — names the state file's missing check counter instead, because that pass ran and only the counter is not there; \`counterNotRecorded\` in \`--json\` is the same fact as a boolean. "Uptime (window)" is counted from a separate daily history file, so a row can show a recent check with an empty window column; that column then names the file that is missing the pass rather than claiming the site was not monitored. The two files can also disagree the other way, with the history file holding recorded checks on days that are newer than the last pass in the state file; such a site is named below the table with the number of those days, so the window column is never read as checks this machine ran after it stopped watching. A site that was already being monitored when the window opened, but has fewer recorded days than the window, is named below the table with both counts, so the share and the period are not read as covering days nobody watched. The counts in the summary line are a partition: every site is in exactly one of up, down, not checked, status unknown or stale. "Up" and "down" describe sites checked within the last ${STALE_AFTER_DAYS} days; a site whose monitoring stopped is counted as stale and keeps the status from its last pass in the table, named with the age of that pass. "Status unknown" means a pass ran but its result cannot be read from the state file. A listed URL that no pass can send a request to can never be measured at all — neither one that is not a full address nor one that carries a username or password, which is a full address the tool may not use: each is named below the table with the reason it cannot be checked and counted separately, so its empty row is never read as a site that was simply quiet. A 401, 403 or 429 is a closed door or a throttle in front of this monitor, not a reading of the site: it is counted as a failure above and named below the table with the reason, so a staged page behind a proxy and a CDN throttling an unknown user agent are not read as an outage. The SSL column is what the last pass read, so its day count is the deadline the certificate had at that moment. A reading less than a day old is shown as measured; one old enough that the certificate may have lapsed since is named as such and is not counted as a renewal to schedule — run \`deskuptime check <url>\` for a fresh reading. A certificate that was replaced since monitoring is named below the table with the age it had when this report was generated; the SSL column counts down from the certificate that answered last, so it cannot show that it is a different one from the client's. The same line carries that certificate's serial number, because the issuer above and the serial are what a security review asks for as a pair, and a renewal that changed nothing else is the one case where the number is still worth reading. A certificate that now answers from an authority other than the one the site answered with when monitoring started is named the same way, with both names: a renewal keeps its issuer, and a hijack keeps every number above looking healthy. \`sslIssuer\` in \`--json\` names the authority behind the certificate the SSL column counts down from. The Content column is what the last pass that actually read the page saw: a page over the content-check limit is never read, so it shows — rather than a size, and a size left by an earlier pass is never presented as this check's measurement. A size that is not from today says how old it is, because the check in the last column can be hours old while the page was last read days ago, and a row that quoted a number without saying when would read as a measurement of now. \`contentReadAt\` in \`--json\` is that time. "Changed" is a change measured since the site was added, and it is named below the table with the age it had when this report was generated — a page that was altered and then left alone is still a page a customer should know about, and the uptime columns do not cover it.`,
+    `Uptime is the share of completed monitoring passes that answered HTTP 200–399. "Uptime (all)" counts every pass since the site was added${since ? ` (earliest ${shortTime(since)})` : ''}; "Uptime (window)" counts the passes recorded in the last ${windowDays} days. A site with no completed pass yet shows — rather than 100%. Where a pass *is* on the row — a status, a response time, a last-check time — the — names the state file's missing check counter instead, because that pass ran and only the counter is not there; \`counterNotRecorded\` in \`--json\` is the same fact as a boolean. "Uptime (window)" is counted from a separate daily history file, so a row can show a recent check with an empty window column; that column then names the file that is missing the pass rather than claiming the site was not monitored. The two files can also disagree the other way, with the history file holding recorded checks on days that are newer than the last pass in the state file; such a site is named below the table with the number of those days, so the window column is never read as checks this machine ran after it stopped watching. A site that was already being monitored when the window opened, but has fewer recorded days than the window, is named below the table with both counts, so the share and the period are not read as covering days nobody watched. The counts in the summary line are a partition: every site is in exactly one of up, down, not checked, status unknown, stale or checked ahead of this machine’s clock. "Up" and "down" describe sites checked within the last ${STALE_AFTER_DAYS} days; a site whose monitoring stopped is counted as stale and keeps the status from its last pass in the table, named with the age of that pass, and a pass dated later than this machine’s own clock is counted the same way, because a check that has not happened yet is not a check today. "Status unknown" means a pass ran but its result cannot be read from the state file. A listed URL that no pass can send a request to can never be measured at all — neither one that is not a full address nor one that carries a username or password, which is a full address the tool may not use: each is named below the table with the reason it cannot be checked and counted separately, so its empty row is never read as a site that was simply quiet. A 401, 403 or 429 is a closed door or a throttle in front of this monitor, not a reading of the site: it is counted as a failure above and named below the table with the reason, so a staged page behind a proxy and a CDN throttling an unknown user agent are not read as an outage. The SSL column is what the last pass read, so its day count is the deadline the certificate had at that moment. A reading less than a day old is shown as measured; one old enough that the certificate may have lapsed since is named as such and is not counted as a renewal to schedule — run \`deskuptime check <url>\` for a fresh reading. A certificate that was replaced since monitoring is named below the table with the age it had when this report was generated; the SSL column counts down from the certificate that answered last, so it cannot show that it is a different one from the client's. The same line carries that certificate's serial number, because the issuer above and the serial are what a security review asks for as a pair, and a renewal that changed nothing else is the one case where the number is still worth reading. A certificate that now answers from an authority other than the one the site answered with when monitoring started is named the same way, with both names: a renewal keeps its issuer, and a hijack keeps every number above looking healthy. \`sslIssuer\` in \`--json\` names the authority behind the certificate the SSL column counts down from. The Content column is what the last pass that actually read the page saw: a page over the content-check limit is never read, so it shows — rather than a size, and a size left by an earlier pass is never presented as this check's measurement. A size that is not from today says how old it is, because the check in the last column can be hours old while the page was last read days ago, and a row that quoted a number without saying when would read as a measurement of now. \`contentReadAt\` in \`--json\` is that time. "Changed" is a change measured since the site was added, and it is named below the table with the age it had when this report was generated — a page that was altered and then left alone is still a page a customer should know about, and the uptime columns do not cover it.`,
     '',
     `Generated on one machine, without an account: no page content, response headers or license data is included, and nothing was uploaded.`,
   ].join('\n');

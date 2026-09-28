@@ -220,9 +220,12 @@ test('the license record can never reach the report', () => {
   }
   // The field set is pinned, so a new one has to be a decision rather than a
   // side effect. `partition` is the disjoint split `summary` overlaps with, so
-  // `--json` can say what the customer line says.
+  // `--json` can say what the customer line says. `ahead` is the sixth bucket
+  // (P1-85): a pass dated later than this machine's clock is in the partition
+  // and not in `up`, so the line adds up and a reading from the future is never
+  // counted as a reading from now.
   assert.deepEqual(Object.keys(built).sort(), ['generatedAt', 'partition', 'sites', 'summary', 'title', 'tool', 'windowDays']);
-  assert.deepEqual(Object.keys(built.partition).sort(), ['down', 'neverChecked', 'stale', 'unknown', 'up']);
+  assert.deepEqual(Object.keys(built.partition).sort(), ['ahead', 'down', 'neverChecked', 'stale', 'unknown', 'up']);
   for (const site of built.sites) {
     for (const key of Object.keys(site)) {
       assert.ok(!/license|key|instance|hash/i.test(key), `unexpected report field: ${key}`);
@@ -1160,16 +1163,30 @@ test('the report names a clock skew instead of printing a check that has not hap
   // the stale bucket, because "stale" is a claim that monitoring stopped and a
   // machine with the wrong clock has a clock problem. The row names the skew.
   assert.equal(report.partition.stale, 0);
-  assert.equal(report.partition.up, 2);
-  assert.equal(report.summary.up, 2);
   assert.equal(skewed.status, 'up', 'the recorded verdict is not rewritten');
+
+  // P1-85: the third claim, which survived P1-6. The document defines "up" as
+  // checked within the last 2 days, so a pass dated 19 days ahead cannot be one
+  // of the two sites it counted — not stale, but a bucket of its own.
+  assert.equal(report.partition.up, 1, 'only the site with an ordinary pass is up');
+  assert.equal(report.partition.ahead, 1);
+  assert.equal(report.summary.up, 1);
+  assert.equal(report.summary.ahead, 1);
+  assert.equal(ordinary.passState, 'aged', 'the ordinary site is untouched');
+  assert.equal(report.partition.up + report.partition.down + report.partition.unknown
+    + report.partition.stale + report.partition.ahead, report.sites.length, 'the partition still adds up');
 
   // The customer-facing line: the timestamp is still shown — it is the only clue
   // about *how* wrong the clock is — but it can no longer read as a plain check.
   const markdown = renderReportMarkdown(report);
   const row = markdown.split('\n').find(line => line.startsWith('| https://kunde.dk/'));
   assert.match(row, /2026-10-14 09:30 UTC ⚠️ 19 d ahead of this machine's clock/, row);
-  assert.match(markdown, /\*\*2 site\(s\) · 2 up · 0 down/, 'the summary line is unchanged');
+  // P1-85: the line no longer counts the skewed site as up, and the count that
+  // replaced it names why. The ordinary site is untouched on the line as well.
+  assert.match(markdown, /\*\*2 site\(s\) · 1 up · 0 down/, 'the skewed site is out of `up`');
+  assert.match(markdown, /· 1 checked ahead of this machine’s clock/, 'and the new count is on the line');
+  assert.match(markdown, /\*\*1 site has its last check dated ahead of this machine’s clock/, 'and it is named below the table');
+  assert.match(markdown, /https:\/\/kunde\.dk\/ \(19 d ahead of this machine's clock\)/, 'with the owner\'s own sentence');
 
   // An ordinary pass is character for character what it was, and its JSON is
   // byte-identical apart from the two additive fields.
@@ -1267,7 +1284,14 @@ test('all three surfaces name a clock skew, and none of them calls it stale (rea
   assert.ok(row, `no row for the site:\n${report}`);
   assert.match(row, note, `the customer document must name the skew: ${row}`);
   assert.doesNotMatch(row, /stale/, `a wrong clock is not a dead monitoring loop: ${row}`);
-  assert.match(report, /\*\*1 site\(s\) · 1 up · 0 down/, 'P1-6: the verdict and the count stand');
+  // P1-6 kept the *verdict* and the skew note; P1-85 removed the one number that
+  // contradicted the document's own definition of "up" ("checked within the last
+  // 2 days"). A pass dated 19 days ahead is not a reading from now, so it is
+  // named as its own bucket and counted there — the row above still says UP.
+  assert.match(report, /\*\*1 site\(s\) · 0 up · 0 down/, 'P1-85: a reading from the future is not counted as up');
+  assert.match(report, /1 checked ahead of this machine’s clock/, 'and the count that replaced it says why');
+  assert.match(report, /\*\*1 site has its last check dated ahead of this machine’s clock[^*]*:\*\* https:\/\/kunde\.dk\//, 'and the site is named below the table by url');
+  assert.match(report, /\| https:\/\/kunde\.dk\/ \| UP \(200\)/, 'P1-6: the verdict in the table stands');
 
   // The machine surface, so a dashboard can say it without inferring it.
   const json = JSON.parse((await runCli(['report', '--json'])).stdout);
@@ -1276,7 +1300,12 @@ test('all three surfaces name a clock skew, and none of them calls it stale (rea
   assert.equal(site.passState, 'ahead');
   assert.match(site.clockAhead, note);
   assert.equal(site.stale, false);
-  assert.equal(json.partition.up, 1, 'the site stays where the verdict put it');
+  // P1-85: out of `up` and into its own bucket, so the line a customer reads and
+  // the JSON the agency imports say the same thing about the same site.
+  assert.equal(json.partition.up, 0, 'a pass ahead of the clock is not a current up');
+  assert.equal(json.partition.ahead, 1);
+  assert.equal(json.summary.up, 0);
+  assert.equal(json.summary.ahead, 1);
   assert.equal(json.partition.stale, 0);
 
   // The URL list on `status`, which printed no timestamp and therefore said
