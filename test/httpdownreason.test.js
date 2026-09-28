@@ -35,7 +35,7 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { httpDownKind, httpDownNote } from '../src/status.js';
+import { httpDownKind, httpDownLabel, httpDownNote } from '../src/status.js';
 import { buildReport, renderReportMarkdown } from '../src/report.js';
 import { tempHome } from './helpers/env.mjs';
 
@@ -117,6 +117,26 @@ test('the three closed-door statuses say which kind they are, and nothing else d
   for (const status of OPEN) {
     assert.equal(httpDownKind(status), null, String(status));
   }
+});
+
+test('the cell label says the same thing in fewer words, and only for a door', () => {
+  // `note` is the sentence, `label` is what a table row has room for — the same
+  // pair `readRedirectTarget` returns. Three doors, three labels: one label for
+  // all three is the failure this owner exists to prevent.
+  const labels = new Set();
+  for (const status of Object.keys(CLOSED)) {
+    const label = httpDownLabel({ statusCode: Number(status) });
+    assert.ok(typeof label === 'string' && label.length > 0, `${status} has no label`);
+    assert.ok(!label.includes('HTTP '), `the HTTP column already prints the code: ${label}`);
+    labels.add(label);
+  }
+  assert.equal(labels.size, 3, 'two closed doors share one label');
+  // A 404 and a 5xx are the site being down or broken. Nothing to add.
+  for (const status of OPEN) {
+    assert.equal(httpDownLabel({ statusCode: status }), null, String(status));
+  }
+  assert.equal(httpDownLabel(), null);
+  assert.equal(httpDownLabel({}), null);
 });
 
 test('the sentence keeps the code in front, so a consumer matching on it still matches', () => {

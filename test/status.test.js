@@ -736,6 +736,79 @@ test('action: the step summary names the host that answered, and still counts 0 
   assert.match(readFileSync(join(temp, 'github-output'), 'utf8'), /^down=0$/m);
 });
 
+test('action: the step summary names a closed door, and still counts it down', async (t) => {
+  // The seventh surface, and the last one P1-84 had not reached. Measured
+  // 2026-09-28 by running this action's own `run:` body in bash against a real
+  // local server answering 200, 401, 403, 429, 404 and 500, with the real CLI:
+  //
+  //   | http://127.0.0.1:56113/401 | ❌ DOWN | 401 | 11ms | — |
+  //   down=5   ::error::5 URL(s) are unhealthy   exit 2
+  //
+  // Five red rows, and for three of them the entire explanation was the number
+  // in the next column. A staged page behind a proxy, a site under a maintenance
+  // plugin and a CDN throttling an unknown user agent are not outages, and this
+  // is the one table a developer reads in a browser tab *after* the build has
+  // already gone red. Six other surfaces say why since P1-84.
+  const summary = await summaryFor(t, [
+    { url: 'https://kunde.dk/', healthy: true, statusCode: 200, responseTimeMs: 4, sslDaysRemaining: null, sslExpiringSoon: null },
+    { url: 'https://staging.kunde.dk/', healthy: false, statusCode: 401, responseTimeMs: 5, sslDaysRemaining: null, sslExpiringSoon: null },
+    { url: 'https://vedligehold.dk/', healthy: false, statusCode: 403, responseTimeMs: 6, sslDaysRemaining: null, sslExpiringSoon: null },
+    { url: 'https://cdn.kunde.dk/', healthy: false, statusCode: 429, responseTimeMs: 7, sslDaysRemaining: null, sslExpiringSoon: null },
+    { url: 'https://vaek.kunde.dk/', healthy: false, statusCode: 404, responseTimeMs: 8, sslDaysRemaining: null, sslExpiringSoon: null },
+    { url: 'https://brud.kunde.dk/', healthy: false, statusCode: 500, responseTimeMs: 9, sslDaysRemaining: null, sslExpiringSoon: null },
+  ]);
+
+  assert.match(summary, /\| https:\/\/kunde\.dk\/ \| ✅ UP \| 200 \| 4ms \|/);
+  assert.match(summary, /\| https:\/\/staging\.kunde\.dk\/ \| ❌ DOWN — closed door: a username and password is required \| 401 \| 5ms \|/);
+  assert.match(summary, /\| https:\/\/vedligehold\.dk\/ \| ❌ DOWN — closed door: this request was refused \| 403 \| 6ms \|/);
+  assert.match(summary, /\| https:\/\/cdn\.kunde\.dk\/ \| ❌ DOWN — throttled: the site is rate-limiting this monitor \| 429 \| 7ms \|/);
+  // 404 and 5xx are the site, and they are the site on this table too: not one
+  // character of their row moved.
+  assert.match(summary, /\| https:\/\/vaek\.kunde\.dk\/ \| ❌ DOWN \| 404 \| 8ms \|/);
+  assert.match(summary, /\| https:\/\/brud\.kunde\.dk\/ \| ❌ DOWN \| 500 \| 9ms \|/);
+
+  // Three rows say the row reason; the line under the table says it once more in
+  // the owner's full sentence and counts them, the shape the client report uses.
+  assert.match(summary, /\*\*3 sites answered with a closed door or a throttle rather than a page — the failures above are about access, not about the site being down:\*\*/);
+  assert.match(summary, /\*\*https:\/\/staging\.kunde\.dk\/\*\* \(HTTP 401 — the site asked for a username and password, so no pass can read it\)/);
+  assert.match(summary, /\*\*https:\/\/cdn\.kunde\.dk\/\*\* \(HTTP 429 — the site is rate-limiting this monitor, so the check was throttled\)/);
+  // …and the three sites that are genuinely down are not in that line.
+  assert.equal(summary.includes('vaek.kunde.dk** ('), false, 'a 404 is the site being down, not a closed door');
+});
+
+test('action: a closed door is still a failure for down-count and the exit code', async (t) => {
+  // The contract in `action.yml`'s own description is "fails the job if any URL
+  // is unhealthy (HTTP 4xx/5xx)", and `down-count` is a published output. A
+  // staged page behind a proxy is unhealthy by that definition, and the tool
+  // cannot know whether the password is the customer's to give — so the reason
+  // is named and the run still fails. This is measured over the same payload as
+  // the row above, and it is the part that must not quietly change.
+  const { root, temp } = stubAction(t, JSON.stringify([
+    { url: 'https://kunde.dk/', healthy: true, statusCode: 200, responseTimeMs: 4, sslDaysRemaining: null, sslExpiringSoon: null },
+    { url: 'https://staging.kunde.dk/', healthy: false, statusCode: 401, responseTimeMs: 5, sslDaysRemaining: null, sslExpiringSoon: null },
+    { url: 'https://vaek.kunde.dk/', healthy: false, statusCode: 404, responseTimeMs: 8, sslDaysRemaining: null, sslExpiringSoon: null },
+  ]));
+  await run('bash', ['-c', actionScript()], {
+    cwd: temp,
+    env: actionEnv({
+      DU_URLS: 'https://kunde.dk/ https://staging.kunde.dk/ https://vaek.kunde.dk/',
+      DU_FAIL_ON_DOWN: 'true',
+      DU_SSL_DAYS: '0',
+      DU_SUMMARY: 'true',
+      GITHUB_ACTION_PATH: root,
+    }, temp),
+  }).then(
+    () => assert.fail('a 401 and a 404 must fail the run'),
+    (error) => {
+      assert.equal(error.code, 2);
+      assert.match(`${error.stdout}${error.stderr}`, /::error::2 URL\(s\) are unhealthy/);
+    },
+  );
+  assert.match(readFileSync(join(temp, 'github-output'), 'utf8'), /^down=2$/m);
+  // One line under the table, for the one closed door in that payload.
+  assert.match(readFileSync(join(temp, 'github-summary'), 'utf8'), /\*\*1 site answered with a closed door or a throttle/);
+});
+
 test('action: the step summary has no certificate or duration rule of its own', () => {
   // A behavioural test cannot prove a surface stopped owning a fact — the
   // duplicates P1-13 and P1-14 measured returned identical answers in every
@@ -761,6 +834,21 @@ test('action: the step summary has no certificate or duration rule of its own', 
     .replace(/\/\*[\s\S]*?\*\//g, '')
     .replace(/^\s*\/\/.*$/gm, '');
   assert.doesNotMatch(action, /answered by/);
+
+  // P1-88: the same bar for the closed door. The table reached `statusCode` for
+  // its HTTP column and stopped there, so this is a scan on the *label*: the
+  // reason has to come from the owner, and the words themselves may not be
+  // written a second time here or the seven surfaces drift apart.
+  assert.match(source, /httpDownLabel\(\{ statusCode: x\.statusCode \}\)/);
+  assert.match(source, /httpDownNote\(\{ statusCode: x\.statusCode \}\)/);
+  assert.match(source, /httpDownKind\(x\.statusCode\)/);
+  assert.doesNotMatch(action, /closed door:/);
+  assert.doesNotMatch(action, /asked for a username/);
+  assert.doesNotMatch(action, /rate-limiting this monitor/);
+  // The verdict, the HTTP cell, `down-count` and the exit code are the action's
+  // published contract, so the label may only be *added* to the status cell.
+  assert.match(source, /const statusCell = door \? `\$\{status\} — \$\{door\}` : status;/);
+  assert.match(source, /markdownCell\(statusCell\)/);
 
   // `check --json`'s renewal flag is the third copy of the same window rule.
   // Comments are stripped first: the fix quotes the expression it replaced, so

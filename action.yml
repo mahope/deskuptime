@@ -153,8 +153,9 @@ runs:
             echo "|-----|--------|------|----------|----------|"
             node -e '
               const { formatMs, markdownCell } = require(process.env.DU_ACTION_PATH + "/src/display.js");
-              const { expiredNote, readRedirectTarget, readSslState } = require(process.env.DU_ACTION_PATH + "/src/status.js");
+              const { expiredNote, httpDownKind, httpDownLabel, httpDownNote, readRedirectTarget, readSslState } = require(process.env.DU_ACTION_PATH + "/src/status.js");
               const r = JSON.parse(require("fs").readFileSync("deskuptime-results.json","utf8"));
+              const closedDoors = [];
               for (const x of r) {
                 const s = x.healthy ? "✅ UP" : "❌ DOWN";
                 // Which host answered is a fact the payload has carried since
@@ -169,6 +170,21 @@ runs:
                 // other cell because `finalUrl` is as site-chosen as the URL.
                 const redirect = readRedirectTarget({ url: x.url, finalUrl: x.finalUrl });
                 const status = redirect.offHost ? `${s} ⚠️ ${redirect.label}` : s;
+                // A 401, 403 or 429 is a closed door or a throttle in front of
+                // this monitor, not a reading of the site. This table is the one
+                // a developer reads in a browser tab after the build has already
+                // gone red, and until P1-88 it answered with the status code and
+                // nothing else — the same number the next column prints. The
+                // verdict, the HTTP column, `down-count` and the exit code are
+                // untouched: a staged page behind a proxy still fails the run.
+                // What changes is that the row says why, in the owner wording,
+                // and the line under the table names every such row with the
+                // owner sentence — the shape the client report already uses.
+                const door = httpDownLabel({ statusCode: x.statusCode });
+                const statusCell = door ? `${status} — ${door}` : status;
+                if (httpDownKind(x.statusCode)) {
+                  closedDoors.push(`**${markdownCell(x.url)}** (${httpDownNote({ statusCode: x.statusCode })})`);
+                }
                 // The day count and the duration are read through the owners the
                 // CLI, both status lists and the client report already use. This
                 // block used to judge on its own whether a number was usable, so
@@ -184,7 +200,12 @@ runs:
                 // report'"'"'s own cell(), and one `|` or one newline in a URL
                 // was enough to write a forged row — including one claiming a
                 // site was DOWN while every real check was UP.
-                console.log(`| ${markdownCell(x.url)} | ${markdownCell(status)} | ${markdownCell(x.statusCode ?? "—")} | ${markdownCell(formatMs(x.responseTimeMs))} | ${markdownCell(sslCell)} |`);
+                console.log(`| ${markdownCell(x.url)} | ${markdownCell(statusCell)} | ${markdownCell(x.statusCode ?? "—")} | ${markdownCell(formatMs(x.responseTimeMs))} | ${markdownCell(sslCell)} |`);
+              }
+              if (closedDoors.length > 0) {
+                const many = closedDoors.length === 1 ? "1 site answered" : `${closedDoors.length} sites answered`;
+                console.log("");
+                console.log(`**${many} with a closed door or a throttle rather than a page — the failures above are about access, not about the site being down:** ${closedDoors.join("; ")}`);
               }
             '
             echo ""

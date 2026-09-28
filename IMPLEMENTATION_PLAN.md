@@ -1,6 +1,89 @@
-> **Seneste:** iteration 101 (P1-85, færdig) — historien står i køens afsnit
-> `P1-85 — FÆRDIG 2026-09-28` lige under `## Prioriteret kø`.
+> **Seneste:** iteration 102 (P1-88, færdig) — historien står i køens afsnit
+> `P1-88 — FÆRDIG 2026-09-28` lige under `## Prioriteret kø`.
 > Afsnittene for 97 og 98 er ældre og ligger henholdsvis øverst og nederst.
+
+## Status fra denne iteration (102, P1-88 — GitHub Actionens summary skrev `❌ DOWN | 401` og lod nummeret være forklaringen)
+
+**Målt først, nul kode ændret.** Actionens egen `run:`-body udtrukket og kørt i
+bash mod den rigtige CLI og en rigtig lokal server, der svarer 200, 401, 403, 429,
+404 og 500 — altså den flade kunden møder i en browserfane, ikke en gengivelse
+af den:
+
+```
+| http://127.0.0.1:56113/401 | ❌ DOWN | 401 | 11ms | — |
+| http://127.0.0.1:57737/429 | ❌ DOWN | 429 | 11ms | — |
+down=5   ::error::5 URL(s) are unhealthy   exit 2
+```
+
+**Den sjette af de syv flader P1-84 rettede var ikke rettet.** Terminalen,
+`check`, begge lister, watch-alarmen, webhook-payloaden og kundenapporten siger
+siden P1-84 *hvorfor* en 401/403/429 faldt. Actionens summary gjorde det ikke:
+den har en `Status`-kolonne **og** en `HTTP`-kolonne, og brugte den anden som
+hele historien. Et staging-site bag en proxy, en side under et
+maintenance-plugin og et CDN der throttler en ukendt user agent gav tre røde
+rækker med tal og ingen sætning — i den ene tabel en udvikler læser efter at
+buildet allerede er rødt, og som et bureau kan indsætte på sin egen statusside.
+
+**Efter:**
+
+```
+| http://127.0.0.1:57737/401 | ❌ DOWN — closed door: a username and password is required | 401 | 12ms | — |
+| http://127.0.0.1:57737/403 | ❌ DOWN — closed door: this request was refused | 403 | 16ms | — |
+| http://127.0.0.1:57737/429 | ❌ DOWN — throttled: the site is rate-limiting this monitor | 429 | 11ms | — |
+| http://127.0.0.1:57737/404 | ❌ DOWN | 404 | 16ms | — |
+**3 sites answered with a closed door or a throttle rather than a page — the failures above are
+ about access, not about the site being down:** …/401 (HTTP 401 — the site asked for a username …)
+down=5   ::error::5 URL(s) are unhealthy   exit 2
+```
+
+**Ingen regel flyttede sig.** Rækken beholder `❌ DOWN`, HTTP-kolonnen beholder
+tallet, `down-count` er stadig 5 og exit-koden stadig 2 — et lukket dør *er*
+usundt, og beskrivelsen siger det eksplicit: *"Fails the job if any URL is
+unhealthy (HTTP 4xx/5xx)"*. 404 og 5xx er site og bliver site, tegn for tegn.
+Det nye er, at rækken nu siger hvorfor, og at grunden står **under** tabellen så
+den ikke kan skrives ud.
+
+**Årsagen er samme fejl som P1-26, P1-73, P1-83 og P1-84: en besked der skal
+læses, besvarer et spørgsmål kaldet to steder.** `check --json` bærer grunden
+i `error`, men feltet hedder *fejl*, så en renderer der vil vide om en 401 er et
+nedbrud må spørge i et felt om fejl — og Actionen spurgte slet ikke. Rettelsen er
+en tredje svar på samme ejer, `httpDownLabel()` i `src/status.js`: `note` er
+sætningen, `label` er den korte form, præcis parret `readRedirectTarget` allerede
+leverer for vertskiftet i samme fil. Linjen under tabellen bygges af
+`httpDownNote` og `markdownCell`, så et URL med et `|` i ikke kan skrive en
+falsk linje.
+
+**Acceptkriterier — alle syv opfyldt:**
+
+1. ✅ 401/403/429 har hver sin korte grund i `Status`-cellen på Actionens summary.
+2. ✅ `❌ DOWN`, HTTP-kolonnen, `down-count` (5) og exit-koden (2) uændrede.
+3. ✅ 404 og 5xx er tegn for tegn uændrede på rækken.
+4. ✅ Én linje under tabellen med hver sides fulde sætning fra ejeren + tælleren
+   på den (1 site / N sites).
+5. ✅ URL i den linje går gennem `markdownCell`, så et `|` i et URL ikke kan
+   skrive en falsk linje (testet med et URL med `|` og `<script>`).
+6. ✅ Ny kilde-scan-lås: `action.yml` skal nå `httpDownLabel`/`httpDownNote`/
+   `httpDownKind` og må ikke selv skrive `closed door:`, `asked for a username`
+   eller `rate-limiting this monitor`.
+7. ✅ 3 nye tests (2 adfærds-til-actionen via den rigtige bænk, 1 til ejeren).
+
+**Gaten:** **732/732** (729 + 3) på Node 26.7.0 via `tools/run-tests.mjs`; audit
+0/0; `matrix --check` exit 0; `node --check` ren på alle JS; `git diff --check`
+rent. **To mutationer målt, begge døde:** `httpDownLabel` svarer altid null (2
+fejl), og værten tager *alle* fejl med en statuskode (3 fejl).
+
+**Fejl i min egen måling (to, begge fundet undervejs):** den lokale server lå i
+*samme* proces som `execFileSync`, så alle seks sites svarede *Connection
+refused* — bænkfejl, der så ud som seks produktfejl (samme fælde som P1-84
+noterede). Og min første kommentar i `node -e`-blokken indeholdt et **apostrof**
+i `owner's`, som lukkede blokkens shell-quoting og gav
+`syntax error near unexpected token '('` — action.yml bruger `'"'"'`-sekvensen
+netop derfor.
+
+**Bemærkning om P1-85's deploy-note:** dette repo er en npm-/GitHub-CLI uden
+live-deploytarget (jf. reglen længere nede i planen), så en `VERIFICÉR DEPLOY`
+på et CLI-merge kan aldrig blive `DEPLOY OK`. Noten er fjernet fra P1-85's
+afsnit; merges til `main` deployer ikke.
 
 ## Status fra denne iteration (101, P1-85 — kundenapporten talte et pass fra 19 dage fremtiden som "1 up")
 
@@ -3482,6 +3565,15 @@ Den aktuelle gate-definition er registreret her:
 
 ## Prioriteret kø
 
+### P1-88 — FÆRDIG 2026-09-28 (`ceo/action-closed-door`, `04f874c`) — GitHub Actionens summary skrev `❌ DOWN | 401` og lod tallet være forklaringen
+
+Historien står i afsnittet øverst. Kort: P1-84 gav seks flader grunden til en
+401/403/429; Actionens step summary var den syvende og skrev `❌ DOWN` med den rå
+kode i næste kolonne. Nu en tredje svar på samme ejer (`httpDownLabel`), linjen
+under tabellen bygget af `httpDownNote`, og ** ingen regel flyttet sig**:
+`down-count` 5, exit 2, 404/5xx tegn for tegn uændret. Deploy-note ikke nødvendig
+(CLI-repo uden live-deploytarget).
+
 ### P1-85 — FÆRDIG 2026-09-28 (`ceo/clock-ahead-up-count`, `b51956a`) — Kundenapporten talte et pass fra 19 dage fremtiden som "1 up"
 
 Historien står i afsnittet øverst. Kort: `PASS_AGE.AHEAD` var en kendt tilstand,
@@ -3489,8 +3581,7 @@ og `partition`/`summary` spurgte alligevel kun `stale` + `status`, så et pass m
 tidsstemplet 2026-10-17 i et dokument overskriftet *Generated 2026-09-28* blev
 talt som `1 up` — mod dokumentets egen definition af `up`. Nu en sjette spand
 (`ahead`), rækken beholder sit `UP (200)`, og P1-6's låse blev opdateret uden at
-slækkes. **VERIFICÉR DEPLOY: `report`/`--json` tæller ikke et pass foran uret som
-op — `8a5944a` 2026-09-28 ca. 05:35 UTC.**
+slækkes. Deploy-note ikke nødvendig: CLI-repo uden live-deploytarget.
 
 ### Kandidater fra målingen i iteration 101 — målt grundlag, ikke gæt
 
@@ -3512,8 +3603,8 @@ Rækkefølgen er efter hvad der griber flest brugere. Ingen er startet; alle er
    `ssl-lapsed-since-pass`, `ssl-expired-at-pass`, `slow-old-page` og læs alle
    fire flader i hver. **Acceptkriterium:** for hver tilstand enten en bekræftelse
    på at alle flader er enige, eller en målt fejl med de to sætninger side om side.
-3. **P1-88 — GitHub Action'en har sin egen status-renderer og kender ingen
-   lukket dør.** Målt kilde: `action.yml` skriver `❌ DOWN` + rå `statusCode` i
+3. ~~**P1-88 — GitHub Action'en har sin egen status-renderer og kender ingen
+   lukket dør.**~~ **FÆRDIG 2026-09-28** (se afsnittet over dette). Målt kilde: `action.yml` skriver `❌ DOWN` + rå `statusCode` i
    job-summary'en og tæller 4xx/5xx i `down-count`, mens CLI'en siden P1-84 siger
    *hvad* der svarede, og `--json` bærer `httpDownKind`/`httpDownNote`. En kunde
    med et staging-site bag proxy får altså en rød build og ingen forklaring.
