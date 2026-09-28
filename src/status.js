@@ -734,8 +734,9 @@ export function readDisclosure(disc = {}) {
  * expired at the pass has not un-expired since, so an old lapse claim errs in the
  * safe direction and needs no correction.
  *
- * @param {object} ssl — `{ days, expired, expiredDays, measuredAt, now }`; `days`
- *   is the checker's `validDays` or the state entry's `sslValidDays`.
+ * @param {object} ssl — `{ days, expired, expiredDays, error, measuredAt, now }`;
+ *   `days` is the checker's `validDays` or the state entry's `sslValidDays`, and
+ *   `error` is the checker's own `error` for a handshake it could not complete.
  */
 export function readSslState(ssl) {
   const value = ssl && typeof ssl === 'object' ? ssl : {};
@@ -744,12 +745,44 @@ export function readSslState(ssl) {
   const expired = value.expired === true || expiredDays !== null;
   // A certificate was read when it left us one fact: a day count, or a lapse.
   const measured = days !== null || expired;
+  // The certificate leg ran and came back with a handshake it could not finish.
+  // This is a third thing, and it used to be the first: `days` and `expired` are
+  // both absent, so the reading was "no certificate was read" — the plain-HTTP
+  // answer — for a site that answered 200 over TLS and whose certificate this
+  // tool simply could not read. Measured 2026-09-28 through the real watch loop
+  // against a site slow enough that the request leg's budget was spent before
+  // the certificate leg's second handshake began (`checkSSL` →
+  // `{ error: 'SSL handshake timed out' }`, `src/engine.js:99`):
+  //
+  //   watch --once  baseline recorded: UP (200) — 10674ms
+  //   state.json    no sslValidDays, no sslExpired, no sslError — nothing at all
+  //   status        ✅ https://localhost:60656/ (200) · 74 bytes
+  //   report        | … | UP (200) | 100% (1 check) | 10674 ms | — | … |
+  //   report --json "sslDaysRemaining": null, "sslIssuer": null
+  //
+  // The `—` in the SSL column is the document's own word for "this URL cannot
+  // have a certificate", so a bureau read a site with an unreadable certificate
+  // as a site without one. `action.yml:137` already counts this state as a
+  // failure, so the product had one surface that knew and five that did not.
+  const error = typeof value.error === 'string' && value.error.trim() ? value.error.trim() : null;
+  // Only when nothing was read: a pass that got a day count *and* an error is
+  // reporting the certificate it did read, and a lapsed certificate is measured
+  // even when the next leg failed.
+  const failed = error !== null && !measured;
   const reading = readSslReadingAge(days, { measuredAt: value.measuredAt, now: value.now, expired });
   return {
     days,
     expired,
     expiredDays,
     measured,
+    // The reason the certificate leg gave, verbatim and only when it failed.
+    // It is the server's or TLS stack's own words, so every surface that prints
+    // it must treat it as untrusted text (see `safeText`).
+    error,
+    failed,
+    // The one sentence for the state, so the two terminal lists, the client
+    // report and the webhook cannot each invent their own wording for it.
+    failedNote: failed ? sslUnreadableNote(error) : '',
     // Not `false` for a URL with no certificate: see above. The `expired` and the
     // `mayHaveExpired` cases are measured, and stay false — a lapsed certificate
     // is not "renew soon".
@@ -1459,6 +1492,31 @@ export function sslLapsedNote({ days = null, ageDays = null } = {}) {
 }
 
 /**
+ * The fixed wording for a certificate the tool tried to read and could not.
+ *
+ * This is not "no certificate". A plain-HTTP URL, an unreachable host and a URL
+ * that never ran all leave the same absence behind, and those three are honestly
+ * silent — there is nothing to report about a certificate nobody asked for. A
+ * site that answered 200 over TLS and then failed its own handshake is a fourth
+ * thing, and it is the one a bureau has to hear about: the tool promised an
+ * expiry countdown and could not deliver it, so the countdown in the report is
+ * missing rather than good news.
+ *
+ * `error` is the handshake's own words — `SSL connection timed out`, `No
+ * certificate presented`, or whatever the TLS stack said. It is the server's
+ * text, not ours, so it is flattened here rather than at each print site: this
+ * one sentence reaches both terminal lists, the client report's cell and its
+ * named line, and the stored reason is re-read from a state file on every later
+ * pass. Escaped and wrapped once, at the owner, means a hand-edited or restored
+ * state file cannot put a control sequence into a document a bureau sends on
+ * (src/display.js).
+ */
+export function sslUnreadableNote(error) {
+  const reason = safeText(error, { max: 0 });
+  return `could not be read — the site answered, but its certificate did not${reason ? `: ${reason}` : ''}`;
+}
+
+/**
  * One HTTP status code, or `null` when the state file does not hold one.
  *
  * An HTTP status code is an integer from 100 to 599. `Number.isInteger` is not
@@ -2123,6 +2181,10 @@ export function readEntry(entry, { now = new Date(), url = '' } = {}) {
     days: value.sslValidDays,
     expired: value.sslExpired,
     expiredDays: value.sslExpiredDays,
+    // A certificate the last pass tried to read and could not. Stored by the
+    // watch pass (src/watch.js) and asked for here, so both lists say the same
+    // thing the client report says about the same row.
+    error: value.sslError,
     measuredAt: value.lastChecked,
     now,
   });
@@ -2209,9 +2271,11 @@ export function readEntry(entry, { now = new Date(), url = '' } = {}) {
       ? `SSL 🔴 ${expiredNote(ssl.expiredDays)}`
       : ssl.mayHaveExpired
         ? `SSL 🔴 ${sslLapsedNote({ days: ssl.days, ageDays: ssl.readingAgeDays })}`
-        : ssl.days === null
-          ? (ssl.unreadable ? 'SSL —' : '')
-          : ssl.expiringSoon ? `SSL ⚠️ ${ssl.days}d — renew soon` : `SSL ${ssl.days}d`,
+        : ssl.failed
+          ? `SSL ⚠️ ${ssl.failedNote}`
+          : ssl.days === null
+            ? (ssl.unreadable ? 'SSL —' : '')
+            : ssl.expiringSoon ? `SSL ⚠️ ${ssl.days}d — renew soon` : `SSL ${ssl.days}d`,
     ageDays,
     stale,
     staleNote: stale ? staleAgeNote(ageDays) : '',

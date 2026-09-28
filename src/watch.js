@@ -501,9 +501,23 @@ export async function runPass(state, opts = {}) {
       days: result.ssl?.validDays,
       expired: result.ssl?.isExpired,
       expiredDays: result.ssl?.expiredDays,
+      // Why the certificate leg came back empty. The checker has answered with
+      // this since P0-3 and `action.yml:137` has counted it as a failure, but the
+      // pass below threw it away: a site that answered 200 and then failed its
+      // own handshake was stored as a site with no certificate at all, and every
+      // later reader — both terminal lists, the client report, the webhook —
+      // printed the plain-HTTP `—`. Measured 2026-09-28 through the real watch
+      // loop against a site slow enough that the request leg's budget was spent
+      // before the certificate leg's handshake began:
+      //
+      //   watch --once  baseline recorded: UP (200) — 10674ms
+      //   state.json    no sslValidDays, no sslExpired — nothing to read
+      //   report        | … | UP (200) | 100% (1 check) | 10674 ms | — | … |
+      error: result.ssl?.error,
     });
     if (ssl.expired) {
       delete entry.sslValidDays;
+      delete entry.sslError;
       entry.sslExpired = true;
       if (ssl.expiredDays !== null) entry.sslExpiredDays = ssl.expiredDays;
       if (entry.sslExpiredWarned !== true) {
@@ -514,6 +528,9 @@ export async function runPass(state, opts = {}) {
     } else if (ssl.days !== null) {
       delete entry.sslExpired;
       delete entry.sslExpiredDays;
+      // A reading clears the last failure: the countdown is back, and a stale
+      // "could not be read" left beside it would contradict the number next to it.
+      delete entry.sslError;
       entry.sslExpiredWarned = false;
       entry.sslValidDays = ssl.days;
       const warningActive = entry.sslWarned === true || typeof entry.sslWarned === 'number';
@@ -523,10 +540,23 @@ export async function runPass(state, opts = {}) {
       } else if (!ssl.expiringSoon) {
         entry.sslWarned = false;
       }
+    } else if (ssl.failed) {
+      // The site answered and its certificate did not. Nothing about the
+      // certificate is claimed, so the day count and the lapse go; the reason
+      // stays, because "we could not read it" is a fact about this pass and the
+      // next one may well succeed.
+      delete entry.sslValidDays;
+      delete entry.sslExpired;
+      delete entry.sslExpiredDays;
+      entry.sslError = ssl.error;
+      entry.sslExpiredWarned = false;
     } else {
       delete entry.sslValidDays;
       delete entry.sslExpired;
       delete entry.sslExpiredDays;
+      // A URL that cannot have a certificate, or a leg that never ran, clears a
+      // stored reason: keeping it would name a failure that no longer happened.
+      delete entry.sslError;
       entry.sslExpiredWarned = false;
     }
 

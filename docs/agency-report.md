@@ -173,6 +173,29 @@ Det er her bureauet bliver solgt, og derfor er reglerne hårde:
   aldres ikke: et certifikat der var udløbet på passets tidspunkt er ikke blevet
   gyldigt sidenhen, så den påstand fejler i den sikre retning. I `--json` hedder
   felterne `sslMayHaveExpired` og `sslReadingAgeDays`.
+- **Et certifikat, der ikke kunne læses, stod som en streg i SSL-kolonnen.**
+  Stregen er dokumentets eget ord for *denne URL kan ikke have et certifikat* —
+  altså en ren HTTP-side. Men et site der svarede 200 over TLS og så fik sin
+  egen handshake afbrudt efterlignede præcis samme streg, fordi begge benene af
+  målingen (`sslValidDays`, `sslExpired`) manglede, og **passen kassérede
+  grunden**. Målt 2026-09-28 gennem den rigtige watch-loop mod et site så
+  langsomt at anmodningsbenets budget var brugt op før certifikatbenets anden
+  handshake begyndte:
+
+  ```
+  watch --once  baseline recorded: UP (200) — 10674ms
+  state.json    hverken sslValidDays eller sslExpired — intet at læse
+  status        ✅ https://localhost:60656/ (200) · 74 bytes
+  rapport       | … | UP (200) | 100% (1 check) | 10674 ms | — | … |
+  ```
+
+  Bureauet læste altså et site med ulæseligt certifikat som et site uden
+  certifikat, i det dokument der videresendes til kunden. Nu skriver kolonnen
+  `⚠️ could not be read`, tilstanden tælles i `summary.sslUnreadable`, og en
+  navngiven linje under tabellen forteller hvorfor. `action.yml` har siden
+  P1-63 talt netop denne tilstand som en fejl — produktet havde altså én flade
+  der vidste det og fem der ikke gjorde. I `--json` hedder felterne
+  `sslUnreadable` og `sslUnreadableNote`.
 - **Et certifikat, der er blevet byttet, står ikke i SSL-kolonnen.** Kolonnen
   tæller ned fra det certifikat der *svarede sidst*, så den kan ikke vise at det
   ikke er kundens eget længere — og et nyudstedt certifikat har typisk flere
