@@ -297,6 +297,41 @@ export async function deactivateLicense(licenseKey, deviceId = getDeviceId(), { 
 }
 
 /**
+ * The license server's answer about when this key runs out, as a change to the
+ * stored record.
+ *
+ * `validateLicense` hands back the raw `expires_at`, and it has three shapes
+ * that mean three different things — see `refreshLicense`. Only two of them
+ * may change the file, and both callers that write a term (the `activate`
+ * command and the `--activate` option of the watch loop) go through here, so a
+ * stored date is written one way and not another.
+ *
+ * The record keeps `expiresAtVerified` alongside the date: the note in
+ * `licenseTermNote` has to say *when* it read the term, and after this change
+ * that is not always the activation. Without it the only honest thing to print
+ * would be the activation time, which is a fact about a moment the file may
+ * have been corrected since — the same trap as the seat count, which is why
+ * that one is labelled "when activated" too.
+ *
+ * @param {string|null|undefined} answer — the server's `expires_at`, raw
+ * @param {object} previous — the record as stored, for the keep-what-we-have case
+ * @returns {object} the fields to spread over the stored license
+ */
+export function readTerm(answer, previous) {
+  if (answer === null) {
+    // The server says this key has no end date. That is a lifetime purchase, and
+    // it is an answer — so a date left over from an earlier term goes with it.
+    return { expiresAt: undefined, expiresAtVerified: true };
+  }
+  if (typeof answer !== 'string' || !Number.isFinite(Date.parse(answer))) {
+    // Absent, or something this file cannot read. Silence is not a term, so the
+    // stored reading stands and the note keeps saying when it was taken.
+    return previous?.expiresAt ? {} : { expiresAt: undefined, expiresAtVerified: true };
+  }
+  return { expiresAt: new Date(answer).toISOString(), expiresAtVerified: true };
+}
+
+/**
  * Re-validate a stored license ({ key, instance, status, validatedAt }) and
  * decide Pro status.
  *
@@ -311,6 +346,25 @@ export async function deactivateLicense(licenseKey, deviceId = getDeviceId(), { 
  * The stored key is never discarded, so a later successful check restores Pro
  * and support can still tell which key a customer is on.
  *
+ * A valid answer also carries the term the server holds *now*, and that reading
+ * is written back, because otherwise the stored date is frozen at the moment
+ * the machine first activated. Measured 2026-09-28: a yearly customer who paid
+ * again kept `expiresAt 2026-09-26` in `state.json` through every pass, because
+ * the pass asked the server — which answered `expires_at 2027-09-26` — and threw
+ * the answer away. `status` then read its own honest sentence about a date two
+ * years dead: `Pro license: active, … term ended 2026-09-26 as reported at
+ * activation`, on the same line that said the license was active. A renewal the
+ * server had already accepted was invisible to the only surface that shows the
+ * term, and the note grew more wrong the longer the machine ran.
+ *
+ * The three answers are kept apart, because only one of them is a term:
+ *
+ *   - a parseable `expires_at`  → the server named an end date; store it
+ *   - `expires_at: null`        → the server said there is no end date, which is
+ *                                 what a lifetime key answers; drop a stale one
+ *   - the field absent          → the server did not report it; keep what we
+ *                                 have, because silence is not an answer
+ *
  * @returns {Promise<{ pro: boolean, license: object, reason: string|null, status: string }>}
  */
 export async function refreshLicense(license, { now = Date.now() } = {}) {
@@ -319,7 +373,7 @@ export async function refreshLicense(license, { now = Date.now() } = {}) {
   if (res.valid) {
     return {
       pro: true,
-      license: { ...license, status: LICENSE_STATUS.ACTIVE, validatedAt: new Date(now).toISOString() },
+      license: { ...license, status: LICENSE_STATUS.ACTIVE, validatedAt: new Date(now).toISOString(), ...readTerm(res.expiresAt, license) },
       reason: null,
       status: LICENSE_STATUS.ACTIVE,
     };
@@ -366,11 +420,17 @@ export function normalizeLicense(value) {
     ...(validatedAt ? { validatedAt } : {}),
     ...(typeof value.plan === 'string' ? { plan: value.plan } : {}),
     // The seat count and expiry the license server answered with, kept so a
-    // customer can see them again instead of only in the activate output.
+    // customer can see them again instead of only in the activate output. The
+    // expiry is no longer only the activation's: every successful validation
+    // writes the server's current term over it, so the file says which of the
+    // two the note may name.
     ...(Number.isSafeInteger(value.machinesInUse) && value.machinesInUse >= 0 ? { machinesInUse: value.machinesInUse } : {}),
     ...(typeof value.expiresAt === 'string' && Number.isFinite(Date.parse(value.expiresAt))
       ? { expiresAt: new Date(value.expiresAt).toISOString() }
       : {}),
+    // Absent on a record written before the term was ever re-read, which is
+    // exactly the record whose date can only be called an activation's.
+    ...(value.expiresAtVerified === true ? { expiresAtVerified: true } : {}),
   };
 }
 
@@ -531,13 +591,26 @@ function withinGrace(license, now) {
  *     be a line reading `Pro license: active, … expires 2026-08-01`, which
  *     contradicts itself in the same breath.
  *
+ * A third rule came with the renewal fix, and it is the only one about *where*
+ * the date came from. `expiresAt` used to be whatever the activation said, so
+ * "as reported at activation" was a true label. It no longer is: every
+ * successful validation overwrites it with the server's current term, so the
+ * label is now a fact about the record, `expiresAtVerified`, and it is only
+ * printed when the date is still the activation's own reading. On a record
+ * whose term the server has confirmed, the note is the bare date — the line
+ * already says `last verified <date>`, which is the moment it was read.
+ *
  * @returns {string[]} one note, or none when the license carries no end date
  */
 function licenseTermNote(stored, now) {
   const end = Date.parse(stored?.expiresAt ?? '');
   if (!Number.isFinite(end)) return [];
   const day = new Date(end).toISOString().slice(0, 10);
-  return [end < now ? `term ended ${day} as reported at activation` : `expires ${day}`];
+  // A term the server has since restated needs no qualifier: the sentence in
+  // front of it already carries the time it was read. Only a date this file has
+  // never had corrected is the activation's, and then it is named as one.
+  const source = stored?.expiresAtVerified ? '' : ' as reported at activation';
+  return [end < now ? `term ended ${day}${source}` : `expires ${day}${source}`];
 }
 
 /**

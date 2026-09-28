@@ -1,8 +1,123 @@
-> **Seneste:** iteration 114 (P1-99, færdig) — historien står i køens afsnit
-> `P1-99 — FÆRDIG 2026-09-28` lige under `## Prioriteret kø`. Køen er igen tom
+> **Seneste:** iteration 115 (P1-100, færdig) — historien står i køens afsnit
+> `P1-100 — FÆRDIG 2026-09-28` lige under `## Prioriteret kø`. Køen er igen tom
 > for målte kandidater; de målte fund er under `## ❓ Til Mads`.
 
-## Status fra denne iteration (114, P1-99 — licensens udløbsdato lå i filen og i dokumentationen, og i intet output)
+## Status fra denne iteration (115, P1-100 — den fornyede licens holdt den døde dato fra den dag, maskinen første gang aktiverede)
+
+**Målt først, nul kode ændret.** Køen var tømt, så målingen gik videre fra P1-99's
+fund: den målte, at `status` viste `expires_at`, og stoppede ved at feltet blev
+skrevet. Spørgsmålet videre var, om et felt, der skrives **én gang**, kan holde
+sine ord gennem en fornyelse. Rigtig CLI, temp-HOME, rigtig licens-stub med et
+nytt `renewed`-scenario — serveren svarer ved `activate` en periode **to dage
+forbi** og ved hver `validate` en periode **et år ud**:
+
+```
+$ deskuptime activate <key>
+✅ Pro activated (2 of 3 machines in use).
+state.json  "expiresAt": "2026-09-26T00:00:00.000Z"     ← den døde dato
+$ deskuptime watch <url>                                ← en rigtig loop, validate kaldes
+$ deskuptime status
+Pro license: active, last verified 2026-09-28, 2 of 3 machines in use when activated,
+             term ended 2026-09-26 as reported at activation
+```
+
+**To ord på én linje, fra den samme fil, og kun det ene havde spurgt nogen.**
+Serveren sagde `valid: true` og `expires_at: 2027-09-26` i hvert eneste kald.
+`refreshLicense` læste svaret, skrev `validatedAt` — og **kastede `expires_at`
+fra**. `validateLicense` har returneret feltet siden P1-19; ingen læser skrev
+det nogensinde ned. Resultatet holdt lige så længe maskinen kørte: en årskunde
+der betalte igen, så `status` sige `term ended` om den gamle dato i **al den tid
+filen lå der**, på den linje der samtidig sagde `active`.
+
+Det er samme fejl som de målte fund hele vejen igennem, en etage længere ned:
+**et krav på en flade, der aldrig spørger.** P1-99 gav feltet en læser; denne
+iteration gav læserens *kilde* en skriver.
+
+**Der lå også en anden skriver med samme fejl, en etage længere ude.**
+`deskuptime watch <url> --activate <key>` er en dokumenteret vej ind, og den
+skrev slet **ingen** `expiresAt` og ingen `machinesInUse`:
+
+```
+$ deskuptime watch <url> --activate <key>
+✅ Pro activated.
+$ deskuptime status
+Pro license: active, last verified 2026-09-28        ← ingen periode, ingen pladser
+```
+
+Samme kunde, samme nøgle, samme minut som ovenfor sagde `2 of 3 machines in
+use`. To måder at aktivere på, to forskellige filer.
+
+**Rettelsen er én ejer, `readTerm`, som begge skrivere går gennem.** Den skelner
+mellem de tre svar, fordi kun to af dem må ændre filen:
+
+| Serverens svar | Betydning | Filen |
+| --- | --- | --- |
+| `expires_at: "…"` | Datoen er sat | Gemmes |
+| `expires_at: null` | Der er ingen udløbsdato (lifetime) | En gammel dato fjernes |
+| feltet mangler | Serveren svarede ikke | Den gemte læsning står |
+
+Den tredje række er pointen: **stilhed er ikke et svar.** En server der ikke
+sender feltet har ikke sagt, at perioden er væk.
+
+**Etiketten måtte følge med, eller blev den en løgn.** Noteret læste
+`as reported at activation`, hvilket var sandt lige så længe feltet kom fra
+aktiveringen alene. Nu kommer datoen også fra `validate`, så oplysningen er
+blevet en egenskab ved recorden — `expiresAtVerified` — og ordet står kun, når
+datoen stadig er aktiveringens egen læsning. Det er præcis den samme regel som
+pladstallen bruger (`… when activated`), og den er ikke tilfældig: uden den
+ville en kunde læse `last verified 2026-09-28, expires …` og tro at begge tal
+kom fra samme øjeblik.
+
+**Acceptkriterier — alle syv opfyldt:**
+
+1. ✅ Efter en rigtig `watch`-loop står den **fornyede** dato i `state.json`
+   (`2027-09-26`), målt på rigtig CLI mod rigtig licens-stub.
+2. ✅ `status` skriver `expires 2027-09-26` og **ikke** `term ended` — målt før
+   og efter på samme fixture.
+3. ✅ Ordet `as reported at activation` forsvinder **kun** når serveren har
+   bekræftet perioden; en record uden flag beholder det (M3).
+4. ✅ `expires_at: null` (lifetime) **rydder** en gammel dato, fordi det er et
+   svar; et manglende felt gør **ikke** (M3).
+5. ✅ `watch --activate` og `activate` skriver **felt for felt det samme**
+   `license`-objekt, målt ved at sammenligne begge filer — før stod de
+   forskelige i `expiresAt`, `expiresAtVerified` og `machinesInUse`.
+6. ✅ `✅ Pro activated.` i loopen fik samme pladstall-sætning som kommandoen,
+   så ingen flade kan sige to ting om den samme aktivering.
+7. ✅ `test/fixtures/license-stub.mjs` har nu et `renewed`-scenario. Før var
+   det **umuligt** at skelne en CLI der genlæser perioden fra en der beholder
+   aktiveringens for evigt, fordi begge svar var `valid: true` — forskellen
+   lå alene i et felt ingen læste. 5 nye tests i `test/licenseterm.test.js`.
+   **Tre mutationer målt, alle tre døde** (1 / 1 / 1 fejl).
+
+**Gaten:** **789/789** på Node 24 via `tools/run-tests.mjs` (785 + 5 efter at ét
+P1-99-lock blev delt i to, fordi etiketten nu er betinget — delingen er
+dokumenteret i testens navn); `matrix --check` exit 0; audit 0/0; `node --check`
+ren; `git diff --check` rent. Merge `main` ← `ceo/license-renewal`.
+
+**Ingen deploy-note:** CLI-repo uden live-deploytarget, og ingen side blev
+ændret, så der er ingen trafik-baseline at skrive. Den måling, der gjorde
+fundet, står i kommandoens output.
+
+**Tre filer i `src/` rørt:** `license.js` (ejeren), `cli.js` og `watch.js` (de
+to skrivere, der nu går gennem den). Én testfil og den delte licens-stub.
+
+**Fejl i mine egne tests, fundet af gaten:** det P1-99-lock der krævede
+`as reported at activation` døde som forventet — ikke fordi adfærden var
+forkert, men fordi etiketten nu er **betinget**, så et lock der kræver den
+ordent på ethvert tidspunkt lå om den permanente sandhed og den midlertidige
+sammen. Delingen er ærlig i stedet for lempet: det nye lock siger præcis, hvornår
+hvilken af de to sætninger er den rigtige, og hvorfor en record skrevet af en
+før udgaven stadig har brug for den gamle.
+
+**Åbent punkt, bevidst ikke taget nu:** `runOnce` (`watch --once`, cron-væjen)
+kalder **ikke** `validate` — den har aldrig gjort det, fordi den er den
+read-only-måde en cron-kørsel bruger. Det betyder at en kunde uden en kørende
+loop først ser den fornyede dato, når looper igen starter. Det er ikke en fejl i
+denne iteration (intet bedre sig med sig selv her: `--once` skal ikke begynde
+at ringe til licensserveren for hver cron-kørsel), men det er værd at vide, når
+en fornyelse skal kunne ses fra et cron-job. Se ❓ 20.
+
+## Status fra tidligere iteration (114, P1-99 — licensens udløbsdato lå i filen og i dokumentationen, og i intet output)
 
 **Målt først, nul kode ændret.** Køen var tømt, så målingen gik på den rejse en
 **betalende** kunde går, og på det punkt hvor betalingen bliver til en vare:
@@ -4237,10 +4352,32 @@ Den aktuelle gate-definition er registreret her:
 
 ## Prioriteret kø
 
-> **Køen er tom for målte kandidater** (iteration 114). De målte fund fra den
+> **Køen er tom for målte kandidater** (iteration 115). De målte fund fra den
 > iteration ligger i afsnittet ovenfor og i `❓ Til Mads`. Næste iteration skal
 > **måle først** og finde sin egen opgave — den metode der har fundet de sidste
-> 91 opgaver. Se `❓ Til Mads` for de konkrete, målbare kandidater.
+> 92 opgaver. Se `❓ Til Mads` for de konkrete, målbare kandidater.
+
+### P1-100 — FÆRDIG 2026-09-28 (`ceo/license-renewal`) — den fornyede licens holdt den døde dato fra den dag, maskinen første gang aktiverede
+
+**Målt først, nul kode ændret.** Se afsnittet øverst. Kort fortalt: rigtig CLI,
+temp-HOME, rigtig licens-stub med et nyt `renewed`-scenario (activate svarer en
+periode to dage forbi, hver validate en periode et år ud). Efter en rigtig
+`watch`-loop stod serverens **nye** dato ingen vegne: `state.json` holdt den
+gamle, og `status` skrev `Pro license: active, … term ended 2026-09-26 as
+reported at activation` — to ord om modsatte ting fra samme fil, hvor kun det
+ene havde spurgt nogen.
+
+**Årsagen:** `refreshLicense` skrev `validatedAt` fra svaret og kastede
+`expires_at` væk. `validateLicense` har returneret feltet siden P1-19.
+
+**Fix:** `readTerm()` som den ene ejer af "hvad sagde serveren om perioden" —
+og den skelner de tre svar, fordi kun to må ændre filen (dato / `null` /
+feltet mangler). Begge skrivere (`activate` og `watch --activate`) går gennem
+den, så en gemt periode skrives én måde. Noteret følger kilden: `expiresAtVerified`
+gør `as reported at activation` til en egenskab ved recorden i stedet for en
+konstant. 5 nye tests i `test/licenseterm.test.js` + `renewed`-scenario i den
+delte licens-stub → **789/789**; audit 0/0; `matrix --check` 0; `node --check`,
+`git diff --check` grønne. **Tre mutationer målt, alle døde** (1/1/1 fejl).
 
 ### P1-99 — FÆRDIG 2026-09-28 (`ceo/license-expiry`) — licensens udløbsdato lå i filen og i dokumentationen, og i intet output
 
@@ -7429,6 +7566,21 @@ for selv. Ingen gemt nøgle er omskrevet, ingen eksisterende adgangsd tilstand
 0. **Skal `src/features.js` også være source of truth for siten og det private desktoprepo?** Matrixen er nu én fil i dette repo, og den private desktop-app plus `deskuptime.com` har hver deres egen matrix. Hvis de skal følge med automatisk, er vejen et lille public npm-pakke (`@mahope/product-matrix`) som alle tre repoer importerer. Uden beslutning fortsætter de to andre overflader med at være håndskrevne — og det er præcis den drift, del A lukker her.
 
 17. **⚠️ Min `~/.deskuptime/state.json` og `history.json` er væk, og det er min skyld — to gange.** P1-81 (iteration 97) fandt, at `tools/measure-e2e.mjs` skrev begge filer i den **rigtige** home i stedet for sin egen midlertidige, fordi den gav `runPass` en `home`-nøgle, mens kun `env` flytter filerne. Det skete kl. 05:01 den 28. september under min egen kørsel af bænken. **Så slettede min egen test dem kl. 05:05:** den første version af den nye `test/benchhome.test.js` tog `process.env.HOME` som sit "ambient"-mål og kaldte `rmSync` på det, og fordi jeg kørte mutationerne med `node --test` direkte i stedet for gaten, var det den rigtige home. Det er præcis den ulykke P1-58 blev bygget for at lukke, genindført i den iteration der lagde en lås på den. **Mappen `~/.deskuptime` er tom lige nu.** Filerne kan ikke genskabes herfra; licensnøgle og overvågningsliste skal genskabes med `deskuptime activate <key>` og `deskuptime watch <url>`, og `history.json` bygger sig selv op igen over de næste 30 døgn. **Jeg har ikke gjort det for dig** — det er din maskine og din licens, og du skal vide at den er væk, før du opdager det ved næste `deskuptime status`. Den endelige kode er sikker (testen bruger sin egen `tempHome`), og fejlen er rettet og låst med tre tests, inklusive den der *kører bænken under en observeret HOME* — men skaden kan ikke fortrykkes.
+
+20. **Skal `watch --once` også bekræfte licensen?** P1-100 rettede, at et
+    vellykket `validate` skriver serverens nuværende udløbsdato over den gemte,
+    så en fornyelse nu når den fil, `status` viser den fra. Men `--once` kalder
+    slet ikke `validate` — det er cron-væjen, og den har aldrig ringet til
+    licensserveren. **Konsekvensen:** en kunde uden en kørende `watch`-loop ser
+    den fornyede dato først, når looper igen starter. Det er ikke en fejl, jeg
+    har rettet, fordi `--once` der *skal* være billig og read-only, og hvert
+    cron-kald med et netværkskald til licensserveren er en ny måde at blive
+    låst ude på. Men det er et valg, ikke en naturlighed, og det er dit:
+    (a) behold, og skriv det i `docs/license-lifecycle.md` så det er oplyst;
+    (b) lad `--once` bekræfte, men kun når den gemte bekræftelse er ældre end
+    f.eks. 24 timer, så et cron-job hvert minut ikke spørger hvert minut;
+    (c) tilføj et flag, så det er cron-jobbets eget valg. (b) er en konstant og
+    en betingelse — ikke et nyt projekt.
 
 19. **Skal en lifetime-kunde se ordet `Lifetime` i CLI'en?** Licensserveren
     svarer `lifetime: true` på både `activate` og `validate` siden 27/9, men det

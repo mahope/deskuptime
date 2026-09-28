@@ -12,14 +12,14 @@
  */
 
 import { checkUrl } from './engine.js';
-import { activateLicense, refreshLicense, normalizeLicense, describeLicense, proGateMessage, LICENSE_STATUS, PRO_STATUSES } from './license.js';
+import { activateLicense, refreshLicense, normalizeLicense, describeLicense, proGateMessage, readTerm, LICENSE_STATUS, PRO_STATUSES } from './license.js';
 import { readFileSync, writeFileSync, mkdirSync, existsSync, renameSync, unlinkSync, statSync, chmodSync } from 'fs';
 import { dirname, posix, win32 } from 'path';
 import { homedir } from 'os';
 import { createHash, randomUUID } from 'crypto';
 import { assertValidHttpUrls, expiredNote, findUrlKey, isNewerPass, partitionUsableUrls, readCertIdentity, readCertIssuerState, readCertRotation, readCertRotationAlert, readContentChange, readContentChangeAlert, readContentState, readEntry, readEvent, readRedirectTarget, readSslIssuer, readTransitionAlert, queuedAgeMs, readSslState, STALE_AFTER_DAYS, unusableUrlNote, urlIdentity, withoutCredentials, certRotationCount } from './status.js';
 import { recordPass } from './report.js';
-import { formatMs, safeText } from './display.js';
+import { formatMs, machinesInUse, safeText } from './display.js';
 import { historyFileFrom, pruneHistory, readHistoryFile, recordHistoryPass, saveHistory, historyWriteErrorMessage } from './history.js';
 import { FREE, PRO, PRODUCT, renderThanks } from './features.js';
 
@@ -1691,10 +1691,25 @@ export async function startWatch(urls, opts = {}) {
     console.log('🔑 Activating license...');
     const result = await activateLicense(opts.activateKey);
     if (result.valid) {
-      state.license = { key: result.key, instance: result.deviceId, plan: result.meta.plan, status: LICENSE_STATUS.ACTIVE, validatedAt: new Date().toISOString() };
+      // The same record the `activate` command writes, field for field. Measured
+      // 2026-09-28: activating the *same* key through this option left a record
+      // with no `expiresAt` and no `machinesInUse` at all, so `deskuptime
+      // status` said `Pro license: active, last verified 2026-09-28` — no term,
+      // no seats — for a customer who had activated the identical key a minute
+      // earlier and been told `2 of 3 machines in use`. Two documented ways to
+      // activate, two different files.
+      state.license = {
+        key: result.key,
+        instance: result.deviceId,
+        plan: result.meta.plan,
+        status: LICENSE_STATUS.ACTIVE,
+        validatedAt: new Date().toISOString(),
+        ...(Number.isSafeInteger(result.meta.devicesInUse) && result.meta.devicesInUse >= 0 ? { machinesInUse: result.meta.devicesInUse } : {}),
+        ...readTerm(result.meta.expiresAt, null),
+      };
       saveState(state, opts);
       pro = true;
-      console.log('✅ Pro activated.');
+      console.log(`✅ Pro activated (${machinesInUse(result.meta.devicesInUse)} of ${PRODUCT.machines} machines in use).`);
     } else if (result.transient) {
       console.error(`❌ Could not reach the license server: ${result.error}`);
       console.error('    Nothing was changed. Try again when the server answers — your Pro is unchanged.');

@@ -7,6 +7,8 @@
  * Scenario: DUB_STUB_SCENARIO=ok           activate 200 (3 of 3 in use), deactivate 200 (2 of 3 left)
  *           DUB_STUB_SCENARIO=limit        activate 409 (device limit reached)
  *           DUB_STUB_SCENARIO=lifetime     activate 200 with `expires_at: null` and `lifetime: true`
+ *           DUB_STUB_SCENARIO=renewed      activate answers the *old* term, every later
+ *                                         validate the new one — a customer who paid again
  *           DUB_STUB_SCENARIO=trap         any call exits 9, so read-only surfaces can be proven offline
  *           DUB_STUB_SCENARIO=passthrough  the three license endpoints are stubbed, every
  *                                          other request is the real fetch
@@ -26,6 +28,13 @@
  * monitoring path was broken. A measurement harness that cannot tell a stubbed
  * endpoint from a real one reports the stub, not the code. Anything not listed
  * here is now passed through untouched.
+ *
+ * `renewed` is the shape that made the *term itself* measurable: activate
+ * answers a term two days in the past, every later validate a term a year out.
+ * A machine that asks the server on every pass must end up storing the second
+ * one. Before this scenario there was no way to tell a CLI that re-reads the
+ * term from one that keeps the activation's forever, because both answers were
+ * `valid: true` — the difference only exists in a field nothing looked at.
  */
 
 const SCENARIO = process.env.DUB_STUB_SCENARIO || 'ok';
@@ -46,9 +55,18 @@ globalThis.fetch = async (url, ...rest) => {
     if (SCENARIO === 'lifetime') {
       return json(200, { ok: true, activated: true, plan: 'pro', expires_at: null, lifetime: true, devices_in_use: 1 });
     }
+    if (SCENARIO === 'renewed') {
+      // A term that is already over. `status` must not call this an expired
+      // license — the server answers `valid: true` on the very next call, with
+      // a term a year out — but the note is this date until a pass asks again.
+      return json(200, { ok: true, activated: true, plan: 'pro', expires_at: '2026-09-26T00:00:00.000Z', devices_in_use: 2 });
+    }
     return json(200, { ok: true, activated: true, plan: 'pro', expires_at: '2027-09-26T00:00:00.000Z', devices_in_use: 3 });
   }
   if (endpoint.endsWith('/validate')) {
+    if (SCENARIO === 'renewed') {
+      return json(200, { ok: true, valid: true, plan: 'pro', expires_at: '2027-09-26T00:00:00.000Z' });
+    }
     return json(200, { ok: true, valid: true, plan: 'pro', expires_at: '2027-09-26T00:00:00.000Z' });
   }
   if (endpoint.endsWith('/deactivate')) {

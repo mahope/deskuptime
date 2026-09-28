@@ -95,6 +95,22 @@ svare med et købslink på den — vejen tilbage er `deskuptime activate
 de stod i da de kom. En record med både nøgle og `released: true` læses som
 licensen, fordi deaktivering fjerner nøglen; flaget er da en rest.
 
+Udløbsdatoen er **ikke** fast fra aktiveringen. `validate` svarer også
+`expires_at`, og et vellykket svar skriver serverens nuværende periode over den
+gemte — så en kunde der har betalt igen ser den nye dato, ikke den gamle. Tre
+svar betyder tre ting, og kun to af dem må ændre filen:
+
+| Serverens svar | Betydning | Filen |
+| --- | --- | --- |
+| `expires_at: "2027-09-26T…"` | Datoen er sat | Gemmes |
+| `expires_at: null` | Der er ingen udløbsdato (lifetime) | En gammel dato fjernes |
+| feltet mangler | Serveren svarede ikke på det | Den gemte læsning står |
+
+En record med `expiresAtVerified` har fået sin periode bekræftet af en `validate`,
+så noteret er den blotte dato — linjen siger allerede `last verified <dato>`,
+altså det tidspunkt den blev læst. En record uden feltet (alt skrevet af en
+før udgaven) har kun aktiveringens egen læsning, og det siger noteret sådan.
+
 Nøglen slettes **aldrig** automatisk. Den bliver liggende, så en senere vellykket
 check gendanner Pro, og så support kan se hvilken nøgle kunden har.
 

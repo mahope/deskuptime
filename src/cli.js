@@ -559,7 +559,7 @@ if (command === 'activate') {
     process.exit(1);
   }
   console.log('🔑 Activating license...');
-  const { activateLicense, LICENSE_STATUS } = await import('./license.js');
+  const { activateLicense, readTerm, LICENSE_STATUS } = await import('./license.js');
   const res = await activateLicense(key);
   // No process.exit() after fetch — see the note at "Unknown command" below.
   if (!res.valid) {
@@ -587,7 +587,7 @@ if (command === 'activate') {
       // them later instead of only in this line. Both are optional: a server
       // that omits them leaves the record exactly as it was.
       ...(Number.isSafeInteger(res.meta.devicesInUse) && res.meta.devicesInUse >= 0 ? { machinesInUse: res.meta.devicesInUse } : {}),
-      ...(typeof res.meta.expiresAt === 'string' && Number.isFinite(Date.parse(res.meta.expiresAt)) ? { expiresAt: res.meta.expiresAt } : {}),
+      ...readTerm(res.meta.expiresAt, null),
     };
     saveState(state);
     console.log(`✅ Pro activated (${machinesInUse(res.meta.devicesInUse)} of ${PRODUCT.machines} machines in use).`);
