@@ -1,8 +1,53 @@
-> **Seneste:** iteration 109 (P1-94, færdig) — historien står i køens afsnit
-> `P1-94 — FÆRDIG 2026-09-28` lige under `## Prioriteret kø`. Næste opgave er en
+> **Seneste:** iteration 110 (P1-95, færdig) — historien står i køens afsnit
+> `P1-95 — FÆRDIG 2026-09-28` lige under `## Prioriteret kø`. Næste opgave er en
 > ny målt opgave: køen er tømt for målte kandidater igen.
 
-## Status fra denne iteration (109, P1-94 — to filers ur gik ikke røde, men en Pro-licens gjorde)
+## Status fra denne iteration (110, P1-95 — curl-installeren installerede en release, der aldrig har eksisteret)
+
+**Målt først, mod det rigtige GitHub, intet stubbet.** Køen var tømt for målte
+kandidater, så målingen gik på den frie distributionsvej — den som ❓ 10 og
+P0-9b sidder på, og som ingen måling hidtil har rørt med rigtige releases.
+Releases-API'et gav fire `v*-cli`-releases, nyest **`v0.2.5-cli`**. Der er altså
+ingen `v0.2.8-cli`, mens `package.json` siger 0.2.8.
+
+**Den rigtige installer kørte så to veje, og de svarede hver især sandheden om
+sig selv.** Med `DESKUPTIME_NO_RESOLVE=1` skrev den *"using built-in version
+0.2.8"* og fik `curl: (56) 404` — ingen CLI. Med et læsbart feed installerede den
+**0.2.5**, tre minorer under npm, altså et værktøj uden alt hvad loopet har bygget
+siden 26. august.
+
+**De to tal var aldrig det samme tal, og det er hele fejlen.** `FALLBACK_VERSION`
+var en kopi af *npm*-versionen, men npm-versionen kræver intet tag — `v<ver>-cli`
+skæres i hånden af Mads. Fallback'en pegede derfor på en release, der ikke
+findes, og den døde på præcis den vej en bruger med et **rate-limited
+`api.github.com`** (60 kald i tim'en pr. IP — altså ethvert NAT, CI-runner eller
+VPN) bliver sendt ud, fordi han så netop ikke kan læse feedet. En lås i
+`test/install.test.js` krævede de to tal være ens, så **låsen holdt fejlen fast**.
+
+**Rettelsen er, at installeren ikke gætter.** Der er ingen indbygget version
+længere: feedet er den eneste kilde, og et ulæseligt feed er nu en **ærlig fejl**
+der peger på `npm install -g @mahope/deskuptime` — en vej, der ikke kræver et tag
+og derfor ikke kan blive forældet. Målt på alle tre rigtige veje efter rettelsen:
+ingen resolve → exit 1 med npm-vejen; 404-feed → exit 1 med npm-vejen;
+`DESKUPTIME_VERSION=0.2.5` → `Installed deskuptime 0.2.5`. **Vi gætter ikke**
+skal ikke koste den eneste vej med en kendt version, så den pin er målt som
+modvægt, ikke som sideeffekt.
+
+**Gaten:** **762/762** på Node 26.7.0 via `tools/run-tests.mjs` (761 + 1 netto:
+én fallback-test erstattet af to); audit 0/0; `matrix --check` exit 0;
+`sh -n tools/install.sh` ren; `git diff --check` rent. **Ingen fil i `src/`
+rørt** — to filer, begge i distributionsvejen. CI var grøn på `main` før start
+(ét kald).
+
+**Deploy-note ikke nødvendig:** CLI-repo udden live-deploytarget.
+
+**❓ 10 er skærpet, ikke lukket:** den publicerede npm-README (5 586 tegn mod
+11 489 i repoet) sender købere til `deskuptime.com` i stedet for direkte til
+Payment Linket, og den publicerede beskrivelse er fra før `renderNpmDescription`.
+Det er én handling for Mads — `git tag v0.2.9-cli && git push --tags` og
+`npm publish` — og intet i denne iteration kan gøre det. Se ❓ 10.
+
+## Status fra tidligere iteration (109, P1-94 — to filers ur gik ikke røde, men en Pro-licens gjorde)
 
 **Målt først, og målingen var to gange min fejl.** P1-94 sagde "syv filer med et
 fast ur, mål hvilke der går røde". Jeg målede alle syv i stedet for at tro på
@@ -4121,6 +4166,68 @@ døgn-løkken), og `oversizedpage` sat tilbage til et ur fra *importen* i stedet
 for ved kaldet (2 fejl, rækkerne får `ahead of this machine's clock` igen).
 
 **Deploy-note ikke nødvendig:** CLI-repo uden live-deploytarget.
+
+> **Seneste:** iteration 110 (P1-95, færdig) — historien står i køens afsnit
+> `P1-95 — FÆRDIG 2026-09-28` lige under `## Prioriteret kø`. Næste opgave er en
+> ny målt opgave: køen er tømt for målte kandidater igen.
+
+### P1-95 — FÆRDIG 2026-09-28 (`ceo/installer-no-guess`) — curl-installeren installerede en release, der aldrig har eksisteret
+
+**Målt først, mod det rigtige GitHub, intet stubbet.** Køen var tømt, så
+iterationen målte den frie distributionsvej, som ❓ 10 og P0-9b sidder på.
+Releases-API'et (read-only) gav **fire** `v*-cli`-releases, nyest `v0.2.5-cli` —
+altså ingen `v0.2.8-cli`, mens `package.json` siger 0.2.8. Den rigtige installer
+kørte så to veje:
+
+```
+DESKUPTIME_NO_RESOLVE=1  →  Resolving disabled — using built-in version 0.2.8.
+                            curl: (56) 404
+                            error: download failed: …/v0.2.8-cli/deskuptime-0.2.8.tar.gz
+feed læsbart             →  Resolved newest published CLI release: v0.2.5-cli.
+                            Installed deskuptime 0.2.5:      (3 minorer under npm)
+```
+
+**Årsagen er, at de to tal aldrig var det samme tal.** `FALLBACK_VERSION` var en
+kopi af npm-versionen, og npm-versionen kræver **intet tag** — `v<ver>-cli` skæres
+i hånden. Fallback'en pegede derfor på en release, der ikke findes, og den døde
+på præcis den vej en bruger med et **rate-limited `api.github.com`** (60 kald i
+tim'en pr. IP, altså ethvert NAT/CI/VPN) bliver sendt ud. `test/install.test.js`
+krævede de to tal være ens, så **låsen beskyttede fejlen** — den er sænket, ikke
+slækket, se nedenfor.
+
+**Rettelsen er, at installeren ikke gætter.** Der er ingen `FALLBACK_VERSION`
+længere: feedet er den eneste kilde til "nyeste publicerede CLI-release", og et
+ulæseligt feed er nu **en ærlig fejl** der peger på `npm install -g
+@mahope/deskuptime` — som ikke kræver noget tag og derfor aldrig kan blive
+forældet. Målt på alle tre rigtige veje efter rettelsen: ingen resolve → exit 1
+med npm-vejen; 404-feed → exit 1 med npm-vejen; `DESKUPTIME_VERSION=0.2.5` →
+`Installed deskuptime 0.2.5`, så **den pin, der navngiver en version, stadig
+virker**.
+
+**Acceptkriterier — alle tre opfyldt:**
+
+1. ✅ `install.sh` indeholder ingen versions-tildeling, og testen låser det med
+   et regex der læser *enhver* `*VERSION*=<tal>`-linje, ikke kun det kendte navn.
+2. ✅ Ulæseligt feed og `DESKUPTIME_NO_RESOLVE=1` ender i exit 1 med
+   `npm install -g @mahope/deskuptime` + pin-værdien — målt på lokal server
+   *og* mod det rigtige 404-endpoint.
+3. ✅ Modvægten: `DESKUPTIME_VERSION` med et feed der ikke findes installerer
+   stadig, så "vi gætter ikke" koster ikke den eneste vej med en kendt version.
+
+**Gaten:** **762/762** (761 + 1 netto: 1 fallback-test erstattet af 2); audit
+0/0; `matrix --check` exit 0; `sh -n tools/install.sh` ren; `git diff --check`
+rent. **Ingen fil i `src/` rørt** — to filer, begge i distributionsvejen. CI var
+grøn på `main` før start (ét kald).
+
+**Deploy-note ikke nødvendig:** CLI-repo uden live-deploytarget.
+
+**Fund ved samme måling, der ikke er en agentopgave:** den frie download-stien
+installerer **0.2.5**, mens npm har 0.2.8 — og den publicerede npm-beskrivelse er
+en ældre end den i repoet, fordi 0.2.8 blev publiceret 7. september, før
+`renderNpmDescription` kom. Den publicerede npm-README (5 586 tegn mod 11 489 i
+repoet) sender købere til `deskuptime.com` i stedet for direkte til
+Payment Linket. Alt sammen rettes af **én** handling, ❓ 10: `git tag
+v0.2.9-cli && git push --tags` + `npm publish`. Agenten laver aldrig tags.
 
 ### P1-94 — FÆRDIG 2026-09-28 (`ceo/license-clock`) — to filers ur gik ikke røde, men en Pro-licens gjorde
 

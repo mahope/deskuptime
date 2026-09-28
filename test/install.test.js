@@ -220,8 +220,39 @@ test('install.sh bruger DESKUPTIME_VERSION uden at læse releasefeedet', { skip 
   assert.ok(existsSync(join(libDir(home), 'src', 'cli.js')));
 });
 
-test('install.sh falder tilbage til den indbyggede version, når feedet er ulæseligt', { skip }, async () => {
-  const version = PKG.version;
+test('install.sh gætter ingen release, når feedet er ulæseligt — den siger det og giver npm-vejen', { skip }, async () => {
+  // P1-95: this test used to require the opposite. An empty feed used to fall
+  // back to a hardcoded version copied from package.json, which is not a
+  // release: measured live, that URL 404s. npm needs no tag and resolves the
+  // current version, so it is the route that cannot go stale.
+  const base = await startServer([], {});
+
+  for (const env of [
+    { DESKUPTIME_API_URL: `${base}/releases` },
+    { DESKUPTIME_NO_RESOLVE: '1' },
+  ]) {
+    const home = freshHome('unreadable');
+    const failed = await runInstaller(home, {
+      DESKUPTIME_RELEASE_BASE: `${base}/download`,
+      ...env
+    }).then(() => null, err => err);
+    assert.ok(failed, `ulæseligt feed (${Object.keys(env).join(',')}) gav exit 0`);
+    assert.notEqual(failed.code, 0);
+    assert.match(failed.stderr, /will not guess/, failed.stderr);
+    assert.match(failed.stderr, /npm install -g @mahope\/deskuptime/, failed.stderr);
+    assert.match(failed.stderr, /DESKUPTIME_VERSION=/, failed.stderr);
+    assert.equal(
+      existsSync(join(home, '.local')), false,
+      'intet må installeres uden en kendt release'
+    );
+  }
+});
+
+test('install.sh installerer stadig den pin, brugeren selv beder om', { skip }, async () => {
+  // The counterweight to the test above: refusing to guess must not cost the
+  // one path that names its version out loud. Measured against a local server
+  // with no release feed at all.
+  const version = '0.2.9';
   const tarball = await makeTarball(version);
   const base = await startServer([], {
     [`/download/v${version}-cli/deskuptime-${version}.tar.gz`]: tarball,
@@ -229,10 +260,14 @@ test('install.sh falder tilbage til den indbyggede version, når feedet er ulæs
       Buffer.from(`${sha256(tarball)}  deskuptime-${version}.tar.gz\n`)
   });
 
-  const home = freshHome('fallback');
-  const { stdout } = await runInstaller(home, { DESKUPTIME_RELEASE_BASE: `${base}/download` });
-  assert.match(stdout, /could not read the release feed — falling back to/, stdout);
-  assert.ok(existsSync(join(libDir(home), 'src', 'cli.js')), 'fallback-versionen blev ikke installeret');
+  const home = freshHome('pinned');
+  const { stdout } = await runInstaller(home, {
+    DESKUPTIME_API_URL: `${base}/releases`,
+    DESKUPTIME_RELEASE_BASE: `${base}/download`,
+    DESKUPTIME_VERSION: version
+  });
+  assert.match(stdout, new RegExp(`Installed deskuptime ${version.replace(/\./g, '\\.')}`), stdout);
+  assert.ok(existsSync(join(libDir(home), 'src', 'cli.js')));
 });
 
 test('install.sh erstatter en tidligere installation i stedet for at flette filer', { skip }, async () => {
@@ -283,12 +318,24 @@ test('install.sh nægter en tarball uden src/cli.js', { skip }, async () => {
   assert.equal(existsSync(join(home, '.local', 'bin', 'deskuptime')), false);
 });
 
-test('install.sh har én Node-kravfejl, og versionerne matcher package.json', { skip }, () => {
-  const fallback = /FALLBACK_VERSION="([\d.]+)"/.exec(INSTALLER_SRC);
+test('install.sh opfinder ingen release-version, og Node-kravet matcher package.json', { skip }, () => {
+  // P1-95: the built-in fallback was a copy of package.json's npm version,
+  // which is not a CLI release — the v<ver>-cli tag is cut by hand. Measured
+  // 2026-09-28 against the live releases: package.json said 0.2.8, the newest
+  // v*-cli release was v0.2.5-cli, so the fallback URL 404'd and the curl
+  // user got no CLI. The lock used to *require* that copy, so the drift was
+  // protected. Now the script may hold no version at all: the feed is the only
+  // source, and an unreadable feed is an honest error rather than a guess.
+  assert.equal(
+    /FALLBACK_VERSION/.test(INSTALLER_SRC), false,
+    'install.sh må ikke have en indbygget fallback-version'
+  );
+  const assigned = [...INSTALLER_SRC.matchAll(/^\s*(?:[A-Z_]*VERSION[A-Z_]*)=(["']?)(\d[^"'\s]*)\1\s*$/gm)]
+    .map(m => m[2]);
+  assert.deepEqual(assigned, [], `install.sh tildeler en version: ${assigned.join(', ')}`);
+
   const major = /REQUIRED_NODE_MAJOR=(\d+)/.exec(INSTALLER_SRC);
-  assert.ok(fallback, 'FALLBACK_VERSION mangler i install.sh');
   assert.ok(major, 'REQUIRED_NODE_MAJOR mangler i install.sh');
-  assert.equal(fallback[1], PKG.version, `FALLBACK_VERSION ${fallback[1]} != package.json ${PKG.version}`);
   assert.equal(
     major[1], /(\d+)/.exec(PKG.engines.node)[1],
     `REQUIRED_NODE_MAJOR ${major[1]} != engines ${PKG.engines.node}`

@@ -8,10 +8,6 @@
 # without touching the network.
 set -e
 
-# Used only when the release feed cannot be read. Keep in sync with
-# package.json — test/install.test.js fails if the two drift.
-FALLBACK_VERSION="0.2.8"
-
 # Single source for the Node major this CLI runs on. Must match "engines.node"
 # in package.json; test/install.test.js asserts the two agree. Every Node
 # version error below is printed through require_node(), so there is exactly
@@ -97,16 +93,29 @@ VERSION=""
 if [ -n "${DESKUPTIME_VERSION:-}" ]; then
   VERSION="$DESKUPTIME_VERSION"
   note "Installing pinned deskuptime ${VERSION} (DESKUPTIME_VERSION)."
-elif [ "${DESKUPTIME_NO_RESOLVE:-0}" = "1" ]; then
-  VERSION="$FALLBACK_VERSION"
-  note "Resolving disabled — using built-in version ${VERSION}."
 else
-  if VERSION="$(resolve_version)"; then
-    note "Resolved newest published CLI release: v${VERSION}-cli."
-  else
-    VERSION="$FALLBACK_VERSION"
-    note "warning: could not read the release feed — falling back to ${VERSION}."
+  # No pin, so the only honest source of "the newest published CLI release" is
+  # the release feed. This script deliberately holds no version number of its
+  # own: the npm version in package.json is NOT a CLI release, because the
+  # v<ver>-cli tag is cut by hand, so a built-in fallback drifts into naming a
+  # release that does not exist. Measured 2026-09-28 with a fallback copied
+  # from package.json (0.2.8) while the newest v*-cli release was v0.2.5-cli:
+  # the download 404'd and the curl user got no CLI at all — on exactly the
+  # path a rate-limited api.github.com (60 requests/hour per IP) sends them.
+  # npm needs no tag and always resolves the current version, so it is the
+  # route that cannot go stale. test/install.test.js locks both halves: this
+  # script spells out no version, and the unreadable feed ends here.
+  if [ "${DESKUPTIME_NO_RESOLVE:-0}" = "1" ]; then
+    die "resolving disabled and no DESKUPTIME_VERSION given — this installer will not guess a release. Install from npm instead:
+  npm install -g @mahope/deskuptime
+  or name the release you want: DESKUPTIME_VERSION=<ver> sh install.sh"
   fi
+  if ! VERSION="$(resolve_version)"; then
+    die "could not read the release feed, so the newest published CLI release is unknown — this installer will not guess one. Install from npm instead:
+  npm install -g @mahope/deskuptime
+  or retry later, or name the release you want: DESKUPTIME_VERSION=<ver> sh install.sh"
+  fi
+  note "Resolved newest published CLI release: v${VERSION}-cli."
 fi
 
 TMP="$(mktemp -d)"
