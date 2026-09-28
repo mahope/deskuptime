@@ -1,8 +1,108 @@
-> **Seneste:** iteration 113 (P1-98, færdig) — historien står i køens afsnit
-> `P1-98 — FÆRDIG 2026-09-28` lige under `## Prioriteret kø`. Køen er igen tom
+> **Seneste:** iteration 114 (P1-99, færdig) — historien står i køens afsnit
+> `P1-99 — FÆRDIG 2026-09-28` lige under `## Prioriteret kø`. Køen er igen tom
 > for målte kandidater; de målte fund er under `## ❓ Til Mads`.
 
-## Status fra denne iteration (113, P1-98 — den gratis tier afviste den 4. URL ved at smide de 3 andre væk)
+## Status fra denne iteration (114, P1-99 — licensens udløbsdato lå i filen og i dokumentationen, og i intet output)
+
+**Målt først, nul kode ændret.** Køen var tømt, så målingen gik på den rejse en
+**betalende** kunde går, og på det punkt hvor betalingen bliver til en vare:
+hvornår licensen holder op. Rigtig CLI, rigtig state-fil i temp-HOME, rigtig
+licensserver-stub — tre af de fire fladekommandoer, med ét probe imellem dem:
+
+```
+activate   ✅ Pro activated (3 of 3 machines in use).
+state.json "expiresAt": "2027-09-26T00:00:00.000Z"      ← målingen
+status     Pro license: active, last verified 2026-09-28, 3 of 3 machines in use when activated
+           ↑ og intet om 2027-09-26
+```
+
+**Feltet er der, dokumentet er der, og ingen flade læste det.** `cli.js:590` har
+skrevet `expires_at` ned siden P1-19, `normalizeLicense` bevarer det, og
+`docs/license-lifecycle.md:93-94` siger *«Ved aktivering gemmes `devices_in_use`
+og `expires_at` også, så `status` kan vise pladserne og udløbsdatoen bagefter i
+stedet for kun i den linje, de stod i da de kom.»* — halvdelen holdt. Pladserne
+kom, datoen kom ikke. Det er samme fejl som de målte fund hele vejen igennem:
+**et krav på en flade, der aldrig spørger.**
+
+**Skaden er den, en bureau mærker før kunden gør det.** En årskunde betalte $19
+og får aldrig at vide, hvornår året er om; den opdager det, når serveren begynder
+at afvise nøglen, og da står der `the license server rejected this key`. Der er
+ingen planlægningsflade, ingen påmindelse og intet i `report` — dokumentet bureauet
+sender videre til kunden. Den eneste anden gang talet kom, var i
+`activate`-linjen, der forsvinder samme sekund.
+
+**Der lå også en lås, der holdt hullet.** `test/seat.test.js:82` hedder
+*«the seat count and expiry survive activation instead of printing once»* — og
+hævder **kun** pladstallet. Testen var skrevet som om den dækkede begge dele, så
+navnet lovede det og koden målede det halve.
+
+**Rettelsen er ejers egen sætning, i `describeLicense`.** Det er den samme
+funktion `proGateMessage` læser, så `status` og Pro-gaten (`report`,
+`--webhook`) ikke kan sige hinanden imod. `expires 2027-09-26` sidder som det
+sidste led i den sætning, der begynder `Pro license: active, last verified …` —
+altså efter de to ting andre låse hænger på, i den rækkefølge de står i.
+
+**To regler ordet selv må holde, fordi datoen er en *gemt* læsning:**
+
+- **Den demoterer aldrig status.** `end < now` giver ikke `unverified` eller
+  `invalid` — serveren kan have fornyet licensen, og filen hørte det ikke. At
+  beslutte Pro ud fra en cachelagt dato er præcis den låsning af en betalende
+  kunde, kontrakten forbyder. Målt: samme record, `expiresAt` 2026-08-01, giver
+  stadig `Pro license: active, …`.
+- **Den siger aldrig «expires» om en dag, der er gået.** Ellers skriver linjen
+  `Pro license: active, … expires 2026-08-01`, altså en sætning der modsiger
+  sig selv i samme vejrtrækning. Fremad: `expires 2027-09-26`. Baglæns:
+  `term ended 2026-08-01 as reported at activation`.
+
+**Acceptkriterier — alle syv opfyldt:**
+
+1. ✅ `deskuptime status` på en årskoncern skriver `expires 2027-09-26` — målt på
+   rigtig CLI mod rigtig licensserver-stub.
+2. ✅ Sætningen før den er **tegn for tegn** uændret, kun den nye note er tilføjet
+   (`Pro license: active, last verified …, 3 of 3 machines in use when activated,`).
+3. ✅ En dokumenteret læsning demoterer aldrig status, og et ordskift til
+   `expires` for en gået dag dør i testen (M2).
+4. ✅ Skubbes `now` tre dage fremad, vender noten, **mens posten er uændret** —
+   datoen måles mod maskinens ur, ikke mod `validatedAt` (M3).
+5. ✅ Tidsgrænsen er målt, ikke antaget: ved selve sluttidspunktet siger den
+   stadig `expires` (dagen er ikke om end), 1 ms senere `term ended`.
+6. ✅ `test/fixtures/license-stub.mjs` har nu et `lifetime`-scenario
+   (`expires_at: null`, `lifetime: true`) — før var ordet `lifetime` **ikke
+   stående ét sted i `src/`**, så en lifetime-kunde aldrig kunne måles
+   end-to-end. Målt: samme linje som ovenfor, uden dato og uden ordet `expires`.
+7. ✅ 7 nye tests i `test/licenseterm.test.js`, alle adfærdslåse mod rigtig CLI
+   og rigtig state-fil, plus **dokumentlåsen** der holder
+   `docs/license-lifecycle.md` på den sætning den lover. **Tre mutationer målt,
+   alle tre døde** (4 / 3 / 1 fejl).
+
+**Gaten:** **785/785** på Node 26.7.0 via `tools/run-tests.mjs` (778 + 7);
+`matrix --check` exit 0; audit 0/0; `node --check` ren; `git diff --check` rent.
+Merge `57e18b3` (commit `a7095ee`, branch `ceo/license-expiry`).
+
+**Deploy-note ikke nødvendig:** CLI-repo uden live-deploytarget. Ingen side blev
+ændret, så der er ingen trafik-baseline at skrive; målingen er i kommandoens
+output, ikke på en side.
+
+**To filer i `src/` rørt:** ingen. Én fil i `src/` (`license.js`), én testfil
+og den delte licens-stub.
+
+**Fejl i mine egne tests, fundet af gaten, to omgange:** `writeState` fik
+`{HOME, USERPROFILE}` hvor den ville have stien (første røde), og efter at have
+skiftet `readFileSync` ind i `node:fs`-importen havde jeg lavet to navne på den
+— `readState` brugte det gamle. Den tredje fejl var min egen påstand: jeg skrev
+at grænsen «hører til ingen af siderne», målte den, og fandt at den hører til
+`expires` — dagen er ikke om i det øjeblik den begynder. Testen siger nu det
+målte og måler begge sider af grænsen.
+
+**Åbent punkt, bevidst ikke taget nu:** det samme `lifetime: true` kunne give
+lifetime-kunden **ordet** `Lifetime` i stedet for bare fraværet af en dato.
+Det er fire lag (server → `activateLicense` → `cli.js` → `normalizeLicense`) for
+ét ord, og kontrakten (27/9) siger udtrykkeligt at klienten ikke behøver ændres:
+*«`valid: true` og `expires_at: null` betyder allerede "gyldig uden udløb"»* —
+så fraværet af en dato er den ærlige læsning, og intet i denne iteration låser
+en kunde ude. Se ❓ 19.
+
+## Status fra tidligere iteration (113, P1-98 — den gratis tier afviste den 4. URL ved at smide de 3 andre væk)
 
 **Målt først, nul kode ændret.** Køen var tømt, så målingen gik på den vej en ny
 gratisbruger går: at sætte værktøjet op. Rigtig CLI, rigtige lokale servere, tom
@@ -4137,10 +4237,33 @@ Den aktuelle gate-definition er registreret her:
 
 ## Prioriteret kø
 
-> **Køen er tom for målte kandidater** (iteration 113). De målte fund fra den
+> **Køen er tom for målte kandidater** (iteration 114). De målte fund fra den
 > iteration ligger i afsnittet ovenfor og i `❓ Til Mads`. Næste iteration skal
 > **måle først** og finde sin egen opgave — den metode der har fundet de sidste
-> 90 opgaver. Se `❓ Til Mads` for de konkrete, målbare kandidater.
+> 91 opgaver. Se `❓ Til Mads` for de konkrete, målbare kandidater.
+
+### P1-99 — FÆRDIG 2026-09-28 (`ceo/license-expiry`) — licensens udløbsdato lå i filen og i dokumentationen, og i intet output
+
+**Målt først, nul kode ændret.** Rigtig CLI, temp-HOME, rigtig licens-stub.
+`state.json` holdt `"expiresAt": "2027-09-26T00:00:00.000Z"` efter
+`deskuptime activate`; `deskuptime status` skrev pladstallet og **intet om
+datoen**, selv om `docs/license-lifecycle.md:93-94` lover at den viser den.
+
+**Årsagen:** `cli.js:590` har skrevet feltet ned siden P1-19 og
+`normalizeLicense` bevarer det, men ingen af de fire læsere af
+`describeLicense` nævner det. `test/seat.test.js:82` hedder *«the seat count and
+expiry survive activation instead of printing once»* og hævder kun pladstallet —
+en lås, der lovede begge dele og målte den ene.
+
+**Fix:** `licenseTermNote()` som ejers egen note i `describeLicense`, så
+`status` og `proGateMessage` ikke kan sige hinanden imod. `expires <dato>` /
+`term ended <dato> as reported at activation`, ingen status-demotion, ingen ord
+for en licens uden dato. 7 nye tests i `test/licenseterm.test.js` +
+`lifetime`-scenario i den delte licens-stub (ordet `lifetime` stod **ikke ét
+sted i `src/`** før det) → **785/785** (778 + 7); audit 0/0; `matrix --check` 0;
+`node --check`, `git diff --check` grønne. **Tre mutationer målt, alle døde**
+(4/3/1 fejl). `a7095ee`, merge `57e18b3`. Hverken exit-kode, matrix-række eller
+JSON-kontrakt er ændret; den eneste nye streng er den note `status` skriver.
 
 ### P1-98 — FÆRDIG 2026-09-28 (`ceo/partial-add`) — den gratis tier afviste den 4. URL ved at smide de 3 andre væk
 
@@ -7307,6 +7430,17 @@ for selv. Ingen gemt nøgle er omskrevet, ingen eksisterende adgangsd tilstand
 
 17. **⚠️ Min `~/.deskuptime/state.json` og `history.json` er væk, og det er min skyld — to gange.** P1-81 (iteration 97) fandt, at `tools/measure-e2e.mjs` skrev begge filer i den **rigtige** home i stedet for sin egen midlertidige, fordi den gav `runPass` en `home`-nøgle, mens kun `env` flytter filerne. Det skete kl. 05:01 den 28. september under min egen kørsel af bænken. **Så slettede min egen test dem kl. 05:05:** den første version af den nye `test/benchhome.test.js` tog `process.env.HOME` som sit "ambient"-mål og kaldte `rmSync` på det, og fordi jeg kørte mutationerne med `node --test` direkte i stedet for gaten, var det den rigtige home. Det er præcis den ulykke P1-58 blev bygget for at lukke, genindført i den iteration der lagde en lås på den. **Mappen `~/.deskuptime` er tom lige nu.** Filerne kan ikke genskabes herfra; licensnøgle og overvågningsliste skal genskabes med `deskuptime activate <key>` og `deskuptime watch <url>`, og `history.json` bygger sig selv op igen over de næste 30 døgn. **Jeg har ikke gjort det for dig** — det er din maskine og din licens, og du skal vide at den er væk, før du opdager det ved næste `deskuptime status`. Den endelige kode er sikker (testen bruger sin egen `tempHome`), og fejlen er rettet og låst med tre tests, inklusive den der *kører bænken under en observeret HOME* — men skaden kan ikke fortrykkes.
 
+19. **Skal en lifetime-kunde se ordet `Lifetime` i CLI'en?** Licensserveren
+    svarer `lifetime: true` på både `activate` og `validate` siden 27/9, men det
+    ord står **ikke ét sted i `src/`** — det kom først ind som et scenario i
+    test-stubben i P1-99, fordi det ikke var målt. CLI'en viser i dag en
+    lifetime-køb som `Pro license: active, … 1 of 3 machines in use when activated`
+    uden dato, hvilket er sandt og ikke kan modsiges. Kontrakten siger udtrykkeligt
+    at klienten ikke behøver ændres (`valid: true` + `expires_at: null`), så det
+    er **ikke en fejl** — det er fire lag (server → `activateLicense` → `cli.js` →
+    `normalizeLicense`) for ét ord, og hverken kvitteringsmailen eller
+    tak-siden har brug for det. Sig til hvis du vil have `Lifetime` i `status`; det
+    er den samme størrelse arbejde som P1-99.
 18. **Skal låset på ur-drift udvides til at finde *nye* filer med samme sygdom?** P1-94 lod målingen vise, at kun to af syv kandidater gik røde, og låste dem på navn — to mutationer døde på importen, ikke på adfærd. Låset kan altså ikke se en fil, der endnu ikke findes, med et fast ur i et state-fil, den kører en børneproces på. Jeg lod bevidst en regex-scanning ligge: den ville råbe om de tyve filer, der med vilje giver læser og skriver samme øjeblik, og P1-92 og P1-93 har begge skrevet den og kastet den væk efter måling. **Spørgsmålet er om det kan løses uden falske alarmer** — måske ved at køre hver testfil to gange med forskudt `TZ` frem for forskudt ur, fordi et ur-bundet ur kun fejler på *døgnkrydsninger*, ikke på urets stilling.
 
 1. Hvad er den endelige gratis/Pro-matrix? Skal desktoptray og lokale notifications være gratis, eller kun Pro? README, kode og mission peger i dag i forskellige retninger.
@@ -7356,6 +7490,19 @@ for selv. Ingen gemt nøgle er omskrevet, ingen eksisterende adgangsd tilstand
 
 ## Deploy-/release-noter
 
+- **Release-note P1-99:** `deskuptime status` fortæller nu **hvornår licensen
+  udløber**. Før stod `expires_at` i `state.json` siden P1-19 — og blev læst af
+  ingen, selv om `docs/license-lifecycle.md` sagde at `status` viste den. En
+  årskunde fandt først ud af det, da serveren begyndt at afvise nøglen, og så stod
+  der `the license server rejected this key`. Nu hænger datoen på den linje
+  brugeren kigger i hver dag: `Pro license: active, last verified 2026-09-28, 3 of
+  3 machines in use when activated, expires 2027-09-26`. **Mærket:** en licens
+  uden `expires_at` — en lifetime-køb — får **ingen** dato og intet nyt ord, for
+  `expires_at: null` betyder at der ikke er nogen udløbsdato, ikke at vi har mistet
+  den. En gemt dato, der ligger bag os, giver `term ended 2026-08-01 as reported at
+  activation` og **demoterer aldrig status**: serveren kan have fornyet licensen
+  uden at filen hørte det, og kun serveren må afgøre det. Sætningen før den nye
+  note, exit-koder, matrix-rækker og al JSON er uændrede.
 - **Ingen release-note til P1-81:** rettelsen rører kun et måleværktøj i `tools/`
   og en testfil. Ingen kundeflade, ingen status, exit-kode, matrix-række, JSON-felt
   eller claim er ændret, så intet i en opgradering flytter sig.
