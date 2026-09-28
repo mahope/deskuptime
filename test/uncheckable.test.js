@@ -60,12 +60,22 @@ function withState(t, urls, { pro = true } = {}) {
 }
 
 // One fixture server per test that needs real answers: 200 and 500 on loopback.
+// Three `up` servers, because the free-tier case needs three *distinct* healthy
+// sites to prove a fourth slot was freed.
 function fixtures(t) {
-  const up = createServer((req, res) => { res.writeHead(200, { 'content-type': 'text/html' }); res.end('<html><title>hej</title>hei</html>'); });
+  const page = (title) => (req, res) => { res.writeHead(200, { 'content-type': 'text/html' }); res.end(`<html><title>${title}</title>hei</html>`); };
+  const up = createServer(page('hej'));
+  const up2 = createServer(page('hej to'));
+  const up3 = createServer(page('hej tre'));
   const down = createServer((req, res) => { res.writeHead(500); res.end('nope'); });
-  t.after(() => { up.close(); down.close(); });
+  t.after(() => { up.close(); up2.close(); up3.close(); down.close(); });
   const listening = server => new Promise(resolve => server.listen(0, '127.0.0.1', () => resolve(server.address().port)));
-  return Promise.all([listening(up), listening(down)]).then(([a, b]) => ({ up: `http://127.0.0.1:${a}/`, down: `http://127.0.0.1:${b}/` }));
+  return Promise.all([listening(up), listening(up2), listening(up3), listening(down)]).then(([a, b, c, d]) => ({
+    up: `http://127.0.0.1:${a}/`,
+    up2: `http://127.0.0.1:${b}/`,
+    up3: `http://127.0.0.1:${c}/`,
+    down: `http://127.0.0.1:${d}/`,
+  }));
 }
 
 // ── The owner ──
@@ -179,13 +189,21 @@ test('a saved key that cannot be checked does not hold a free slot', async (t) =
   // The free tier has three slots. A key no pass can check used to take one of
   // them, and the only way to get it back was to hand-edit `state.json` — the
   // file that also holds the license key.
-  const state = { urls: { 'https://a.dk/': {}, 'https://b.dk/': {}, 'kunde.dk': {} } };
+  //
+  // The watched URL was `https://c.dk/` and the two saved ones `a.dk`/`b.dk` —
+  // all registered Danish domains. The test passed because the internet
+  // answered, and with the internet cut it exits 2, because the sites are gone
+  // rather than up. `tools/run-tests.mjs` now makes the public internet
+  // unreachable from the suite, which is how that was found — see
+  // `test/offlinegate.test.js`.
+  const { up, up2, up3 } = await fixtures(t);
+  const state = { urls: { [up]: {}, [up2]: {}, 'kunde.dk': {} } };
   assert.equal(monitoredCount(state), 2);
   const home = withState(t, state.urls, { pro: false });
-  const r = await run(['watch', 'https://c.dk/', '--once'], { env: home });
+  const r = await run(['watch', up3, '--once'], { env: home });
   assert.equal(r.code, 0, r.stderr);
   const saved = JSON.parse(readFileSync(join(home.HOME, '.deskuptime', 'state.json'), 'utf8'));
-  assert.ok(saved.urls['https://c.dk/'], 'the third slot is free again');
+  assert.ok(saved.urls[up3], 'the third slot is free again');
 });
 
 test('unwatch can remove a key that is not an address', { timeout: 30000 }, async (t) => {

@@ -33,13 +33,16 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { mkdtempSync, rmSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import tls from 'node:tls';
 
 import { runPass, WEBHOOK_EVENT_TYPES } from '../src/watch.js';
 import { readCertIdentity, readCertRotation, CERT_VERDICT } from '../src/status.js';
 import { checkSSL } from '../src/checkers/ssl.js';
+import { selfSignedFixture } from './helpers/certs.mjs';
 
 const SITE = 'https://kunde.dk/';
 const BASE = '2026-09-27T09:00:00.000Z';
@@ -55,6 +58,44 @@ function tempState(t) {
 
 function daysAgo(days) {
   return new Date(new Date(BASE).getTime() - days * 24 * 60 * 60 * 1000).toISOString();
+}
+
+function hasOpenssl() {
+  return spawnSync('openssl', ['version'], { encoding: 'utf8' }).status === 0;
+}
+
+/**
+ * A local TLS server serving a real, currently valid certificate, generated per
+ * run from `helpers/certs.mjs`.
+ *
+ * This test used to shake hands with `https://example.com`, and the gate's
+ * colour was then decided by the network rather than by the code: commit
+ * 606166c was green here and red on the runner with `read ECONNRESET` from a
+ * plan-only diff. The claim being tested is about a *certificate*, so the
+ * certificate is made here instead — same assertion, no public host.
+ *
+ * `toDays` is negative, which puts `notAfter` 30 days in the future: the
+ * certificate has to be one the checker would otherwise accept, or a future
+ * change to how it treats an expired certificate would fail this test for the
+ * wrong reason. Nothing is committed — the fixture is written to a temp
+ * directory and removed with it — so the "no fixture in the repo ever expires"
+ * guarantee the helper documents still holds.
+ */
+function localCertServer(t) {
+  const { key, cert } = selfSignedFixture(t, {
+    fromDays: 4000,
+    toDays: -30,
+    subject: '/O=DeskUptime Test CA/CN=127.0.0.1',
+    sans: 'IP:127.0.0.1',
+  });
+  const server = tls.createServer({ key, cert }, (socket) => socket.end('hi'));
+  return new Promise((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', () => resolve({
+      url: `https://127.0.0.1:${server.address().port}/`,
+      close: () => new Promise((done) => server.close(done)),
+    }));
+  });
 }
 
 /** A site that answers 200 with a certificate whose identity the test picks. */
@@ -142,9 +183,19 @@ test('alderen læses gennem passAge, så et ur ikke alderes til i dag', () => {
   assert.equal(ahead.ageDays, null, 'et fremtidigt stempel navner skævningen, alderen forsvinder');
 });
 
-test('målt på et rigtigt certifikat: checkSSL læser begge identitetsfelter', async () => {
-  const ssl = await checkSSL('https://example.com', { timeoutMs: 10_000 });
+test('målt på et rigtigt certifikat: checkSSL læser begge identitetsfelter', async (t) => {
+  if (!hasOpenssl()) {
+    t.skip('openssl is unavailable, cannot create a TLS fixture');
+    return;
+  }
+  const server = await localCertServer(t);
+  t.after(() => server.close());
+
+  const ssl = await checkSSL(server.url, { timeoutMs: 10_000 });
   assert.equal(ssl.error, undefined, `målingen skal nå et certifikat: ${ssl.error}`);
+  // The fixture is the whole reason this measurement is worth taking: a
+  // certificate the checker is willing to read, read through a real handshake.
+  assert.equal(ssl.isExpired, false, 'fixtures measure a live certificate, so an expiry change cannot fail this test by accident');
   const id = readCertIdentity(ssl);
   assert.match(id.serial, /^[0-9a-f]+$/, 'serienummeret er hex, skrevet af udstederen');
   assert.equal(id.fingerprint.length, 64, 'identitetshashet er SHA-256, ikke SHA-1');

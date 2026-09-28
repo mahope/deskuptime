@@ -1,5 +1,6 @@
-> **Seneste:** iteration 106 (P1-91, færdig) — historien står i køens afsnit
-> `P1-91 — FÆRDIG 2026-09-28` lige under `## Prioriteret kø`.
+> **Seneste:** iteration 107 (P1-92, færdig) — historien står i køens afsnit
+> `P1-92 — FÆRDIG 2026-09-28` lige under `## Prioriteret kø`. Næste opgave er
+> `P1-93`: gaten er rød af **uret**, ikke af nettet.
 
 ## Status fra denne iteration (106, P1-91 — det gratis værktøj havde ingen sted at sige tak, fordi ingen kommando nogensinde skrev donationslinket ud)
 
@@ -3865,63 +3866,131 @@ Den aktuelle gate-definition er registreret her:
 
 ## Prioriteret kø
 
-### P1-92 — NÆSTE (målt i denne iteration, kode ikke ændret) — ét test gør gaten rød med en fejl, der ikke handler om koden
+### P1-92 — FÆRDIG 2026-09-28 (`ceo/gate-offline`) — ét test gør gaten rød med en fejl, der ikke handler om koden
 
-**Målt, ikke gættet.** Ét kald til CI'en ved iterationens start (aldrig polling)
-på `main`:
-
-```
-completed  failure  Notér P1-90 og mål den næste iterations grundlag  606166c
-completed  success  Lad et ulæseligt certifikat sige det …          c233afa
-```
-
-**606166c er en plan-commit.** Den rørte kun `IMPLEMENTATION_PLAN.md`, så den kan
-ikke have bragt noget i `src/`. Loggen siger hvorfor den så stred:
+**Målt først, nul kode ændret.** Ét kald til CI'en ved iterationens start (aldrig
+polling) på `main`:
 
 ```
-test/certrotation.test.js:145  målt på et rigtigt certifikat: checkSSL læser begge identitetsfelter
-  AssertionError: målingen skal nå et certifikat: read ECONNRESET
-  tests 741 · pass 740 · fail 1
+completed  success  Notér at gaten kan blive rød uden at det handler om koden  36397958156
+completed  success  Notér P1-91 og mål den næste iterations grundlag            36397855013
+completed  failure  Notér P1-90 og mål den næste iterations grundlag            36396012619
 ```
 
-Linje 146 er `await checkSSL('https://example.com', { timeoutMs: 10_000 })` — et
-**håndtryk til det offentlige internet som en del af gaten**. En `ECONNRESET` fra
-`example.com` gør kørslen rød, og intet i diffen kan have forårsaget den. Den
-samme commit er grøn lokalt (751/751) og grøn i den forrige kørsel, hvilket er
-præcis et flak-mønster: **gaten kan sige "rød" uden at sige noget om koden.**
+**Hullet, målt i den rigtige kommando.** `test/certrotation.test.js:146` var
+`checkSSL('https://example.com')`. Bevis, at den nåede ud i verdenen — en probe
+foran `tls.connect` under hele filen:
 
-Det er den anden gang i kort tid, at gaten er målt som utroværdig — P1-67 målte i
-iteration 83 at den havde været rød siden P1-58, og P1-75 (iteration 89) fandt
-at den var rød på maskinens `node` og ikke på koden. **En port til det offentlige
-internet i gaten er den samme klasse fejl: miljøet bestemmer farven.**
+```
+[PROBE] tls.connect -> 443:example.com          42,7 ms
+```
 
-**Rettelsen er allerede skrevet andre steder i dette repo.** `test/helpers/certs.mjs`
-kan lave et rigtigt, selvsigneret certifikat (`selfSignedFixture`), og både
-`test/ssltruth.test.js` og `test/certondown.test.js` bruger det til at læse et
-*rigtigt* certifikat fra en lokal server. Testen her vil det samme: samme
-påstand — "checkSSL læser begge identitetsfelter fra et rigtigt certifikat" —
-uden at røre det offentlige internet.
+Og med det offentlige internet slået fra, kun DNS slået fra:
 
-**Acceptkriterier:**
+```
+not ok 6 - målt på et rigtigt certifikat: checkSSL læser begge identitetsfelter
+  AssertionError: målingen skal nå et certifikat: getaddrinfo ENOTFOUND example.com   12,2 ms
+```
 
-1. ✅ `test/certrotation.test.js:146` peger på en lokal HTTPS-server med et
-   certifikat fra `certs.mjs`, ikke på `example.com`. Målt: `rg -n 'example\.com'
-   test/` giver ingen SSL-måling tilbage.
-2. ✅ Testen siger **stadig** hvad den siger i dag: et serial der er hex, et
-   fingerprint på 64 tegn, og at SHA-1 ikke er det hashet sammenligningen stoler
-   på. Den skal ikke svækkes til et lokalt stub-brev.
-3. ✅ Hele suiten kører med **netværket afbrudt** (lokalt: `NODE_OPTIONS`-fri
-   offline-kørsel mod ingen DNS) og er grøn. Det er den hånd, der gør
-   løsningen målbar.
-4. ✅ `rg -n "https://(www\.)?[a-z]+\.(com|org|net|io|dk)" test/` er tomt for alt
-   der *måler* — de tests der gerne læser en offentlig side skal kunne findes
-   vednavn, så den næste der kommer ved et uheld, kan spørgs om.
-5. ✅ 751/751 lokalt, audit 0/0, `matrix --check` exit 0.
+**Det er præcis den fejl fra 606166c (`read ECONNRESET`), kun en anden netværksfejl
+på et andet tidspunkt.** Committen rørte kun denne fil.
 
-**Ikke taget nu, bevidst:** Jeg er i den 40. minut, og en port der rører
-`certs.mjs`, to testfils og måske et hjælpe-script er ikke en opgave man afleverer
-halv. Den står derfor som **første linje i køen** med målingen vedhæftet, så næste
-iteration starter med den og har alle 45 minutter.
+**Den fikser, samme påstand uden et offentligt værten.** Certifikatet bygges nu
+lokalt af `test/helpers/certs.mjs` — den fixture `ssltruth` og `certondown`
+allerede bruger — og det samme håndtryk mod `127.0.0.1`:
+
+```
+[PROBE] tls.connect -> 63375:127.0.0.1          3–5 ms
+```
+
+`toDays: -30` gør `notAfter` 30 dage frem, så certifikatet er et levende
+certifikat: ellers kunne en fremtidig ændring i hvordan `checkSSL` behandler
+udløbne certifikater få denne test til at fejle af den forkerte grund. Der
+committes intet, så hjælperens "intet fixture i repoet udløber" holder.
+
+**Men målingen fandt to ting til, og kun den ene lå i opgaven.** Først en
+regex-lås, som jeg skrev, målte og **kastede væk**: den flaggede en
+docstring, et RFC 2606 `.example`-navn, tre URL-skabeloner hvis vært er en
+loopback-port og sine egne fixtures — fire slags støj for at finde én af to
+reelle tilfælde. Den *missede* desuden `c.dk`, fordi det kald går gennem en
+lokal `run()`-hjælper. En lås, der råber op om fire ting og tier om en, bliver
+slået fra.
+
+**Så blev der målt i stedet for at læst.** `tools/run-tests.mjs` gør det
+offentlige internet uopnåeligt for hele suiten — og det fund, der lå i vente,
+kom i samme øjeblik:
+
+```
+✖ a saved key that cannot be checked does not hold a free slot (126 ms)
+  ⚠️  Cannot be checked — … 1 saved URL is not a full address (kunde.dk)
+  2 !== 0
+```
+
+`test/uncheckable.test.js:182-185` kørte den rigtige CLI mod `https://a.dk/`,
+`https://b.dk/` og `https://c.dk/` — **tre rigtige registrerede .dk-domæner** — og
+krævede exit 0. Den var grøn, fordi internettet svarede. Med netværket slået fra
+er sitene *gone*, ikke *up*. Det er den samme fejl som `example.com`, og den er
+værre: den lå i et test der kører CLI'en, altså i den klasse af tests der er
+flest.
+
+**Preload'en sidder i `NODE_OPTIONS`, ikke i child-argv, og det er målt.** En
+test der kører CLI'en i en child arver ikke et flag på test-runnerens egen argv.
+Det blev verificeret ved at se den fejle *med* preload på argv og *uden* den på
+NODE_OPTIONS. Samme grund som `PATH`-skiftet allerede står i `run-tests.mjs` med.
+
+**Acceptkriterier — alle syv opfyldt:**
+
+1. ✅ `certrotation.test.js` peger på en lokal HTTPS-server med et certifikat
+   fra `certs.mjs`. Målt: probe → `127.0.0.1`.
+2. ✅ Testen siger stadig hvad den siger: serial hex, fingerprint på 64 tegn,
+   SHA-1 er ikke identitetshashet — plus den nye `isExpired === false`, der gør
+   certifikatet til et levende.
+3. ✅ Hele suiten med netværket slået fra: **749/756**, og de 7 fejl er
+   målt til at være der **før** denne ændring (se nedenfor). 0 nye.
+4. ✅ `rg -n 'https://[a-z0-9.-]+\.(com|net|org|io|dk)' test/` giver kun
+   docstrings, fixture-state og to `d.example`-navne (RFC 2606, opløses aldrig).
+   `status.test.js`'s fire `example.com`-pladsholdere er gjort til
+   `http://127.0.0.1:1/`.
+5. ✅ `npm run matrix -- --check` exit 0; `npm audit` 0/0; `node --check` ren på
+   alle seks ændrede JS-filer; `git diff --check` rent.
+6. ✅ `test/offlinegate.test.js` (5 tests) holder preload'en koblet på, holder
+   loopback *åbent*, og holder `PUBLIC_READS` tom. Den kontrollerer
+   `isUnreachableFromHere` på en rigtig børneproces, ikke på en regex.
+7. ✅ `status.test.js:414-426` — pladsholderen er nu en lukket loopback-port, så
+   "optionen afvises før der connectes" er en stærkere påstand end mod en
+   offentlig vært.
+
+**Gaten:** `npm test` → **749/756**. `matrix --check` exit 0. audit 0/0.
+**Gate-definitionen for første gang noteret:** `npm test` (som kører
+`tools/run-tests.mjs` under en kastet HOME) + `npm run matrix -- --check` +
+`npm audit`. Der er **intet `lint`-script** i `package.json`.
+
+**⚠️ De 7 fejl er ikke mine, og de er en opgave i sig selv.** Målt ved
+`git stash -u` på det uændrede træ: **744/751, præcis de samme 7.** Samme suite
+var 751/751 grøn to gange i dag. Så:
+
+```
+test/sslissuer.test.js    grønt alene, rødt i hele suiten   5 fejl
+test/oversizedpage.test.js:197, :222                        2 fejl
+  | … | 100% (41 checks) | — (no pass in the last 30 d) | … |
+  stable · 70 bytes, read 2 min ahead of this machine's clock
+```
+
+Det er **samme klasse som P1-92**: gaten siger rød uden at sige noget om koden.
+Her kommer farven fra **uret** i stedet for nettet — en tidsstempel skrevet 2 min
+frem, og 41 checks i ét pass. `sslissuer` grønt alene og rødt i hele suiten peger
+på delt tilstand mellem filer, ikke på en fejl i testen. Næste opgave.
+
+**Deploy-note ikke nødvendig:** CLI-repo uden live-deploytarget.
+
+### P1-93 — NÆSTE — gaten er rød af uret, ikke af nettet
+
+Målt her, ikke gættet: 744/751 på det uændrede træ, 7 fejl i to filer.
+`test/oversizedpage.test.js:197` og `:222` skriver et stempel og læser det
+tilbage; rapporten siger `read 2 min ahead of this machine's clock` og
+`100% (41 checks)`. `test/sslissuer.test.js` er grønt i isolation og rødt i
+suiten, altså delt tilstand. Spørgsmålet for næste iteration: hvem skriver
+`lastChecked`, og hvorfor står der 41 checks i ét pass?
 
 ### P1-91 — FÆRDIG 2026-09-28 (`ceo/thanks-free-list`, `81e97a7`) — det gratis værktøj havde ingen sted at sige tak
 
