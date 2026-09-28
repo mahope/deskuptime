@@ -1,3 +1,80 @@
+## Status fra denne iteration (97, P1-81 — målebænken skrev i den rigtige `~/.deskuptime`, fordi den gav `runPass` en nøgle, intet læser)
+
+**Køen var tømt**, så dette er en målt research-iteration. Den begyndte med den
+konverteringsrejse, produktfasen prioriterer højest — installation → første
+kommando → gratisgrænse → køb — målt på en frisk temp-HOME med rigtig CLI:
+`--help`, `status`, den fjerde URL, `--interval 45`, `--webhook` uden licens,
+`report` uden licens og `--interval 30`. **Alle syv købsveje pegede på
+kontraktens Payment Link, og ingen af dem svarede i stilhed** — konverteringen
+er i orden, ingen rettelse fundet dér.
+
+**Målingen gik så videre til de to instrumenter denne iteration selv bruger**,
+og den første af dem var sandt nok ikke sand. `tools/measure-e2e.mjs` — lagt til
+i iteration 96 som bænken alle fire flader kan læses på én skærm — skrev
+**begge** sine filer i den rigtige `~/.deskuptime` af den der kørte den, og
+påvirkede den. Målt uden at røre min egen fil igen: rigtig `runPass` over en
+rigtig lokal server med `process.env.HOME` rettet mod en midlertidig stand-in:
+
+```
+opts.home (PASSED)           state.json    —
+opts.home (PASSED)           history.json  —
+process.env.HOME (AMBIENT)   state.json    WRITTEN
+process.env.HOME (AMBIENT)   history.json  WRITTEN
+```
+
+**Årsagen er at `home` er en nøgle, intet læser.** `getStateFile()` og
+`getHistoryFile()` læser begge `env.HOME`/`env.USERPROFILE` *ud af det
+options-objekt de får* — så `env` flytter begge filer, og kun `env` gør det.
+`runPass(state, { home, … })` giver dem et objekt uden `env`, og de falder
+tilbage på `process.env`. Det er P1-58's ulykke, genindført af det værktøj der
+blev lavet for at forebygge den, og den ramte en udvikler i stedet for en test.
+
+**Den gjorde også bænken til en løgn.** Bænken skrev state og historie i det
+ene hjørne og læste fladerne i sit eget tomme temp-HOME, så rapporten skrev
+`— (last check missing from the history file)` om et site den lige havde
+registreret **tre** passer for. Et instrument der ikke kan se sin egen måling
+er værre end intet instrument: de sidste to iterationers fund blev læst af den.
+
+**Rettelsen er at bruge den option begge ejere allerede forstår** — `env` i stedet
+for `home` — plus en kommentar der siger hvorfor, fordi fejlen ligner en
+funktion der virker. **Målt efter:** bænken skriver intet i den HOME den
+arvende, og `Uptime (window)` stiger `1 recorded d, 1 check` → `2 checks` →
+`3 checks` gennem de tre passer i stedet for at stå på `—`.
+
+**Tre nye tests i `test/benchhome.test.js`** → **697/697** (694 + 3); audit 0/0;
+`matrix --check` exit 0; `node --check` ren; `git diff --check` rent. Testene er
+adfærdslåse, ikke kildefscan: den første giver `runPass` en temp-HOME på begge
+måder og kræver at kun `env` flytter filerne, den anden **kører den rigtige
+bænk under en observeret HOME** og kræver at den arvende HOME forbliver tom,
+den tredje er den strukturelle regel på begge bænke.
+
+**Målingen af låsen viste at min første lås ikke holdt, og det var den vigtigste
+find i denne iteration.** Første mutationrunde: M1/M2 (fejlen i bænken) døde,
+men **M6 — scanreglen slettet *og* fejlen tilbage i bænken — gav 2/2 grønne**.
+Adfærdstesten testede `runPass`, ikke bænken der kalder den, så den var blind for
+præcis den fejl den skulle fange. Anden omgang efter at have kørt bænken som et
+levendeBarn: **syv mutationer målt, seks døde** (1/2/1/2/2/1 fejl) og M7 — kun
+scanen uden fejlen i koden — korrekt grøn. Mutationerne blev hver gang difset mod
+originalen, fordi fem i en tidligere iteration vished ud som "0 fejl".
+
+**En fejl i min egen test, fundet af gaten:** den første version observerede
+`process.env.HOME` — suitens *fælles* HOME, som `node --test` kører filer i
+parallel på. Den fejlede i hele suiten og ikke enkeltstående, af en grund der
+havde intet med fundet at gøre. Testen får nu sin egen HOME og flytter
+`process.env` for sin varighed, hvilket også er den ærtere betydning af "den HOME
+et pass arver".
+
+**Skade på Mads' maskine, målt ikke formodet:** `~/.deskuptime/state.json` (948
+bytes) og `history.json` (1 870 bytes) blev skrevet kl. 05:01 af
+`node tools/measure-e2e.mjs` under min kørsel af bænken. Filerne er atomisk
+skrevet og kan ikke være halvskrevet, men de indeholder **127.0.0.1-fixtures fra
+bænken blandt virkelige sites**, og bænken overskrev dem igen efter hvert pass.
+Se `❓ Til Mads` — det er hans fil, og han bør vide det.
+
+**Næste:** ❓ 1–3, ❓ 14 og ❓ 16 afventer Mads. Nye opgaver skal stadig findes ved
+måling. Denne iteration fandt ingen fejl i købsvejen — den er målt i de syv
+led og alle svarer samlet. Instrumenterne er nu låste, så næste måling kan
+tages på dem.
 ## Status fra denne iteration (96, P1-80 — kundenapporten og begge lister sagde "side title: B" om en ændring fra "A" til "B", fordi "A" var målt og kasseret)
 
 **Målt først, nul kode ændret.** Rigtig `runPass` over to rigtige lokale servere, rigtig
@@ -5589,6 +5666,8 @@ for selv. Ingen gemt nøgle er omskrevet, ingen eksisterende adgangsd tilstand
 
 0. **Skal `src/features.js` også være source of truth for siten og det private desktoprepo?** Matrixen er nu én fil i dette repo, og den private desktop-app plus `deskuptime.com` har hver deres egen matrix. Hvis de skal følge med automatisk, er vejen et lille public npm-pakke (`@mahope/product-matrix`) som alle tre repoer importerer. Uden beslutning fortsætter de to andre overflader med at være håndskrevne — og det er præcis den drift, del A lukker her.
 
+17. **⚠️ Min `~/.deskuptime/state.json` og `history.json` blev skrevet af et måleværktøj i går.** P1-81 (iteration 97) fandt, at `tools/measure-e2e.mjs` skrev begge filer i den **rigtige** home i stedet for sin egen midlertidige — fordi den gav `runPass` en `home`-nøgle, mens kun `env` flytter filerne. Det skete kl. 05:01 den 28. september under min egen kørsel af bænken, efter at P1-58 netop havde slået denne ulykke ned i testene. Bænken overskrev filerne efter hvert pass, så de kan indeholde `http://127.0.0.1:NNNNN/`-fixtures fra den kørsel blandt dine rigtige sites, og din licensnøgle ligger i samme `state.json`. **Filerne er atomisk skrevne, så de kan ikke være halvskrevne** — men de er blandet. **Det er din fil; jeg har ikke rørt den.** Rensning: `deskuptime unwatch 'http://127.0.0.1:53978/'` (og de andre 127.0.0.1-adresser du ser i `deskuptime status`), eller `mv ~/.deskuptime/state.json ~/.deskuptime/state.json.bak` for en ren start. Historikken kan slettes med `rm ~/.deskuptime/history.json` — den er kun tællere pr. døgn pr. URL, så den bygges igen på ny. Fejlen er rettet og låst med tre tests, så den ikke kan gentage sig.
+
 1. Hvad er den endelige gratis/Pro-matrix? Skal desktoptray og lokale notifications være gratis, eller kun Pro? README, kode og mission peger i dag i forskellige retninger.
 2. Skal Pro email og Slack/Discord/Teams implementeres nu, eller skal de forblive uden for matrixen, indtil de er bygget? P0-5 har fjernet dem fra alle overflader i dette repo og noteret dem som ikke-implementeret; **live-siten `deskuptime.com` hævder stadig email for Desktop Pro**, og rettelsen ligger uden for dette repo (P0-12 er `BLOCKED`). Svar på spørgsmålet afgør både næste CLI-opgave og sitens claim.
 3. Hvilken rapport/status-side skal være første bureau-feature, og hvilke data må en kunde-rapport indeholde?
@@ -5636,6 +5715,17 @@ for selv. Ingen gemt nøgle er omskrevet, ingen eksisterende adgangsd tilstand
 
 ## Deploy-/release-noter
 
+- **Ingen release-note til P1-81:** rettelsen rører kun et måleværktøj i `tools/`
+  og en testfil. Ingen kundeflade, ingen status, exit-kode, matrix-række, JSON-felt
+  eller claim er ændret, så intet i en opgradering flytter sig. Den skade den
+  gjorde — skrivning i den rigtige `~/.deskuptime` — står i `❓ 17`.
+- **Målebænkene er låste, så de må igen bruges som kilde.** `tools/measure-e2e.mjs`
+  og `tools/measure-surfaces.mjs` er de to bænke de seneste iterationers fund kom
+  fra. Efter P1-81 er de dækket af `test/benchhome.test.js`, som **kører den
+  rigtige bænk under en observeret HOME** og kræver at den arvende HOME forbliver
+  tom. Den lås er lagt til efter at en mutation viste, at en kildefscan alene
+  gav 2/2 grønne tests på den ødelagte bænk — se afsnittet øverst.
+
 - Dette offentlige repo er en npm-/GitHub-CLI og har ingen live-deploytarget. `STATUS.md` noterer 24/9, at `deskuptime.com` ikke er købt; derfor oprettes ingen `VERIFICÉR DEPLOY`-note for CLI-merges.
 - **Release-note P0-9b:** curl-stien er rettet, men den nye verifikationsadfærd kræver en release med sidecar for at være fuldt på. Næste `v*-cli`-tag gør det automatisk (❓ 10). Ingen fungerende curl-installation går i stykker ved merge af dette commit: den gamle kode installerede 0.1.4, den nye installerer 0.2.5 og advarer om den manglende sidecar i stedet for at fejle.
 - De tidligere noter for researchplan `812f469` og desktop `f0d4fa7` var fejlagtige og er fjernet med denne planrevision.
@@ -5648,6 +5738,8 @@ for selv. Ingen gemt nøgle er omskrevet, ingen eksisterende adgangsd tilstand
 - **Iteration 63 (P1-47, målt + fix):** ❓ 1–3 ubesvarede, så målingen gik på den betalte kanals *hyppighed* — den eneste del af alarmeringen ingen måling dækkede. Rigtig CLI, temp-HOME, rigtig lokal side med et token pr. forespørgsel: 3 pass → 3 `content changed`-alarmer, ingen af dem handlingsværdige; hver er en POST + en notifikation, så 2 880/dag ved 30 s. **Fix:** `readContentChangeAlert()` i `src/status.js` (1 time, pr. site, ur-baglæns undertrykker intet, intet kasseres) + brug i `runPass`; matrix-claim og §2 opdateret, så påstanden matcher leveringen. 10 nye tests → **431/431**; audit 0/0; `node --check`, `matrix --check`, `git diff --check` grønne på Node 26.7.0. Én ældre test opdateret (lagt krav på den gamle adfærd) og femte pass efter en time tilføjet, så dens eget formål er stærkere. To fejl i mine egne tests fundet (stub sendte `changed` på baseline; tabt `contentHash`-argument gjorde én test grøn af forkert grund). **Ingen mutationstest** — over tidsbudgeten. `ceo/content-alert-flood`, `54e8f54`.
 
 ## Iterationslog
+
+- **Iteration 97 (P1-81, målt + fix):** køen var tømt, så research-iteration. Målingen startede på den konverteringsrejse produktfasen prioriterer — installation → første kommando → gratisgrænse → køb — med rigtig CLI på frisk temp-HOME: `--help`, `status`, fjerde URL, `--interval 45`, `--webhook` uden licens, `report` uden licens, `--interval 30`. **Alle syv pegede på kontraktens Payment Link, ingen svarede i stilhed; ingen rettelse fundet i købsvejen.** Målingen gik så videre til de to instrumenter denne iteration bruger, og `tools/measure-e2e.mjs` viste sig at skrive **begge** filer i den rigtige `~/.deskuptime` af den der kørte den: `getStateFile()`/`getHistoryFile()` læser `env` ud af options, `runPass(state, { home })` giver dem intet `env`, og de falder tilbage på `process.env`. Målt med rigtig `runPass` over rigtig lokal server og `process.env.HOME` rettet mod en stand-in: `opts.home` efterlod temp-HOME tom og fyldte den reelle. Samme fejl gjorde bænken til en løgn — rapporten skrev `— (last check missing from the history file)` om et site den lige havde lavet 3 passer for. **Fix:** `env` i stedet for `home` + kommentar der siger hvorfor. **Målt efter:** bænken skriver intet i den arvende HOME, og `Uptime (window)` stiger 1 → 2 → 3 checks gennem passerne. 3 nye tests i `test/benchhome.test.js` → **697/697** (694 + 3); audit 0/0; `matrix --check` 0; `node --check`, `git diff --check` grønne. **Målingen af låsen var det vigtigste fund:** første runde døde M1/M2, men **M6 (scan slettet + fejl tilbage) gav 2/2 grønne** — adfærdstesten testede `runPass`, ikke bænken der kalder den. Anden runde kører bænken som levende barn under en observeret HOME: **syv mutationer, seks døde** (1/2/1/2/2/1), M7 korrekt grøn. Hver mutation difset mod originalen. **Én fejl i min egen test fundet af gaten:** den observerede suitens *fælles* `process.env.HOME`, som `node --test` kører parallelt på, og fejlede kun i hele suiten; nu får testen sin egen HOME. **Skade på Mads' filer målt:** `~/.deskuptime/state.json` og `history.json` skrevet kl. 05:01 af min kørsel af bænken, med 127.0.0.1-fixtures blandt virkelige sites. `ceo/bench-home-isolation`. **Ingen produktkode, ingen status, exit-kode, matrix-række eller claim ændret.**
 
 - **Iteration 96 (P1-80, målt + fix):** ❓ 1–3, ❓ 14 og ❓ 16 stadig ubesvarede, så målingen gik på den **ændrede sides titel**. Rigtig `runPass` over to rigtige lokale servere, rigtig state-fil, rigtig rapport og rigtig modtager på den betalte kanal, Pro fra den gemte licens (intet kald til mahope.tools): kanalen skrev `page title: "Acme — home" → "Acme — shop" (same size, 95 bytes)`, og `status`, `watch --status` og kundenapporten skrev alle tre `page title: "Acme — shop"` — den ensidige form, som efter ordet *changed* læses som en beskrivelse af siden i dag. Titlen var målt to steder og gemt ét: `readContentChange` sammenlignede `entry.lastTitle` med den nye og citerede begge, men returnerede kun `titleChanged`; samme pass skrev `lastTitle = den nye`, og den gamle var væk. En alarm er engang, de tre lister er et genlæst arkiv. Fix: `readContentChange` giver `previousTitle`/`title` tilbage fra det kald der målte dem, `runPass` skriver `contentTitleBefore` hvor ændringen måles (samme form som `certIssuerBefore`, P1-64, og `contentReadAt`, P1-78) — **og rydder den på samme betingelse**, fordi parret tilhører en *ændring* og ikke siden: en titel der flytter sig uden byte-ændring, eller en ændring uden titelskift, ville ellers arve en gammel pil. `delete` ikke `= null`. Efter: alle fire flader siger præcis den sætning kanalen sendte; en state-fil skrevet før rettelsen giver den ensidige sætning uændret. Parret sammenlignes gennem `safeText`, så to titler der kun adskiller sig ved en escape eller et nul-tegn ikke giver en pil der peger på sig selv (P1-70 arvet). Additivt `contentTitleBefore` i `--json`. 11 nye tests i `test/titlepair.test.js` → **694/694** (683 + 11); audit 0/0; `matrix --check` 0; `node --check`, `git diff --check` grønne. **Syv mutationer målt, seks døde** (6/1/1/4/2/1 fejl); den syvende (`before === after` før `safeText`) **overlever som ækvivalent** — to ens strenge printer altid ens. Hver mutation blev difset mod originalen, fordi fem i en tidligere iteration vished ud som "0 fejl". **Tre eksisterende låse opdateret, ikke slækket** — de låste den ensidige sætning, som er præcis denne fejl: de to rejse-tests i `contentchange.test.js` kræver nu `page title: "Side A" → "Free iPhone!!"` på den betalte linje og på begge gratis lister, og `status.test.js`'s `deepEqual` på ejeren får de to nye felter. Låsen på "kun ejeren skriver sætningen" (4 forekomster) er urørt. **To fejl i mine egne tests fundet af gaten:** `pageCheck` havde en tæller inde i hjælperen, så et nyt kald pr. `runPass` genstartede den og gjorde næste pass til en baseline (testen påstod en ændring den aldrig frembragte); og en alder-påstand regnede fra `BASE` mens rapporten fik `new Date()`. To målebænke lagt til: `tools/measure-e2e.mjs` (to rigtige servere, rigtig modtager, alle fire flader) og `tools/measure-surfaces.mjs` (otte håndskrevede tilstande) — de kører under temp-HOME og påstår intet. `ceo/content-title-pair`. **Ingen status, exit-kode, uptime-tal, Content-celle eller alarm flytter sig.** **Næste:** ❓ 1–3, ❓ 14, ❓ 16; ellers en målt opgave.
 

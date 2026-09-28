@@ -77,7 +77,7 @@ const webhook = `http://127.0.0.1:${hookPort}/hook`;
 
 // ── The machine ──────────────────────────────────────────────────────────────
 
-const { home, dir } = tempHome(null, 'deskuptime-e2e-');
+const { home, options: env, dir } = tempHome(null, 'deskuptime-e2e-');
 mkdirSync(dir, { recursive: true });
 const state = {
   version: 1,
@@ -94,7 +94,15 @@ const writeState = () => writeFileSync(join(dir, 'state.json'), JSON.stringify(s
 writeState();
 
 async function pass(label) {
-  const result = await runPass(state, { home, now: new Date(), check: checkUrl, returnResults: true });
+  // `env`, not `home`. getStateFile() and getHistoryFile() both read
+  // `env.HOME`/`env.USERPROFILE` out of the options they are handed, and a
+  // `home` key is read by nothing — so a pass built on it wrote both files into
+  // the real `~/.deskuptime` of whoever ran the bench, while the surfaces below
+  // read the empty temp HOME. Measured 2026-09-28: `home` left the throwaway
+  // HOME empty and filled the real one; `env` does the opposite. The same
+  // mistake made the report print `— (last check missing from the history
+  // file)` about a site the pass had just recorded three times.
+  const result = await runPass(state, { env, now: new Date(), check: checkUrl, returnResults: true });
   writeState();
   console.log(`\n===== pass: ${label} =====`);
   for (const event of result.events) console.log(`  event  ${event.type}: ${event.message}`);
