@@ -45,6 +45,12 @@ npx @mahope/deskuptime check https://yoursite.com --json | jq '.[0].sslDaysRemai
 # Budget the whole check — request, TLS handshake and page read (default 15s)
 npx @mahope/deskuptime check https://yoursite.com --timeout 30000
 
+# Security-header scan as JSON — pipe it into your own tooling
+npx @mahope/deskuptime headers https://yoursite.com --json | jq '.security'
+
+# `headers --timeout` gives up on a single slow response (per response, not per call)
+npx @mahope/deskuptime headers https://yoursite.com --timeout 5000
+
 # Monitor URLs in the background — alerts on UP/DOWN/SSL/content changes (free, up to 3 URLs)
 npx @mahope/deskuptime watch https://yoursite.com --interval 300
 

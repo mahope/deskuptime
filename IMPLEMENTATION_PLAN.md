@@ -1,7 +1,78 @@
-> **Seneste:** iteration 122 (P1-107, færdig) — historien står i køens afsnit
-> `P1-107 — FÆRDIG 2026-09-29` lige under `## Prioriteret kø`.
+> **Seneste:** iteration 123 (P1-108, færdig) — historien står i køens afsnit
+> `P1-108 — FÆRDIG 2026-09-29` lige under `## Prioriteret kø`.
 
-## Status fra denne iteration (122, P1-107 — README's copy-paste-recipe pegede på et tag, der ikke findes)
+## Status fra denne iteration (123, P1-108 — `headers` tog to flag i brug og nævnte dem nul steder i `--help`)
+
+**Målt først, nul kode ændret.** Køen var tømt. Målingen gik på den sidste
+kanundeflade, der ikke var målt endnu: **hvilke flag parseren accepterer, og hvor
+står de skrevet?** Svar på den er det samme som overalt i repoet — spørg det
+lokale, kørende CLI, ikke en streng.
+
+**Den fandt `headers`.** Kommandoen accepterer `--json` og `--timeout`, begge
+fungerer, og **begge stod i nul af de tre flader en kunde læser.** Målt med rigtig
+CLI mod en rigtig lokal løbeserver:
+
+```
+$ deskuptime headers http://127.0.0.1:60229/ --json
+{ "finalUrl": …, "security": { "strict-transport-security": null, … } }    exit 0
+$ deskuptime headers http://127.0.0.1:60229/ --timeout 2000   (mod en vært der aldrig svarer)
+⚠️  Error: Request timed out                                                   exit 2
+$ deskuptime --help | grep headers
+  deskuptime headers <url>      Redirect chain, HTTPS enforcement + security headers
+```
+
+Det er den **ene** kommando i CLI'et med den egenskab. Alle 13 accepterede flag
+blev målt, ét for ét, og `check`, `watch` og `report` har dem alle i `--help`:
+
+```
+check    --json  --timeout        → nævnt begge
+headers  --json  --timeout        → nævnt INGEN   ← afvigelsen
+watch    --once --status --interval --webhook --activate → nævnt alle fem
+report   --json --title --days    → nævnt alle tre
+```
+
+**Hvorfor det betaler sig.** Matrixen i README siger `JSON output (--json) for
+scripts and CI`, og dens første række siger `` `check` and `headers` on any
+number of URLs `` — så **README lovede JSON-output for `headers` uden at nogen
+flade viste, hvordan man fik det.** Et bureau, der vil pipe sikkerhedsheadere ind
+i sin egen scanner — præcis den opgave kundenapporten er bygget til — måtte
+finde flaget i kilden. Og `--timeout` er flaget, der holder én død vært fra at
+brænde en hel scanning af.
+
+**Den anden ejer fandt målingen også.** `headers`' egen fejl-linje sagde
+`Usage: deskuptime headers <url> [--json]` — altså vidste den om `--json` mens
+`--help` vidste om ingenting, og ingen af dem nævnte `--timeout`. To steder
+skrev den samme sandhed og var uenige; `--help` var den mindste.
+
+**Rettelsen er tre linjer + to eksempler,** og låsen er *adfærd*, ikke en
+håndskreven liste — en liste ville kun bevise at den er enig med sig selv.
+`test/helpflags.test.js` **kører** hvert flag gennem den rigtige CLI og kræver
+to ting: kommandoen må ikke svare `Unknown option`, **og** `--help` skal nævne
+det samme flag på *den kommandos* linje. Et flag der holder op at virke dør i
+første halvdel; et flag der virker men er udokumenteret dør i anden. En tredje
+test sammenligner kommandoens egen `Usage:`-linje med `--help`'s, så de to ejere
+ikke kan glide fra hinanden igen. → **835/835** (832 + 3); audit 0/0;
+`matrix --check` tavs; `node --check` og `git diff --check` grønne. **Fire
+mutationer målt, alle fire døde** (2 / 2 / 2 / 3 fejl): `--json` fjernet fra
+hjælpen, `--timeout` fjernet fra hjælpen, fejl-linjen gjort til `[--json]` igen,
+og koden sat til at afvise `--json` igen.
+
+**Målt for at kunne skrive det rigtigt:** `headers --timeout` er **pr. svar**, ikke
+pr. kald. Ti hop à 700 ms gav 7,8 s væg med `--timeout 2000` — uændret mod
+kaldet uden flag — så check's formulering "budgets the whole check" ville været
+en ny, forkert påstand. Begge eksempler siger derfor "per response".
+
+**Én fejl i min egen måling, noteret:** mutationernes oprydning
+(`git checkout src/cli.js`) rullede også *rettelsen* tilbage, fordi den lå i samme
+fil som mutationerne. Gaten fangede det med det samme (835 → 833 ville have
+svagt), låsen blev genanvendt, og de tre linjer lagt på igen. Branchen er
+committet *før* mutationerne næste gang.
+
+**Ingen deploy-note:** CLI-repo uden live-deploytarget, og ingen side blev
+ændret — `deskuptime.com` ligger i et andet repo (P0-12 `BLOCKED`). Baseline for
+adoption uændret: npm 16 downloads/uge, ★0, Plausible `/` 3 besøgende/28 d.
+
+## Status fra tidligere iteration (122, P1-107 — README's copy-paste-recipe pegede på et tag, der ikke findes)
 
 **Målt først, nul kode ændret.** Køen var tømt, så målingen gik på den konkrete
 spørgsmål ❓ 16 stillede til sidst: *"hvilke andre byggede veje står i ingen
@@ -4929,9 +5000,36 @@ Den aktuelle gate-definition er registreret her:
 
 ## Prioriteret kø
 
-> **Køen er tom for målte kandidater** (iteration 122). Næste iteration skal
+> **Køen er tom for målte kandidater** (iteration 123). Næste iteration skal
 > **måle først** og finde sin egen opgave. Se `❓ Til Mads` for de konkrete
 > kandidater. ❓ 21 er nu besvaret i kode (P1-105) og lukket.
+
+### P1-108 — FÆRDIG 2026-09-29 (`ceo/headers-help-flags`) — `headers` tog to flag i brug og nævnte dem nul steder i `--help`
+
+**Målt først, nul kode ændret.** Se afsnittet øverst. Kort fortalt: `headers`
+accepterer `--json` og `--timeout`, begge virker målt mod en rigtig løbeserver,
+og ingen af dem stod i `--help`, i README eller i docs. Det er den eneste
+kommando i CLI'et, hvor de 13 accepterede flag ikke alle er dokumenterede — målt
+ét for ét på tværs af `check`/`headers`/`watch`/`report`. Matrixen lovede dog
+allerede `JSON output (--json) for scripts and CI` for netop disse to kommandoer,
+så README lovede noget ingen flade viste, hvordan man fik.
+
+**Rettelse:** to flag i `headers`' USAGE-linje, `--timeout` i kommandoens egen
+`Usage:`-linje (den anden ejer, som vidste om `--json` mens `--help` vidste om
+ingenting), to eksempler og to linjer i README. Ny `test/helpflags.test.js`
+(3 tests) kører hvert flag gennem den rigtige CLI og kræver både at kommandoen
+accepterer det **og** at `--help` nævner det på den kommandos linje; en tredje
+test sammenligner de to ejere. → **835/835** (832 + 3); audit 0/0;
+`matrix --check` tavs. **Fire mutationer målt, alle fire døde** (2/2/2/3).
+
+**Målt for at kunne skrive det rigtigt:** `headers --timeout` er **pr. svar**,
+ikke pr. kald (ti hop à 700 ms = 7,8 s væg med `--timeout 2000`), så check's
+"budgets the whole check" er bevidst ikke genbrugt.
+
+**Ny låsform, der kan bruges andre steder:** et flag kan låses *adfærdsmæssigt* —
+kør det gennem den rigtige parser og kræv at kundens flade navngiver det. Det
+fanger både en kodeændring der glemmer at dokumentere **og** en dokumentation
+der lyver om koden, hvilket en håndskreven flagliste ikke kan.
 
 ### P1-107 — FÆRDIG 2026-09-29 (`ceo/action-ref`) — README's copy-paste-recipe pegede på et tag, der ikke findes
 

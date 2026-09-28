@@ -45,7 +45,7 @@ function showHelp() {
 
 USAGE:
   deskuptime check <urls...> [--json] [--timeout ms]  Check one or more URLs (--timeout budgets the whole check)
-  deskuptime headers <url>      Redirect chain, HTTPS enforcement + security headers
+  deskuptime headers <url> [--json] [--timeout ms]  Redirect chain, HTTPS enforcement + security headers
   deskuptime watch <url> [--interval 300] [--webhook URL] [--activate <key>]  Monitor in background (free: up to ${FREE.urlLimit} URLs)
   deskuptime watch <url> --once                      Run one monitoring pass and exit
   deskuptime unwatch <url> [url2 ...]  Stop monitoring URLs and free the slot
@@ -60,6 +60,8 @@ USAGE:
 EXAMPLES:
   deskuptime check https://example.com
   deskuptime check https://site1.com https://site2.com
+  deskuptime headers https://yoursite.com --json | jq '.security'   # same scan as JSON, for scripts and CI
+  deskuptime headers https://yoursite.com --timeout 5000            # give up on one slow response after 5 s (per response)
   deskuptime watch https://mystore.com --interval 300
   deskuptime watch https://mystore.com --activate <license-key>   # just paid: unlock Pro and start monitoring in one command
   deskuptime report --title "Acme — uptime September" > acme-september.md
@@ -385,7 +387,7 @@ if (command === 'headers') {
   const url = args[1];
   if (!url) {
     console.error('❌ Error: a URL is required');
-    console.error('Usage: deskuptime headers <url> [--json]');
+    console.error('Usage: deskuptime headers <url> [--json] [--timeout ms]');
     process.exit(1);
   }
   const invalidUrls = invalidHttpUrls([url]);
