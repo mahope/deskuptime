@@ -1,8 +1,104 @@
-> **Seneste:** iteration 118 (P1-103, færdig) — historien står i køens afsnit
-> `P1-103 — FÆRDIG 2026-09-28` lige under `## Prioriteret kø`. Køen er igen tom
+> **Seneste:** iteration 119 (P1-104, færdig) — historien står i køens afsnit
+> `P1-104 — FÆRDIG 2026-09-28` lige under `## Prioriteret kø`. Køen er igen tom
 > for målte kandidater; de målte fund er under `## ❓ Til Mads`.
 
-## Status fra denne iteration (118, P1-103 — en ændring hvis titel ikke flyttede sig blev meldt som en der gjorde)
+## Status fra denne iteration (119, P1-104 — fire flader sagde "aldrig tjekket" om et site de havde tjekket 50 gange)
+
+**Målt først, nul kode ændret.** Køen var tømt, så målingen gik på den ene fælde
+❓ 22 havde peget på, men som ingen måling endnu havde fulgt: et fravær der
+dækker to forskellige fakta. Rigtig CLI, rigtig løbe, rigtig temp-HOME. Ét site,
+tjekket af en rigtig `watch --once` — og så fjernet det **ene** felt, der kan
+forsvinde for sig selv:
+
+```
+$ deskuptime watch http://127.0.0.1:51234 --once   ← 1 rigtigt pass
+  … så blev `lastChecked` slettet fra state-filen, resten urørt …
+$ deskuptime status
+  · http://127.0.0.1:51234/ (200) — SSL 89d — not checked yet      ← fandt den
+$ deskuptime watch --status
+  ⚠️  Never checked: no pass has ever measured them: …              ← fandt den
+$ deskuptime report
+  | http://127.0.0.1:51234/ | not checked yet | 100% (50 checks) | … |   ← rækken modsiger sig selv
+  **1 site(s) · 1 up · 0 down · 1 not checked · 50 checks · 0 failed**     ← i to spalter på én gang
+```
+
+**Fire flader, én påstand om fortiden, to af dem falske.** Rækken i det dokument
+et bureau sender videre til kunden siger `not checked yet` og `100% (50 checks)`
+i samme linje, og resumelinjen tæller sitet i `up` **og** `not checked` — mens
+dens egen fodnote siger, at linjen er en *partitionering*, hvor hvert site er i
+præcis én spalte. Det er ikke en skrivemåde: `wasUp` (det resultat et pass målte)
+og `checks` (den tæller `recordPass` fører) overlever begge en manglende
+tidsstempel, og ingen af dem kan findes uden et pass.
+
+**Den anden halvdel lå i den samme fejl, modsat.** Et site der *var* tjekket og
+kun ikke kan placeres i tid sagde ingenting: ingen alder, ingen `stale`, ingen
+advarsel om at overvågningen måske er stoppet. Årsagen er ikke en glemsom
+regel — `isCheckStale`s egen docstring siger, at et fraværende `lastChecked`
+*ikke* er forældet, "fordi rapporten allerede viser det som `not checked yet`".
+Den sætning holdt, fordi den løbige var sand. Med den rettet er den ikke længere
+sand, så en pass vi ikke kan placere i tid **er** forældet — hvilket er præcis
+det, en kundenrapport ikke må fremstille som nutidigt.
+
+**Rettelsen er én ejer med tre slags bevis.** `hasRecordedPass(entry)` i
+`src/status.js` spørger *har et pass nogensinde kørt her* og svarer ud fra alle
+tre felter, ikke ét. `readEntry` og `buildReport` spørger den i stedet for
+feltet, og `isCheckStale` får samme kendsgerning som en valgfri
+`{ recorded }` — hvis en kaldssted *kun* har et tidspunkt (`readTransitionAlert`
+spørger om et forrige pass, ikke om et site), er standarden den gamle regel, så
+det sted er urørt. `wasUp: null` er **ikke** bevis (det er præcis hvad et pass
+der aldrig kørte efterlader), og `wasUp: "yes"` er heller ikke (ulæseligt
+verdikt) — så i den sidste tilstand er tælleren og stemplet alt, der er
+tilbage.
+
+**Acceptkriterier — alle syv opfyldt:**
+
+1. ✅ Et site med 50 checks og intet tidspunkt siger ikke "not checked yet" i
+   nogen af de tre flader (målt gennem rigtig CLI + rigtig løbe + rigtig
+   state-fil, som `test/recordedpass.test.js` gør hver gang).
+2. ✅ Rapportens række kan ikke læse "not checked yet" sammen med sin egen
+   uptime-tabel, og resumelinjen tæller sitet i én spalte, ikke to (målt før/efter
+   gennem `tools/measure-surfaces.mjs pass-without-its-time`).
+3. ✅ Rækken tier ikke: den siger `⚠️ stale — last check unreadable`, og
+   `watch --status` tager sitet med i "No monitoring pass in the last 2 days".
+4. ✅ `report --json` får `passRecorded: true` på sitet og
+   `summary.neverChecked: 0` — additive på den ene side, og den anden side er
+   et tal der før var **1**, så det er en rettelse ikke en tilføjelse.
+5. ✅ **Et site med ingen felter er urørt, målt for sig:** "not checked yet" i
+   alle tre flader, `— (no completed pass)` i rapporten, i "Never checked"-
+   blokken, og **ikke** forældet — en pass der aldrig kørte er ikke gammel.
+6. ✅ **Et beskadiget tidspunkt (`"not a date"`) er urørt, målt for sig:** samme
+   sætning, samme `stale`, samme `neverChecked: 0` som før.
+7. ✅ `isCheckStale` med kun et tidspunkt er uændret for alle fire tilstande
+   (aldrig / ulæselig / foran uret / gammel), låst i en test.
+8. ✅ **Fem mutationer målt, alle fem døde** (1 / 2 / 4 / 1 / 1 fejl): ejeren
+   dropper `checks` som bevis, dropper `wasUp` som bevis, `isCheckStale` ser
+   ikke `recorded`, `readEntry` spørger feltet igen, og `buildReport` gør
+   ligeledes.
+
+**Én eksisterende test rettet, fordi den låste den falske halvdel.**
+`statusline.test.js` skrev "Never checked says nothing new" med
+`readEntry({ wasUp: true, lastChecked: undefined })` — altså et site der *var*
+tjekket, som testen krævede var *aldrig* tjekket. Nu er dens fixture
+`wasUp: null`, og den nye halvdel står som sin egen linje med sin egen begrundelse.
+Resten af testen (vinduet, `staleAgeNote`, clock-skew) er urørt og grøn.
+
+**Gaten:** **815/815** på Node 22.23.2 via `tools/run-tests.mjs` (809 + 6);
+`matrix --check` exit 0; audit 0/0; `node --check` ren; `git diff --check` rent.
+
+**Ingen deploy-note:** CLI-repo uden live-deploytarget, og ingen side blev
+ændret, så der er ingen trafik-baseline at skrive.
+
+**Fire filer rørt:** `src/status.js` (ejeren + dens to kaldssteder),
+`src/report.js` (to kaldssteder), `test/recordedpass.test.js` (6 nye) og
+`test/statusline.test.js` (den rettede linje). Plus to nye scenarier i
+`tools/measure-surfaces.mjs`, så målingen kan laves igen af næste iteration.
+
+**Mønstret er værd at huske:** ❓ 22 sagde, at et fravær der dækker to fakta kan
+kun løses ved at huske hvilken. Her var de to *ikke* lige stærke: `checks` og
+`wasUp` er bevis, `wasUp: null` er fraværet. Det er derfor besvaret på ❓ 22
+nede.
+
+## Status fra tidligere iteration (118, P1-103 — en ændring hvis titel ikke flyttede sig blev meldt som en der gjorde)
 
 **Målt først, nul kode ændret.** Køen var tømt, så målingen gik på den del af
 historien der *allerede* var rettet: P1-80s titelpar. Rigtig CLI, rigtig løbe, rigtig
@@ -4610,10 +4706,54 @@ Den aktuelle gate-definition er registreret her:
 
 ## Prioriteret kø
 
-> **Køen er tom for målte kandidater** (iteration 118). De målte fund fra den
+> **Køen er tom for målte kandidater** (iteration 119). De målte fund fra den
 > iteration ligger i afsnittet ovenfor og i `❓ Til Mads`. Næste iteration skal
 > **måle først** og finde sin egen opgave — den metode der har fundet de sidste
-> 95 opgaver. Se `❓ Til Mads` for de konkrete, målbare kandidater.
+> 96 opgaver. Se `❓ Til Mads` for de konkrete, målbare kandidater.
+
+### P1-104 — FÆRDIG 2026-09-28 (`ceo/recorded-pass`) — fire flader sagde "aldrig tjekket" om et site de havde tjekket 50 gange
+
+**Målt først, nul kode ændret.** Se afsnittet øverst. Kort fortalt: rigtig CLI,
+rigtig løbe, rigtig temp-HOME. Ét site, ét rigtigt pass, og så det ene felt der
+kan forsvinde for sig selv slettet. `status` skrev `— not checked yet`,
+`watch --status` satte det i "Never checked: no pass has ever measured them", og
+kundenapporten skrev `not checked yet` i den række der på samme linje siger
+`100% (50 checks)` — og tællede sitet i både `up` og `not checked`, i et
+dokument hvis egen fodnote siger at linjen er en partitionering.
+
+**Årsagen:** ét spørgsmål med tre svar i filen, besvaret af ét af dem.
+`lastChecked` er *tidspunktet* for et pass og det eneste af de tre felter
+(`wasUp`, `lastStatus`, `checks`) der kan miste sig alene ved en håndskrivning,
+en restore eller en merge. "Der er intet `lastChecked`" dækker derfor to ting —
+*intet pass har kørt* og *et pass kørte uden tid* — og kun den første var
+nåelig.
+
+**Fix:** `hasRecordedPass(entry)` i `src/status.js`, med alle tre felter som
+bevis og `wasUp: null` / `wasUp: "yes"` som ikke-bevis. `readEntry` og
+`buildReport` spørger den; `isCheckStale` får den samme kendsgerning som
+valgfri `{ recorded }`, så en pass der ikke kan placeres i tid heller ikke er
+`not checked yet` længere — den var ellers tavs, fordi den ikke var forældet,
+og dens eneste grund til ikke at være forældet var den løgnen. 6 nye tests i
+`test/recordedpass.test.js`, hvoraf fire kører rigtig CLI mod en rigtig løbe og
+den rigtige state-fil → **815/815** (809 + 6); audit 0/0; `matrix --check` 0;
+`node --check` og `git diff --check` grønne. **Fem mutationer målt, alle fem
+døde** (1/2/4/1/1 fejl): `checks` som bevis, `wasUp` som bevis, `recorded` i
+`isCheckStale`, `readEntry` der spørger feltet igen, `buildReport` der gør
+ligeledes.
+
+**Én eksisterende test rettet, fordi den låste den falske halvdel:**
+`statusline.test.js` krævede `stale: false` for `readEntry({ wasUp: true,
+lastChecked: undefined })` under overskriften "Never checked says nothing new" —
+altså for et site der *var* tjekket. Dens fixture er nu `wasUp: null`.
+
+**To scenarier lagt i `tools/measure-surfaces.mjs`**
+(`pass-without-its-time`, `never-checked`), så målingen kan laves igen — den
+første med et `expect`, der siger højt at scenariet *ikke* måler det, det er
+opkaldt efter.
+
+**Mønstret er værd at huske:** ❓ 22 stillede spørgsmålet, om der er andre steder
+hvor ét fravær dækker to forskellige fakta. Der er — og svaret er ikke
+"led efter `??`", men "find den ene streng, der er alene om at svare". Se ❓ 22.
 
 ### P1-103 — FÆRDIG 2026-09-28 (`ceo/title-unchanged`) — en ændring hvis titel ikke flyttede sig blev meldt som en der gjorde
 
@@ -7947,16 +8087,18 @@ for selv. Ingen gemt nøgle er omskrevet, ingen eksisterende adgangsd tilstand
     `status`, `report` og `headers`, og jeg ved ikke om de har den samme fejl
     uden at have målt dem.
 
-22. **Er der andre steder, hvor ét fravær dækker to forskellige fakta?**
+ 22. **Er der andre steder, hvor ét fravær dækker to forskellige fakta?**
+    ~~Spørgsmålet~~ **Delvist besvaret i kode 2026-09-28 (P1-104,
+    `ceo/recorded-pass`): ja, ét sted mere end de tre jeg havde regnet med.**
     P1-103 er samme sygdom som ❓ 21, men hvor fejlen ikke lå i en ny kommando —
     den lå i en *faktisk tilstand* der aldrig var opfundet. "Vi gemte aldrig en
     forrige titel" og "vi gemte ingen, fordi titlen blev målt og ikke flyttede sig"
     så ensidige ud, og alle tre lister sagde i en uge til et bureau at en kundes
     forside var ændret i titlen, når det eneste der ændrede sig var et CSRF-token.
-    **Mønstret er generelt, og intet i gaten ser det:** hver gang en læser har
-    valgt *mellem* to tilstande med `??` eller `||`, og kun den ene må sige noget,
-    er der en mulighed for at den anden er en helt anden historie. De tre kandidater
-    jeg fandt ved at lede i koden, ikke ved at gætte:
+    P1-104 fandt det tredje sted, i de største filer: **"der er intet
+    `lastChecked`"**. Fire flader sagde "aldrig tjekket" om et site med 50
+    tællede passer — og omvendt var et site der *var* tjekket, men uden tid, helt
+    tavst. De tre kandidater jeg fandt ved at lede i koden, ikke ved at gætte:
     - `contentChangeNote()` — **fundet og rettet i P1-103** (`titlePairNote()` ?? ensidig form).
     - `readContentChangeState()` — `previousTitle` læses med `titleText()`, som
       returnerer `null` både når feltet mangler og når det er tomt. Målt i P1-103,
@@ -7964,12 +8106,24 @@ for selv. Ingen gemt nøgle er omskrevet, ingen eksisterende adgangsd tilstand
       det er den ærlige sætning for den — så ingen fejl her, men kun fordi
       forskellen er uden betydning. Det er ikke et argument for at de andre er
       lige sådan.
-    - `unusableUrlNote()` og `unknownNote()` — begge vælger en sætning ud fra to
-      eller tre felter. **Disse to har jeg ikke målt**, og de er præcis den slags
-      sted fejlen fra ❓ 21 lever i.
-    **Spørgsmålet er om det er værd at måle de to sidste nu.** De er billige at måle
-    med rigtig CLI og rigtig state-fil, og svaret afgør om ❓ 21 og ❓ 22 er ét
-    problem eller to.
+    - `unusableUrlNote()` og `unknownNote()` — **målt i P1-104, ingen fejl i dem.**
+    `unknownNote` var dog *vejen ind* til den nye: den fik `passRecorded` som
+    eneste måde at skelne "aldrig tjekket" fra "tjekket, tid ulæselig" (P1-14), og
+    dens kaldssted i `readEntry` sendte **ikke** indgangen med — det sendte råt
+    `lastChecked`, så spørgsmålet blev stillet til feltet igen. Det er ❓ 21 i en
+    ny form: **en sætning, der fik sin egen indgang, bruges ikke af den der råder
+    over rækken.** `unusableUrlNote` har to grunde og siger dem begge i den lange
+    form, og den korte form bruges kun med én nøgle ad gangen (målt på de tre
+    kaldssteder), så de to kan ikke blandes.
+    **Det generelle svar er derfor ikke "led efter `??`", men "find den ene streng,
+    der er alene om at svare".** Alle tre steder hvor "har et pass kørt" blev
+    spurgt, spørger nu én ejer (`hasRecordedPass`) med alle tre felter som bevis.
+    **Spørgsmålet der står tilbage:** om samme jagt skal køres maskinelt. Den
+    lette form er at lede efter kaldssteder, der leder op i et felt, hvor de er
+    blevet givet en indgang stillet til rådighed — `passRecorded` var præcis det,
+    og det er synligt i ét greb. Den dybere form (et fravær der dækker to
+    tilstande uden nogen indgang) kan ikke ses maskinelt og kræver måling, som
+    ❓ 21 og ❓ 22 begge er.
 
 1. Hvad er den endelige gratis/Pro-matrix? Skal desktoptray og lokale notifications være gratis, eller kun Pro? README, kode og mission peger i dag i forskellige retninger.
 2. Skal Pro email og Slack/Discord/Teams implementeres nu, eller skal de forblive uden for matrixen, indtil de er bygget? P0-5 har fjernet dem fra alle overflader i dette repo og noteret dem som ikke-implementeret; **live-siten `deskuptime.com` hævder stadig email for Desktop Pro**, og rettelsen ligger uden for dette repo (P0-12 er `BLOCKED`). Svar på spørgsmålet afgør både næste CLI-opgave og sitens claim.

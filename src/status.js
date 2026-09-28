@@ -2061,12 +2061,67 @@ export function clockAheadNote(aheadMs) {
 }
 
 /**
+ * Has a pass ever been measured for this site, as the state file itself can
+ * answer it — one question with three kinds of evidence, all written by the
+ * same pass in the same breath (`src/watch.js`, `lastChecked` + `wasUp` +
+ * `recordPass`).
+ *
+ * Measured 2026-09-28 on one state file, through the real CLI. A site whose
+ * entry carried a counter of 50 passes and a `200`, but whose `lastChecked` was
+ * absent, was described four ways in one screen — and the two that are claims
+ * about the *past* were both false:
+ *
+ *   status     · https://kunde.dk/ (200) — SSL 89d — not checked yet
+ *   watch      ⚠️  Never checked: no pass has ever measured them
+ *   report     | https://kunde.dk/ | not checked yet | 100% (50 checks) | … |
+ *              ^ the same row contradicts itself, and the report's own
+ *                footnote says a site with no completed pass shows `—`, not 100%
+ *
+ * The cause is that the question was answered from one field. `lastChecked` is
+ * the *time* of a pass, and it is the only field of the three that can be lost
+ * on its own: a hand-edited file, a restore from a backup, a merge, or a file
+ * written by another tool can carry the verdict and the counter without the
+ * stamp. "There is no `lastChecked`" therefore means two different things — *no
+ * pass has ever run here*, and *a pass ran and the time was not kept* — and
+ * only the second one was reachable, so every surface got the first.
+ *
+ * This is the same disease as P1-103 in another field, and ❓ 21/22 in this one:
+ * an absence that covers two different facts can only be resolved by remembering
+ * which. A readable verdict (`wasUp` is a boolean) is the strongest evidence —
+ * it is the result a pass measured — and a positive counter is the second; both
+ * survive a missing stamp, and neither can exist without a pass.
+ *
+ * `wasUp: null` and `wasUp: "yes"` are *not* evidence: `null` is what a pass
+ * that never ran leaves behind, and a non-boolean is an unreadable verdict, so
+ * the counter and the stamp are all that is left to say a pass happened.
+ *
+ * @param {unknown} entry — one `state.urls[...]` entry
+ * @returns {boolean}
+ */
+export function hasRecordedPass(entry) {
+  const value = entry && typeof entry === 'object' ? entry : {};
+  if (typeof value.lastChecked === 'string' && value.lastChecked !== '') return true;
+  if (Number.isInteger(value.checks) && value.checks > 0) return true;
+  return value.wasUp === true || value.wasUp === false;
+}
+
+/**
  * True only when a pass is known to have run and is older than the window.
  *
- * Absent `lastChecked` is *not* stale: the report already shows such a site as
- * "not checked yet", and flagging it twice would say nothing new. A timestamp
- * that is present but unreadable *is* stale — a pass was recorded and we cannot
- * show that it is current, which is exactly what a client report must not do.
+ * Absent `lastChecked` is *not* stale **when the file holds no other evidence of
+ * a pass**: the report already shows such a site as "not checked yet", and
+ * flagging it twice would say nothing new. A timestamp that is present but
+ * unreadable *is* stale — a pass was recorded and we cannot show that it is
+ * current, which is exactly what a client report must not do.
+ *
+ * `recorded` is `hasRecordedPass` for the entry, and it exists because of the
+ * case that sentence above used to cover and no longer does: a file that kept
+ * the verdict and the counter but lost the stamp. That site is no longer
+ * "not checked yet" (P1-104), so it cannot stay outside the stale warning
+ * either — a pass we cannot place in time is exactly what a client report must
+ * not present as current. The default is the old rule, so a caller that holds
+ * nothing but a timestamp — `readTransitionAlert` below, which asks about a
+ * previous pass rather than about a site — is unaffected.
  *
  * A timestamp *ahead* of this machine's clock is neither, and that is P1-6's
  * decision, kept deliberately: a wrong clock is not old data, and a stale
@@ -2079,9 +2134,13 @@ export function clockAheadNote(aheadMs) {
  * The window is compared in ms, not in floored days, so `2.9 d` and `2.0 d` do
  * not swap sides when the day-count rounding changes.
  */
-export function isCheckStale(lastChecked, now = new Date()) {
+export function isCheckStale(lastChecked, now = new Date(), { recorded = null } = {}) {
   const pass = passAge(lastChecked, now);
-  if (pass.state === PASS_AGE.NEVER) return false;
+  // `hasRecordedPass` when the caller passes the entry, the old rule when it
+  // cannot: a bare timestamp says nothing about a counter this function never
+  // saw, so the default is the only answer it can defend.
+  const known = recorded ?? (typeof lastChecked === 'string' && lastChecked !== '');
+  if (pass.state === PASS_AGE.NEVER) return known;
   if (pass.state === PASS_AGE.UNREADABLE) return true;
   if (pass.state === PASS_AGE.AHEAD) return false;
   return pass.ageMs > STALE_AFTER_DAYS * MS_PER_DAY;
@@ -2268,10 +2327,14 @@ export function readEntry(entry, { now = new Date(), url = '' } = {}) {
     measuredAt: value.lastChecked,
     now,
   });
-  const stale = isCheckStale(value.lastChecked, now);
+  // Whether a pass ever ran is asked of the one owner, because the stamp is the
+  // only one of the three fields a hand-edited or restored file can lose on its
+  // own — see `hasRecordedPass`.
+  const recorded = hasRecordedPass(value);
+  const stale = isCheckStale(value.lastChecked, now, { recorded });
   const pass = passAge(value.lastChecked, now);
   const ageDays = pass.ageDays;
-  const neverChecked = !value.lastChecked;
+  const neverChecked = !recorded;
   // The same reading the client report prints, asked of the same owner, so these
   // two lists cannot say something about a page the report has already called
   // silent — or the other way round. Measured 2026-09-27: a page rewritten to
@@ -2335,7 +2398,7 @@ export function readEntry(entry, { now = new Date(), url = '' } = {}) {
     // sentence, so neither can discover the difference on its own.
     neverChecked,
     uncheckable,
-    unknownNote: uncheckable ? unusableUrlNote([url], { brief: true }) : unknownNote({ lastChecked: value.lastChecked, ageDays, clockAhead: clockAheadNote(pass.aheadMs) }),
+    unknownNote: uncheckable ? unusableUrlNote([url], { brief: true }) : unknownNote({ passRecorded: recorded, lastChecked: value.lastChecked, ageDays, clockAhead: clockAheadNote(pass.aheadMs) }),
     statusCode: readStatusCode(value.lastStatus),
     sslDays: ssl.days,
     sslExpired: ssl.expired,

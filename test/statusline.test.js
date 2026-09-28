@@ -157,8 +157,14 @@ test('readEntry: age and staleness come from the same window the report uses', (
   assert.equal(read('not a date').staleNote, 'stale — last check unreadable');
   assert.equal(read('not a date').ageDays, null);
   // Never checked says nothing new, and a future stamp is clock skew, not age.
-  assert.equal(read(undefined).stale, false);
-  assert.equal(read('').stale, false);
+  // "Never checked" is a site with *no* evidence of a pass, so the fixture is
+  // `wasUp: null` here: the entry this test's own `read` builds above carries
+  // `wasUp: true`, and a readable verdict is a pass that was measured — one that
+  // lost only its time, which P1-104 makes stale rather than never checked.
+  const never = readEntry({ wasUp: null }, { now: NOW });
+  assert.equal(never.stale, false, 'no pass has ever run, so there is nothing to be stale');
+  assert.equal(readEntry({ wasUp: true, lastChecked: '' }, { now: NOW }).stale, true,
+    'a verdict with no time at all is a pass we cannot place, not a site that was never checked');
   assert.equal(read(at(new Date(NOW.getTime() + DAY_MS).toISOString())).stale, false);
 });
 

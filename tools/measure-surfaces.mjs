@@ -180,6 +180,32 @@ const SCENARIOS = {
       ? null
       : 'the site is not a stopped loop with a DOWN verdict'),
   },
+  // A site the pass has measured 50 times, whose entry lost the *time* of the
+  // last pass — what a hand-edited file, a restore from a backup and a merge
+  // between two tools all produce. `lastChecked` is the only one of the three
+  // fields a pass writes that can be lost on its own, so "no `lastChecked`" has
+  // to mean two things: no pass ever ran, and a pass ran without a time. Only
+  // the first was reachable, and it is what all four surfaces said (P1-104).
+  'pass-without-its-time': {
+    'https://kunde.dk/': {
+      url: 'https://kunde.dk/',
+      wasUp: true,
+      lastStatus: 200,
+      // No `lastChecked` — on purpose, and `expect` below says so out loud.
+      checks: 50,
+      checksUp: 50,
+      sslValidDays: 89,
+    },
+    expect: (e) => ('lastChecked' in e ? 'the entry still carries a time, so it is not the case under test'
+      : e.checks > 0 ? null : 'the counter has to say a pass ran, or there is nothing to read'),
+  },
+  // The other half, and the one that is ordinary: a site with no evidence of a
+  // pass at all. It must keep saying "not checked yet" in all four surfaces,
+  // and must *not* be counted stale — a pass that never happened is not old.
+  'never-checked': {
+    'https://kunde.dk/': { url: 'https://kunde.dk/' },
+    expect: e => (e.wasUp === undefined && e.checks === undefined ? null : 'the entry carries evidence of a pass'),
+  },
   // Response time recorded, and a page read long ago that has *not* changed.
   'slow-old-page': {
     'https://kunde.dk/': {

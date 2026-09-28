@@ -27,7 +27,7 @@
 import { PRODUCT } from './features.js';
 import { DEFAULT_WINDOW_DAYS, windowCoverage, windowSummary } from './history.js';
 import { markdownCell as cell } from './display.js';
-import { PASS_AGE, SSL_WARN_DAYS, STALE_AFTER_DAYS, clockAheadNote, contentBytesNote, expiredNote, httpDownKind, httpDownNote, isCheckStale, isCheckableUrl, passAge, readCertIssuerState, readCertRotationState, readContentChangeState, readPassTime, readRedirectTarget, readResponseMs, readSslState, readStatusCode, sslLapsedNote, staleAgeNote, unknownNote, unusableUrlKind, unusableUrlNote, verdictFor, withoutCredentials } from './status.js';
+import { PASS_AGE, SSL_WARN_DAYS, STALE_AFTER_DAYS, clockAheadNote, contentBytesNote, expiredNote, hasRecordedPass, httpDownKind, httpDownNote, isCheckStale, isCheckableUrl, passAge, readCertIssuerState, readCertRotationState, readContentChangeState, readPassTime, readRedirectTarget, readResponseMs, readSslState, readStatusCode, sslLapsedNote, staleAgeNote, unknownNote, unusableUrlKind, unusableUrlNote, verdictFor, withoutCredentials } from './status.js';
 
 export const DEFAULT_REPORT_TITLE = 'Website uptime report';
 const MAX_TITLE_LENGTH = 120;
@@ -225,7 +225,7 @@ export function buildReport(state, { title, now = new Date(), history, windowDay
       // "how old is that pass" is part of the claim. A site whose newest pass is
       // older than the window keeps its observed status — the pass really did
       // answer 200 — but is marked stale so it is never counted as currently up.
-      const stale = isCheckStale(entry.lastChecked, now);
+      const stale = isCheckStale(entry.lastChecked, now, { recorded: hasRecordedPass(entry) });
       // Which of the four recorded-time states this site is in, asked of the one
       // owner. A pass dated ahead of this machine's clock used to reach this
       // document as an ordinary current pass: `ageDays: 0` in `--json`, counted
@@ -303,7 +303,7 @@ export function buildReport(state, { title, now = new Date(), history, windowDay
         // would count it is not in the state file. Asked of the one owner, so the
         // cell and `--json` cannot disagree. Always present.
         counterNotRecorded: counterNotRecorded({
-          passRecorded: typeof entry.lastChecked === 'string' && entry.lastChecked !== '',
+          passRecorded: hasRecordedPass(entry),
           checks: entry.checks,
           checksUp: entry.checksUp,
         }),
@@ -437,8 +437,10 @@ export function buildReport(state, { title, now = new Date(), history, windowDay
         // summary line or by `unknownNote`. Measured: canonicalising the time
         // alone made the summary line claim the site had never been checked,
         // while its own row named the time unreadable — the same collapse P1-14
-        // was written to prevent.
-        passRecorded: typeof entry.lastChecked === 'string' && entry.lastChecked !== '',
+        // was written to prevent. P1-104 widened it: a file that kept the
+        // verdict and the counter but lost the stamp has no time to canonicalise
+        // either, so the owner is asked rather than the field.
+        passRecorded: hasRecordedPass(entry),
       };
     })
     // Problems first: a report that opens with a DOWN site is the one a client reads.
