@@ -2752,8 +2752,27 @@ export function httpDownKind(statusCode) {
  * stays in `check --json` and in every sentence that already printed it; only
  * the reason behind it is new. A status with no such reason returns the code on
  * its own, which is what every other status has always said.
+ *
+ * **A healthy status has no note at all, and returns `null`** — measured
+ * 2026-09-28 in `report --json` over a state file the bench wrote, on a site
+ * whose last pass answered 200:
+ *
+ *   {"status": "up", "statusCode": 200, "httpDownKind": null, "httpDownNote": "HTTP 200"}
+ *
+ * The sibling `httpDownKind` was already `null` there, and so is every other
+ * conditional field this codebase added on purpose (`httpDownLabel`,
+ * `certRotated`, `sslCoversHost`, `offHostRedirect`): a field whose *name* is a
+ * claim about a failure must not hold a string on a site that did not fail. The
+ * field is read by machines, and a script asking "is there a down note?" cannot
+ * tell an answer from `null` from the answer "HTTP 200" without knowing a rule
+ * this file never stated — which is the same defect P1-83 found in three cells
+ * of the same document, and the same one P1-87 found in a measurement.
+ *
+ * `null` here is not "we could not read it": a pass with no HTTP answer at all
+ * is not a healthy status, and keeps saying `HTTP error`.
  */
 export function httpDownNote({ statusCode } = {}) {
+  if (isHealthyStatus(statusCode)) return null;
   const code = Number.isInteger(statusCode) ? `HTTP ${statusCode}` : 'HTTP error';
   const reason = {
     'auth-required': 'the site asked for a username and password, so no pass can read it',

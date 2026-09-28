@@ -35,7 +35,7 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { httpDownKind, httpDownLabel, httpDownNote } from '../src/status.js';
+import { httpDownKind, httpDownLabel, httpDownNote, isHealthyStatus } from '../src/status.js';
 import { buildReport, renderReportMarkdown } from '../src/report.js';
 import { tempHome } from './helpers/env.mjs';
 
@@ -156,6 +156,34 @@ test('the sentence keeps the code in front, so a consumer matching on it still m
   // No status at all is still a sentence, never `HTTP null`.
   assert.equal(httpDownNote({}), 'HTTP error');
   assert.equal(httpDownNote(), 'HTTP error');
+});
+
+test('a healthy status has no down note at all — the field is `null`, not a string', () => {
+  // P1-89, measured 2026-09-28: `report --json` over a state file the bench
+  // wrote carried `{"status": "up", "statusCode": 200, "httpDownKind": null,
+  // "httpDownNote": "HTTP 200"}`. The sibling kind was already `null`, and so is
+  // every other conditional field this codebase added on purpose, but the note
+  // was the code printed with the word "down" in its name.
+  for (const status of [200, 201, 204, 301, 302, 304, 399]) {
+    assert.equal(httpDownNote({ statusCode: status }), null, String(status));
+  }
+  // A caller that checks for a reason must get `null` rather than a sentence it
+  // has to learn to distrust — and the reason is not "unreadable": a pass with
+  // no HTTP answer at all is not healthy, and still says what it has.
+  assert.equal(httpDownNote({ statusCode: 400 }), 'HTTP 400');
+  assert.equal(httpDownNote({ statusCode: 404 }), 'HTTP 404');
+  assert.equal(httpDownNote({ statusCode: 500 }), 'HTTP 500');
+  // 3xx is what a healthy pass ends on, and 200–399 is the one definition of
+  // healthy this repo has: `isHealthyStatus` in this same file, which the
+  // checkers branch on. The note cannot disagree with the verdict.
+  assert.equal(isHealthyStatus(399), true);
+  for (const status of [200, 399, 100, 400, 500, 0, -1, 1.5, null, undefined, '200', NaN]) {
+    assert.equal(
+      httpDownNote({ statusCode: status }) !== null,
+      !isHealthyStatus(status),
+      `note/healthy disagree on ${String(status)}`,
+    );
+  }
 });
 
 test('the sentence cannot carry a URL or a password — it is built from the code alone', () => {
@@ -290,6 +318,17 @@ test('the report names the reason under the table, once per site, and counts it'
   assert.equal(site.httpDownNote, 'HTTP 401 — the site asked for a username and password, so no pass can read it');
   assert.equal(built.sites.find(s => s.url === 'https://kunde.dk/gad').httpDownKind, null);
   assert.equal(built.sites.find(s => s.url === 'https://kunde.dk/gad').httpDownNote, 'HTTP 503');
+
+  // P1-89: the site that answered 200 has no down note. Before this the row
+  // read `{"status": "up", "statusCode": 200, "httpDownKind": null,
+  // "httpDownNote": "HTTP 200"}` — a field named after a failure, holding a
+  // string, on a site that did not fail. Measured in `report --json` over a
+  // state file `tools/measure-surfaces.mjs healthy` writes.
+  const ok = built.sites.find(s => s.url === 'https://kunde.dk/ok');
+  assert.equal(ok.status, 'up');
+  assert.equal(ok.statusCode, 200);
+  assert.equal(ok.httpDownKind, null);
+  assert.equal(ok.httpDownNote, null);
 });
 
 test('a report whose sites are all ordinary failures gains no line at all', () => {

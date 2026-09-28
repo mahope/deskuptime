@@ -41,8 +41,17 @@ Rapporten dækker pr. site: `url`, `status` (`up`/`down`/`unknown`),
 `statusCode`, `uptimePercent`, `window`, `checks`, `failures`, `responseMs`,
 `sslDaysRemaining`, `contentBytes`, `contentReadAt`, `contentChanged`,
 `contentChangedAt`, `contentChangedAgeDays`, `contentTitle`, `contentNote`, `certRotated`, `certRotatedAt`, `certRotatedAgeDays`, `certRotationCount`, `certSerial`, `certRotatedNote`,
-`lastChecked`, `monitoringSince`, og en `summary` med antal
-sites/checks/failures.
+`lastChecked`, `monitoringSince`, `httpDownKind`, `httpDownNote`, og en
+`summary` med antal sites/checks/failures.
+
+`httpDownKind` og `httpDownNote` er grunden til et **mislykket** pass, og begge
+er `null` på et site der ikke fejlede. `httpDownKind` er kun sat for en lukket
+dør eller en throttling (`401` → `auth-required`, `403` → `not-allowed`,
+`429` → `rate-limited`); `httpDownNote` er den fulde sætning med koden i front.
+`404` og `5xx` er site, ikke adgang, og har `httpDownKind: null` med den rå kode
+i `httpDownNote`. En `null` i `httpDownNote` betyder altså "dette site svarede
+sundt" — ikke "vi kunne ikke læse noget": et pass uden HTTP-svar er ikke sundt og
+siger stadig `HTTP error`.
 
 ### 2b. Historik pr. døgn (del C)
 

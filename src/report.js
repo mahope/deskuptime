@@ -278,9 +278,11 @@ export function buildReport(state, { title, now = new Date(), history, windowDay
         // that words it: a 401/403/429 is a closed door or a throttle in front
         // of *this* monitor, not a measurement of the customer's website, and
         // the row plus the counted failure say exactly that. The status cell
-        // cannot carry a sentence, so the line under the table names it.
+        // cannot carry a sentence, so the line under the table names it. Both
+        // are `null` on a site that did not fail, so neither can be read as a
+        // sentence about an up site (P1-89).
         httpDownKind: httpDownKind(statusCode),
-        httpDownNote: statusCode === null ? null : httpDownNote({ statusCode }),
+        httpDownNote: httpDownNote({ statusCode }),
         // The two additive fields for the same fact: the boolean a CI job or an
         // agency's own system can branch on (same name as `check --json`), and
         // the owner's own short sentence, so the cell below never re-describes
