@@ -8,6 +8,7 @@
  *   - `deskuptime --help`                (src/cli.js, via renderHelpPro)
  *   - README.md "Free vs Pro" + license   (generated block, tools/matrix.mjs)
  *   - docs/pro-alerts.md §1 + §5          (generated block, tools/matrix.mjs)
+ *   - `deskuptime watch --status`         (src/watch.js, via renderThanks)
  *   - the limits enforced in src/watch.js
  *   - the product/URL constants in src/license.js
  *
@@ -287,4 +288,25 @@ export function proExtras() {
 
 export function renderNpmDescription() {
   return `Uptime, SSL expiry and content-change alerts from your terminal or CI. Free MIT CLI — ${PRODUCT.proName} (${PRODUCT.priceLong}, ${PRODUCT.machines} machines) adds ${proExtras()}.`;
+}
+
+/**
+ * The one sentence a free user is thanked with, asked for exactly once: after a
+ * result that was actually good.
+ *
+ * `donationUrl` was already in this file, in `.github/FUNDING.yml` and in the
+ * README, and no command the user runs printed it — measured 2026-09-28 on a real
+ * install: `check`, `watch --once` and `watch --status` each ended on their own
+ * verdict and said nothing else, so the only way to support the tool was to find
+ * the repository and read the funding file. Rendered from the same constant the
+ * other two surfaces carry, so the three cannot come to name different links.
+ *
+ * One line, no emoji, no urgency, and never mixed into a verdict: the caller
+ * decides *when* the result was good enough to deserve it, and this only says
+ * the words.
+ */
+export function renderThanks(lang = 'en') {
+  return lang === 'da'
+    ? `Det hjalp — tak for det. Du kan sige tak: ${PRODUCT.donationUrl}`
+    : `That helped — thank you. If it earned its keep: ${PRODUCT.donationUrl}`;
 }

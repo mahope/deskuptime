@@ -21,7 +21,7 @@ import { assertValidHttpUrls, expiredNote, findUrlKey, isNewerPass, partitionUsa
 import { recordPass } from './report.js';
 import { formatMs, safeText } from './display.js';
 import { historyFileFrom, pruneHistory, readHistoryFile, recordHistoryPass, saveHistory, historyWriteErrorMessage } from './history.js';
-import { FREE, PRO, PRODUCT } from './features.js';
+import { FREE, PRO, PRODUCT, renderThanks } from './features.js';
 
 const LICENSE_RECHECK_MS = 24 * 60 * 60 * 1000;
 const STATE_LOCK_MAX_AGE_MS = 5 * 60 * 1000;
@@ -903,6 +903,25 @@ export function printPass(pass, { alertUnchangedDown = true } = {}) {
 
 const VERDICT_ICON = { up: '✅ up', down: '🚨 down', unknown: '❔ unknown' };
 
+/**
+ * Whether the list is the kind of result a free user would thank a tool for:
+ * every site up, every pass recent, and no timestamp this machine cannot vouch
+ * for.
+ *
+ * The rule is about the *verdict*, not about the annotations. A certificate
+ * counting down or a page that changed leaves the row `✅ up` and prints its own
+ * warning above the footer, and a user who read it is in a worse mood, not a
+ * better one — so those rows still qualify. What does not qualify is anything
+ * the user has to act on: a site that is down, a verdict nobody can read, a pass
+ * that is so old the numbers are history, a site on the list that nothing has
+ * ever measured, and a clock that puts the last pass in the future (that is a
+ * broken clock on this machine, not a working site).
+ */
+function worthThanking(rows) {
+  return rows.length > 0
+    && rows.every(row => row.verdict === 'up' && !row.stale && !row.neverChecked && !row.clockAhead);
+}
+
 export function printStatus(options = {}) {
   const { state, unreadable } = readStateFile(options);
   const entries = Object.entries(state.urls);
@@ -1024,6 +1043,25 @@ export function printStatus(options = {}) {
   const waitingAlerts = normalizeOutbox(state.outbox).filter(entry => !outboxExpired(entry, { now }));
   if (waitingAlerts.length > 0) {
     console.log(`\n${outboxWaitingNote(waitingAlerts, { now })}`);
+  }
+
+  // …and the one line this command was missing. Measured 2026-09-28 on a real
+  // install: `PRODUCT.donationUrl` sat in this repo's source of truth, in
+  // FUNDING.yml and in the README, and `check`, `watch --once` and
+  // `watch --status` all ended on their verdict without ever printing it — so a
+  // free user who just got a clean result had nowhere to say thank you without
+  // first finding the repository. This is the daily list and the only one of the
+  // three whose entire output is an answer to "is it fine?", which makes it the
+  // one place a free user would say it out loud.
+  //
+  // Two walls, both already the rule elsewhere in this file: only when the list
+  // is actually good (`worthThanking`, above), and only on the free tier — a Pro
+  // customer has a support channel and a license, not a tip jar, and a released
+  // seat is a customer who paid (the same rule that keeps `released` and
+  // `unverified` off the checkout in `deskuptime status`).
+  const free = describeLicense(state.license, { now: now.getTime() }).status === LICENSE_STATUS.FREE;
+  if (worthThanking(rows) && free) {
+    console.log(`\n${renderThanks()}`);
   }
 }
 

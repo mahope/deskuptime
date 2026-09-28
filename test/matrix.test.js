@@ -7,7 +7,8 @@
  *   - `--help` ikke gengiver matrixen,
  *   - en kanal, der ikke er bygget, optræder i en kundeflade,
  *   - de håndhævede gratisgrænser i watch.js afviger fra den dokumenterede matrix,
- *   - nøgler, købslink eller donationslink afviger fra kontrakten.
+ *   - nøgler, købslink eller donationslink afviger fra kontrakten,
+ *   - donationslinket ikke havner i en kommando, brugeren faktisk kører (P1-91).
  *
  * De to første fejl er umulige at indføre ved en redigering: en håndredigeret
  * tabel bryder netop denne test.
@@ -222,6 +223,45 @@ test('hver kundeoverflade har ét købsflow, og det er kontraktens link', async 
   assert.ok(statusOut.includes(PRODUCT.priceLong), 'status nævner ikke prisen');
   for (const row of MATRIX.filter(entry => !entry.implemented)) {
     assert.ok(!statusOut.includes(row.en), `status lover den ubyggede kanal "${row.en}"`);
+  }
+});
+
+test('donationslinket er ikke en konstant uden forbruger', async () => {
+  // P1-91: `donationUrl` lå i src/features.js, i FUNDING.yml og i README, og
+  // ingen af de overflader kunden møder i en terminal skrev den ud — så den var
+  // ikke en påstand, der kunne glide, men en konstant uden læser. Det her er den
+  // lås, der manglede: strengen alene siger intet om hvor linket ender.
+  //
+  // Én plads er nok, og én er rigtig: taklinjen skal kun siges efter et resultat
+  // der var godt, så den hører hjemme i den daglige liste og ikke i `check` eller
+  // `watch --once`, som en CI-log og en cron-mail læser. Hvor den en gang
+  // udkommer, låser test/thanks.test.js.
+  //
+  // Derfor en målt tilstand her og ikke et tomt hjem: `watch --status` svarer
+  // "No URLs monitored" på en tom fil og siger aldrig tak, så låsen ville have
+  // målt den forkerte tilstand — præcis den fejl P1-87 rettede i målebænken.
+  const home = tempHome();
+  mkdirSync(join(home, '.deskuptime'), { recursive: true });
+  writeFileSync(join(home, '.deskuptime', 'state.json'), JSON.stringify({
+    version: 1,
+    urls: { 'https://kunde.dk/': { wasUp: true, lastStatus: 200, lastChecked: new Date().toISOString(), sslValidDays: 89 } },
+  }));
+  const { stdout } = await cli(['watch', '--status'], home);
+  assert.ok(stdout.includes('✅ up'), `listen målte ikke et grønt site: ${stdout}`);
+  assert.ok(stdout.includes(CONTRACT.donationUrl),
+    `ingen kommando skriver donationslinket ud: ${stdout}`);
+
+  // Og der må ikke opstå en afledt variant, som donate.stripe.com selv ville
+  // have lukket, hvis den ikke var den rigtige.
+  const surfaces = [
+    ['src/features.js', readFileSync(join(ROOT, 'src', 'features.js'), 'utf8')],
+    ['README.md', readFileSync(join(ROOT, 'README.md'), 'utf8')],
+    ['.github/FUNDING.yml', readFileSync(join(ROOT, '.github', 'FUNDING.yml'), 'utf8')],
+  ];
+  for (const [name, text] of surfaces) {
+    for (const link of new Set([...text.matchAll(/https:\/\/donate\.stripe\.com\/[A-Za-z0-9]+/g)].map(m => m[0]))) {
+      assert.equal(link, CONTRACT.donationUrl, `${name} har et donationslink, der ikke er kontraktens: ${link}`);
+    }
   }
 });
 
