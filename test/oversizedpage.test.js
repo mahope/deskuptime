@@ -45,13 +45,23 @@ import { emptyHistory } from '../src/history.js';
 import { readContentState, readEntry } from '../src/status.js';
 import { assertTempHome, tempHome } from './helpers/env.mjs';
 
+
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const CLI = join(ROOT, 'src', 'cli.js');
 // Asynchronous, because the HTTP fixture lives in *this* process — a
 // synchronous spawn would block the event loop and the fixture could never
 // answer, which looks exactly like the CLI timing out.
 const run = promisify(execFile);
-const NOW = new Date('2026-09-28T09:00:00.000Z');
+/**
+ * When the report and the lists are asked to read the state file: this machine's
+ * own clock, at that moment. Never a literal, and never an instant captured when
+ * this file loads either — `lastChecked` and `lastContentReadAt` are stamped by
+ * a *real* pass in a child process, which happens after this file is loaded, so
+ * an earlier `now` put every pass in the future and every row grew
+ * `read 36 min ahead of this machine's clock` (P1-93: the report was right and
+ * the fixture's clock was a fiction that had expired).
+ */
+const now = () => new Date();
 const OVER_LIMIT = 3 * 1024 * 1024;
 const SMALL_PAGE = '<html><head><title>Side A</title></head><body>hej verden</body></html>';
 
@@ -119,13 +129,13 @@ function readState(stateFile) {
 }
 
 function reportRow(stateFile, url) {
-  const markdown = renderReportMarkdown(buildReport(readState(stateFile), { now: NOW, history: emptyHistory() }));
+  const markdown = renderReportMarkdown(buildReport(readState(stateFile), { now: now(), history: emptyHistory() }));
   return markdown.split('\n').find(line => line.startsWith('|') && line.includes(url));
 }
 
 /** The fragment the two terminal lists place in `contentSize`. */
 function listContentSize(stateFile, url) {
-  return readEntry(readState(stateFile).urls[url], { now: NOW, url }).contentSize;
+  return readEntry(readState(stateFile).urls[url], { now: now(), url }).contentSize;
 }
 
 /** The Content cell of a table row, which is the column these tests are about. */
