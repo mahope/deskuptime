@@ -1,7 +1,73 @@
-> **Seneste:** iteration 121 (P1-106, færdig) — historien står i køens afsnit
-> `P1-106 — FÆRDIG 2026-09-28` lige under `## Prioriteret kø`.
+> **Seneste:** iteration 122 (P1-107, færdig) — historien står i køens afsnit
+> `P1-107 — FÆRDIG 2026-09-29` lige under `## Prioriteret kø`.
 
-## Status fra denne iteration (121, P1-106 — kommandoen der tager nøglen *og* starter overvågningen var bygget og nævnt nul steder)
+## Status fra denne iteration (122, P1-107 — README's copy-paste-recipe pegede på et tag, der ikke findes)
+
+**Målt først, nul kode ændret.** Køen var tømt, så målingen gik på den konkrete
+spørgsmål ❓ 16 stillede til sidst: *"hvilke andre byggede veje står i ingen
+kundeflade?"* — denne gang ikke en Pro-vej, men den **gratis** vej, der er den
+korteste fra en besøgende til en kørende installation. README's afsnit "Use in
+GitHub Actions" er en YAML-blok, hvis hele værdi er at den kan kopieres ukasket,
+og den pegede på en ref der ikke findes:
+
+```
+$ grep -n "uses: mahope/deskuptime" README.md
+  201:      - uses: mahope/deskuptime@v0
+
+$ git ls-remote --tags origin | grep -E "refs/tags/v0$"
+  (intet — 18 tags, ingen hedder v0)
+
+$ git rev-parse --verify "v0^{commit}"
+  fatal: Needed a single revision
+```
+
+GitHubs svar på den linje er `Unable to resolve action 'mahope/deskuptime@v0',
+unable to find version 'v0'`. **Hver kunde der kopierede opskriften fik et rødt
+kørsel** — før værktøjet overhovedet nåede at måle en URL. Og det er ikke en
+forsømmelse på en marginal flade: README's egen feature-tabel siger
+`GitHub Action with JSON output, down-count and job summary | ✅ | ✅ | In both
+tiers` (linje 90), og et repo med 0 stjerner og 35 npm-downloads om måneden har
+denne blok som sin korteste vej fra læser til installeret værktøj.
+
+**Målingen fandt også, hvorfor intet havde fanget det.** Repoet har en
+claims-lås (`test/claims.test.js`) der fejler, når en kundeflade lover en kanal
+der aldrig blev bygget, og den dækker både `README.md` og `--help`. Den kan
+ikke spørge om en ref er ægte: det er et spørgsmål om *dette repos* egne refs,
+ikke om en streng, og suiten kører med det offentlige internet utilgængeligt
+(P1-92), så ingen test må gå ud og slå det op.
+
+**Svarer er derfor det samme som alle andre steder i repoet: spørg det lokale
+git.** `git rev-parse --verify <ref>^{commit}` er offline, eksakt, og *kan ikke*
+svare ja på et tag ingen har pushet.
+
+**Rettelsen er én linje, én sætning og fire låse.** README peger nu på `@main`,
+som altid findes, og får to linjer der siger hvorfor `@main` er valgt og hvad
+der sker hvis man alligevel vil pinne. Fire nye tests i
+`test/actionref.test.js`: (1) hver ref i README og `docs/*.md` findes i dette
+repo; (2) den er en **branch** — målt, ikke hypotetisk: `v0.2.8` *findes* og
+*har* en `action.yml`, så en pin til den ville dokumentere et `down-count` der
+betyder "unreachable" i en tabel to linjer under der siger "HTTP 4xx/5xx or
+network error"; (3) den `action.yml` som ref'en *peger på* erklærer de inputs
+og outputs README dokumenterer — læst fra både ref'en og working tree, så også
+et rename i koden uden README fanger her; (4) alle flader nævner **én** ref, så
+opskriften ikke kan glide i to versioner. → **832/832** (828 + 4); audit 0/0;
+`matrix --check` tavs; `node --check` og `git diff --check` grønne. **Fire
+mutationer målt, alle fire døde** (3 / 1 / 1 / 2 fejl): `@v0` tilbage, pin til
+`v0.2.8`, et omdøbt input i tabellen, og en anden ref i `docs/`.
+
+**Valgt bevidst:** ikke at skrive `@v0.2.8` i stedet. Det ville løse den røde
+kørsel og samtidig stive tre ugers gammel `action.yml` ind i den mest brugte
+opskrift i repoet, hvis betydning af to fel (`fail-on-down`, `down-count`) var
+ændret siden. `@main` er den eneste ref, der kan holde på det README'ens egen
+tabel siger — og det er et valg, låsen holder fast ved, ligesom `thanks.test.js`
+holder fast ved at kun `watch --status` siger tak.
+
+**Ingen deploy-note:** CLI-repo uden live-deploytarget, og ingen side blev
+ændret — `deskuptime.com` ligger i et andet repo (P0-12 `BLOCKED`), så der er
+ingen trafik-baseline at skrive. Baseline for adoption er uændret: npm 16
+downloads/uge, ★0, Plausible `/` 3 besøgende/28 d.
+
+## Status fra tidligere iteration (121, P1-106 — kommandoen der tager nøglen *og* starter overvågningen var bygget og nævnt nul steder)
 
 **Målt først, nul kode ændret.** Køen var tømt. ❓ 16 og ❓ 19 er begge
 forbrugervalg med en forbeholdsregel ("mål først", "sig til"), og ❓ 18 og ❓ 20
@@ -4850,9 +4916,36 @@ Den aktuelle gate-definition er registreret her:
 
 ## Prioriteret kø
 
-> **Køen er tom for målte kandidater** (iteration 121). Næste iteration skal
+> **Køen er tom for målte kandidater** (iteration 122). Næste iteration skal
 > **måle først** og finde sin egen opgave. Se `❓ Til Mads` for de konkrete
 > kandidater. ❓ 21 er nu besvaret i kode (P1-105) og lukket.
+
+### P1-107 — FÆRDIG 2026-09-29 (`ceo/action-ref`) — README's copy-paste-recipe pegede på et tag, der ikke findes
+
+**Målt først, nul kode ændret.** Se afsnittet øverst. Kort fortalt: README's
+afsnit "Use in GitHub Actions" — den korteste vej fra en læser til en kørende
+installation — sagde `- uses: mahope/deskuptime@v0`, og `v0` er ikke et tag i
+dette repo (`git ls-remote --tags origin` giver 18 tags, ingen hedder `v0`;
+`git rev-parse --verify "v0^{commit}"` fejler). GitHub svarer
+`unable to find version 'v0'`, så opskriften fejlede før værktøjet kørte en
+gang — på en flade, hvis egen feature-tabel lover den som "✅ ✅ In both tiers".
+
+**Rettelse:** én linje (`@v0` → `@main`) og to forklarende linjer i README. Fire
+tests i `test/actionref.test.js` spørger det lokale git i stedet for en streng:
+(1) ref'en findes, (2) den er en branch, så opskriften ikke kan pine en release
+hvis `action.yml` er ældre end tabellen ved siden af, (3) den `action.yml` ref'en
+peger på erklærer de inputs/outputs README dokumenterer — læst fra både ref'en og
+working tree, (4) alle kundeflader nævner én ref. → **832/832** (828 + 4); audit
+0/0; `matrix --check` tavs. **Fire mutationer målt, alle fire døde** (3/1/1/2).
+
+**Valgt bevidst:** ikke `@v0.2.8`. Den findes og har en `action.yml`, men
+`fail-on-down` og `down-count` betyder der "unreachable" mod README's
+"HTTP 4xx/5xx or network error", så en pin ville have løst den røde kørsel og
+stivet en tre ugers gammel handling ind i den mest brugte opskrift.
+
+**Ny låsform, der kan bruges andre steder:** en kundeflade der indeholder en ref
+kan verificeres *offline* mod repoets egne refs. Det er samme svar som ❓ 21 og
+❓ 22 — find den ene streng, der er alene om at svare, og spørg den.
 
 ### P1-106 — FÆRDIG 2026-09-28 (`ceo/activate-with-watch`) — kommandoen der tager nøglen *og* starter overvågningen var bygget og nævnt nul steder
 
@@ -8173,6 +8266,23 @@ for selv. Ingen gemt nøgle er omskrevet, ingen eksisterende adgangsd tilstand
 - **Release-note P1-47:** `deskuptime` sendte **en content-alarm pr. pass, for evigt**, på enhver side der renderer en værdi pr. forespørgsel. Før blev et CSRF-token, en cache-buster, et "sidst opdateret"-tidspunkt eller en live-tæller til **én alarm pr. 30 sekunder** — 2 880 om dagen pr. side — fordi et content-ændringsvarsel er bygget på en hash af sidens bytes. Du fik en POST i din kanal og en notification på din Mac om noget, der ikke var ændret. Det er ikke larmet i sig selv, der gør ondt: en kanal og et notifikationscenter, der gruer ulv hele dagen, bliver **dæmpet**, og dæmpningen er netop det, der så skjuler den rigtige `is DOWN`. Nu sendes **højst én content-alarm pr. time pr. side**: den første ændring efter en stille time kommer stadig med det samme, så en defaceret eller redesignet side stadig meldes, og **intet kasseres** — de ændringer der holdes tilbage tælles, og den næste alarm siger hvor mange den står for (`3 earlier changes since the last alert, not sent`). **Et nedbrud, en SSL-advarsel og en omdirigering er aldrig tynget** — det er pr. site, så en bureaukunde med 12 sider hører stadig om alle 12. **`up`/`down`/`ssl_*`-hændelser, exit-koder og alle webhook-felter er uændrede**, så en eksisterende adapter er uberørt; kun matrix-claimet og `docs/pro-alerts.md` §2 er opdateret, så den betalte kanal ikke lover mere end den sender.
 
 ## ❓ Til Mads
+
+23. **Skal der være et flydende `v0`-tag, så opskriften kan pege på `@v0` igen?**
+    README's CI-opskrift pegede på `mahope/deskuptime@v0` — et tag der aldrig
+    har eksisteret — og P1-107 har rettet den til `@main`, fordi det er den
+    eneste ref, der findes i dag *og* hvis `action.yml` har den betydning
+    README's egen input-tabel beskriver. Men den normale måde at bruge en
+    GitHub Action på er et flydende major-tag, fordi det lader kunden pinne
+    `@v0` og alligevel få rettelser. Det kræver to ting kun du kan gøre:
+    `git tag v0 <nyeste cli-release> && git push origin v0`, og at
+    release-workflowet flytter tag'en ved hver ny CLI-release. **Jeg har lavet
+    låsen, så hvis du vil have `@v0` tilbage i README, er det en linje i
+    `test/actionref.test.js` jeg så skal slå fra** — låsten kræver i dag
+    bevidst en *branch*, fordi et release-tag kan være ældre end den tabel der
+    står under opskriften. Sig til, så skifter jeg den til "findes, og er
+    nyere end det seneste tag", og gør opskriften klar til `@v0`.
+    (Bemærk: ❓ 11's `v1`-tag er et andet relikvieskilt — det er et desktop-tal
+    uden versionssuffix og uden publiceret tarball, ikke den samme slags tag.)
 
 16. **Skal kanalen få et struktureret udsteder-felt på `cert_rotated`?** P1-66 lagde
     udstederens sætning ind i `message` på den betalte webhook, fordi det er den

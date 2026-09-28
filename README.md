@@ -198,7 +198,7 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: 24
-      - uses: mahope/deskuptime@v0
+      - uses: mahope/deskuptime@main
         with:
           urls: |
             https://yoursite.com
@@ -207,6 +207,10 @@ jobs:
         if: failure()
         run: echo "A monitored site is down!" # POST to your own webhook here
 ```
+
+The example uses `@main`, which always resolves. You can pin it to a release tag
+(`@v0.2.8`) — that pins that release's behaviour, including an older meaning of
+`down-count` than the table below describes.
 
 Inputs:
 
