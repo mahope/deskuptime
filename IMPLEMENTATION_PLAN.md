@@ -1,5 +1,92 @@
-> **Seneste:** iteration 104 (P1-89, færdig) — historien står i køens afsnit
-> `P1-89 — FÆRDIG 2026-09-28` lige under `## Prioriteret kø`.
+> **Seneste:** iteration 105 (P1-90, færdig) — historien står i køens afsnit
+> `P1-90 — FÆRDIG 2026-09-28` lige under `## Prioriteret kø`.
+
+## Status fra denne iteration (105, P1-90 — et site der svarede 200 blev gemt som et site uden certifikat)
+
+**Målt først, nul kode ændret.** Køen var tømt for målte kandidater, så
+iterationen begyndte med en måling, som de forrige har gjort. Den målte det
+`sslError` aldrig nåede: `checkSSL` har svaret `{ error }` siden P0-3, og
+`action.yml:137` har talt netop den tilstand som en fejl siden P1-63 — men
+`rg 'sslError' src/` gav **tre fund, alle i `cli.js`**. Passen skrev den ikke,
+og ingen flade læste den.
+
+**Målt end-to-end gennem den rigtige watch-loop**, mod et lokalt HTTPS-site
+så langsomt at anmodningsbenets 15 s-budget var brugt op før certifikatbenets
+eget 10 s-budget kunne nå sin anden handshake (`checkSSL` →
+`{ error: 'SSL handshake timed out' }`, `src/engine.js:99`):
+
+```
+watch --once  baseline recorded: UP (200) — 10674ms
+state.json    hverken sslValidDays eller sslExpired — intet at læse
+status        ✅ https://localhost:60656/ (200) · 74 bytes
+watch --status ✅ up  https://localhost:60656/ (200) @ … · 74 bytes
+rapport       | … | UP (200) | 100% (1 check) | 10674 ms | — | … |
+report --json "sslDaysRemaining": null, "sslIssuer": null
+```
+
+**Stregen i SSL-kolonnen er dokumentets eget ord for "denne URL kan ikke have
+et certifikat"** — altså en ren HTTP-side. Bureauet læste altså et site med et
+ulæseligt certifikat som et site uden et, i det dokument der videresendes til
+kunden. Det er samme fejl som P1-89 og P1-84, én niveau længere nede: ikke to
+flader der skrev hver sin sætning, men **en ejer der skrev en manglende
+sætning**. `readSslState` kendte to dele af et certifikat (døgntal, forfald),
+og en tredje — *benet kørte og kom tomt* — havde ingen plads i svaret, så den
+faldt igennem som "intet læst". Passen bad ejeren om de to kendte dele, fik
+ingen, og skrev derfor intet: **grunden blev kasseret af den, der målte den.**
+
+**Efter** — målt på præcis samme site og samme pass:
+
+```
+state.json    "sslError": "SSL handshake timed out"
+status        ✅ … (200) — SSL ⚠️ could not be read — the site answered, but its certificate did not: SSL handshake timed out · 74 bytes
+rapport       | … | UP (200) | 100% (1 check) | 10674 ms | ⚠️ could not be read | … |
+              **1 site(s) · 1 up · 0 down · 1 check · 0 failed · 1 SSL could not be read**
+              **1 site answered but its certificate could not be read — the SSL column above holds no day count, because none was measured:** … — SSL handshake timed out
+```
+
+**Rettelsen ligger i ejeren, i skriveren og i de fire læsere** — de kan ikke
+løses ét sted alene, fordi fejlen er spredt over alle tre. `readSslState` fik
+`error` ind og svaret `failed` + `failedNote`; `watch.js` gemmer grunden og
+rydder den igen ved næste læsning; begge lister, rapportens celle, den
+navngiven linje, resumet og `--json` læser alle ejeren. **Grunden er TLS-stakken
+eller serverens tekst**, så den flades én gang i `sslUnreadableNote` med
+`safeText` — den samme sætning når fire flader, hvoraf det ene er et dokument
+der sendes videre til en kunde.
+
+**Valget mellem `⚠️ could not be read` og at lade cellen stå på `—`:** cellen
+skal ikke sige det samme som en ren HTTP-side, så den siger tilstanden og
+linjen under tabellen siger grunden. **`sslUnreadable` er sand kun når intet
+blev læst** — et døgntal *og* en fejl i samme pass er stadig målingen, og et
+udløbt certifikat er målt selv om næste ben fejlede.
+
+**Acceptkriterier — alle syv opfyldt:**
+
+1. ✅ Passen gemmer `sslError`, og en senere læsning rydder den (målt på to
+   rigtige passer).
+2. ✅ Begge terminalister siger det med ejers sætning; `report --json` får
+   `sslUnreadable`, `sslUnreadableNote` og `sslUnreadableReason`.
+3. ✅ SSL-cellen skriver `⚠️ could not be read`; en ren HTTP-side beholder `—`
+   **tegn for tegn** og tælles ikke med.
+4. ✅ `sslExpiringSoon`/`sslMayHaveExpired`/`sslExpired` er `null`/`false` her —
+   et ulæseligt certifikat er hverken en fornyelse eller et forfald.
+5. ✅ Tallet indgår i resumelinjen (`1 SSL could not be read`) og i
+   `summary.sslUnreadable`.
+6. ✅ `docs/agency-report.md` siger hvad stregen betyder, og hvorfor den nu
+   bruges til en anden ting.
+7. ✅ 5 nye tests i `test/sslunreadable.test.js` (741 = 736 + 5), der låser
+   skillet fra de tre naboer (ren HTTP, lapset læsning, døgntal) og fra en
+   kontrolsekvens i grunden.
+
+**Gaten:** **741/741** på Node 26.7.0 via `tools/run-tests.mjs`; audit 0/0;
+`matrix --check` exit 0; `node --check` ren på alle ændrede JS;
+`git diff --check` rent. Deploy-note ikke nødvendig: CLI-repo uden
+live-deploytarget.
+
+**Åben follow-up, bevidst ikke taget nu:** der er **ingen alarm** for denne
+tilstand. Den er en *mangel* — der er intet at forny — så den passer ikke i
+`ssl_warning`/`ssl_expired`, og en ny webhook-type rører den dokumenterede
+payload-kontrakt, som `test/webhook.test.js` låser. Det er næste iterations
+beslutning, ikke en skjult fejl: ❓ 14.
 
 ## Status fra denne iteration (104, P1-89 — `httpDownNote` hedder `down` og rummede `HTTP 200` på et UP-site)
 
@@ -3694,6 +3781,17 @@ Den aktuelle gate-definition er registreret her:
 
 ## Prioriteret kø
 
+### P1-90 — FÆRDIG 2026-09-28 (`ceo/ssl-unreadable`, `c233afa`) — et site der svarede 200 blev gemt som et site uden certifikat
+
+Historien står i afsnittet øverst. Kort: `checkSSL` svarer `{ error }` når en
+handshake ikke kan gennemføres, og `action.yml` har talt det som en fejl siden
+P1-63, men passen skrev det ikke og ingen CLI-flade læste det. Målt gennem den
+rigtige watch-loop: `UP (200)`, 10674 ms, og en streg i SSL-kolonnen i det
+dokument bureauet videresender — stregen er dokumentets eget ord for "denne URL
+kan ikke have et certifikat". Nu gemmer passen grunden, `readSslState` svarer
+`failed`, og alle fire flader siger det med ejers sætning. Deploy-note ikke
+nødvendig (CLI-repo uden live-deploytarget).
+
 ### P1-89 — FÆRDIG 2026-09-28 (`ceo/report-down-note-null`, `fb92692`) — `httpDownNote` hedder `down` og rummede `HTTP 200` på et UP-site
 
 **Målt først, nul kode ændret.** `node tools/measure-surfaces.mjs healthy` — den
@@ -6262,6 +6360,17 @@ for selv. Ingen gemt nøgle er omskrevet, ingen eksisterende adgangsd tilstand
 - **Release-note P1-41:** Ét forkert svar fra din Slack-kanal kunne **tage en alarm om et nedbrud for altid**. Før blev hver hændelse sendt én gang, så et `5xx` — en genstartende proxy, en ratelimiter, en tabt forbindelse — var nok til at miste den: passet havde allerede noteret ændringen, så næste pass rejste ingen ny begivenhed, og intet i loopen sender den igen. Din kanal så intet om nedbruddet, og da sitet kom op fik den en `is UP`-besked for en genopretning den aldrig blev fortalt om. Nu prøves op til 3 gange, på **midlertidige** fejl (5xx, 429, netværksfejl) — men kun inden for det **samme 10-sekunders budget**, så overvågningen aldrig bliver langsommere, og et `4xx` (død token, forkert URL) spørges aldrig igen. **Prisen er åben:** en genprøvning efter et `5xx` kan give dobbeltlevering, hvis modtageren behandlede den første og så svarede forkert. En tabt alarm er værre end to af samme alarm, så valget er bevidst. Kan en alarm stadig gå tabt: ja — hvis modtageren er nede gennem hele budgettet, siger advarslen nu det og at intet sender den igen. **Ingen payload-felt er ændret**, så en eksisterende adapter er uberørt.
 
 - **Release-note P1-39:** En fuld disk, en skrivebeskyttet mappe eller en kvote kunne **slå overvågningen ihjel og tage alarmerne med**. Målt med rigtig CLI, rigtig webhook-modtager og et `~/.deskuptime` der ikke kan skrives: overvågningen døde med en rå Node-stacktrace, exit 1, og modtageren fik **nul beskeder** selv om et overvåget site svarede 500 — og det skete *før* nogen site blev tjekket, fordi licensen skrives, når loopen starter. Samme måling efter rettelsen: loopt kører videre, du får `🚨 … is DOWN — HTTP 500` i terminalen og beskeden i din Slack/Discord/Teams-kanal, og du får én advarsel der navngiver filen og grunden: `Could not write the monitoring state — ENOSPC — ~/.deskuptime/state.json. Nothing is remembered while this lasts: check free disk space and that the file and its folder are writable.` **Overvågning og alarmer er altså ikke længere afhængige af, at vi kan gemme noget** — det er kun de tal, der går tabt: passets uptime-tællere og dets dag i rapporten, indtil filen igen kan skrives. Og `deskuptime watch --once`, kommandoen cron kører, siger nu det samme i stedet for en stacktrace der peger på en låsefil. **Mærk:** kan vi ikke gemme et gemt verdict, ved loopen ikke at et nedet site allerede er meldt, så efter en genstart kan det meldes én gang til. Vi vælger dobbelt melding over stilhed om et nedbrud. Exit-koder for en sund kørsel, matrix-rækker og al JSON er uændrede.
+
+14. **Skal et certifikat, der ikke kunne læses, give en alarm?** P1-90 gemmer
+    grunden og siger den i terminalen og i kundenrapporten, men der går
+    **ingen alarm**: tilstanden er en *mangel* — der er intet at forny — så den
+    passer hverken i `ssl_warning` eller `ssl_expired`, og en ny webhook-type
+    rører den dokumenterede payload-kontrakt, som `test/webhook.test.js` låser.
+    `action.yml` tæller den allerede som en fejl, så GitHub-brugere får den i
+    dag, mens en bureau-klient først ser den næste gang rapporten genereres.
+    **Spørgsmålet er om det er nok.** Et site der svarer, men hvis certifikat
+    ikke kan læses i en hel uge, er et site bureauet bør høre om med det samme.
+    Svar afgør om næste iteration laver en alarmtype eller lader den ligge.
 
 12. ~~Vindueskolonnen dækker ikke hele vinduet.~~ **Besvaret i kode 2026-09-26 (P1-38, `ceo/incomplete-window`):** valget var (b), den navngiven linje. Målingen og de to betingelser står i afsnittet øverst og i `docs/agency-report.md` §4. Cellen er uændret; kun en ny linje, `1 with an incomplete window` i resumelinjen og fire additive felter. **Valget, og hvorfor:** (a) ville ændre en celle i et kundedokument bureauer har sat i systemer; (b) er additivt og rører ingen konsument. **(a) er stadig mulig** som en senere ændring, hvis Mads vil have antallet i cellen — målingen og koden til den ligger i `windowCoverage`.
 
