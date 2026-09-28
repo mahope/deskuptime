@@ -3399,6 +3399,50 @@ Den aktuelle gate-definition er registreret her:
 
 ## Prioriteret kø
 
+### P1-83 — NÆSTE — Kundenapporten kalder en nøgle med adgangskoder "ikke en fuld adresse"
+
+**Begrundelse:** Målt 2026-09-28 i P1-82, samme state-fil som P1-82 rettede — **ikke
+rettet i den iteration**, fordi den lå i en anden fil og en ren plan-commit ikke er
+en produktforbedring. Bureauets kundedokument er den mest synlige flade overhovedet, og
+den siger noget faktisk forkert om en nøgle.
+
+**Den målte sætning.** Rapporten skriver for rækken:
+
+```
+| http://kunde.dk/ | not a full address, so no pass can check it | … |
+**One listed URL is not a full address, so no monitoring pass can check it …**
+**1 site(s) · … · 1 not a full address**
+```
+
+`http://demo:pass@kunde.dk/` **er** en fuld adresse. `src/status.js:2662`s egen
+kommentar siger det præcis: "`kunde.dk` er ikke en fuld adresse; `http://demo:pass@…`
+er det meget" — og den lange note, terminal-listerne bruger, siger det rigtigt. Kun
+rapporten tager den anden sætning, og den gør det tre steder.
+
+**Årsagen er samme form som P1-82, omvendt:** `report.js:246` gemmer nøglen som
+`withoutCredentials(url)` — korrekt, det er det læseren skal se — **inden** den spørger
+`unusableUrlNote([site.url], { brief: true })` om grundformen. Den korte note får en
+renset adresse, `hasUrlCredentials` er `false`, og den vælger den forkerte sætning.
+
+**Acceptkriterier:**
+
+1. Rapportens status-celle, beskrivelseslinje, resumetæller og fodnot siger den **rigtige**
+   grund for hver ubrugelig nøgle: adgangskoder for `http://demo:pass@…`, "ikke en fuld
+   adresse" for `kunde.dk`.
+2. Grundformen stilles på den **rå** nøgle, aldrig på den rensede, der læseren ser — så
+   passwordet stadig ikke kan nå en celle.
+3. Nøgler uden adgangskoder er tegn for tegn uændrede; `test/uncheckable.test.js`'s tre
+   `not a full address`-låse på en `kunde.dk`-nøgle bliver stående.
+4. `report --json` er uændret: `status: "unknown"` og `uncheckable: true` er allerede
+   rigtige for begge former.
+5. Deterministisk test over begge nøgleformer i Markdown og i `--json`; målingen fra
+   P1-82 genbruges som fixture.
+
+**Målt, før rettelsen:** `| http://kunde.dk/ | not a full address, so no pass can check
+it |` + `· 1 not a full address`, med `status: "unknown"` i `--json` — samme række, to
+sætninger, i det samme dokument.
+
+
 ### P0-1 — AFSLUTTET I DETTE REPO — Desktop sikkerhed (flyttet til privat repo)
 
 **Begrundelse:** Den betalte desktopapp er kernedifferentieringen. Den daværende frontend kunne være uden Tauri-bridge, og remote script + rå nøgle gjorde webview'en tillidskritisk.
