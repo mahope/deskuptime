@@ -262,6 +262,15 @@ export function buildReport(state, { title, now = new Date(), history, windowDay
         offHostRedirect: redirect.offHost,
         offHostNote: redirect.label,
         uptimePercent: uptimePercent(entry),
+        // Why that share is `null`, as a fact a consumer can branch on instead of
+        // reading the Markdown cell: a pass is on the row and the counter that
+        // would count it is not in the state file. Asked of the one owner, so the
+        // cell and `--json` cannot disagree. Always present.
+        counterNotRecorded: counterNotRecorded({
+          passRecorded: typeof entry.lastChecked === 'string' && entry.lastChecked !== '',
+          checks: entry.checks,
+          checksUp: entry.checksUp,
+        }),
         window,
         // The two additive fields for the same window: how many of its days the
         // site actually has, and whether that is fewer than the column claims.
@@ -476,7 +485,48 @@ function counted(count, singular, plural = `${singular}s`) {
   return `${count} ${count === 1 ? singular : plural}`;
 }
 
+/**
+ * Is the check counter *missing* from the state file, rather than zero in it?
+ *
+ * "no completed pass" is a claim about *history*, and `uptimePercent` returns
+ * `null` whenever the counters are zero — which is two different states, and only
+ * one of them makes the old sentence true. Measured 2026-09-28 through the real
+ * `report`, on a state file with no `checks`/`checksUp` pair in it, the shape a
+ * machine gets the first time it runs a pass written by a version that did not
+ * have the counters:
+ *
+ *   | http://127.0.0.1:57311/ | UP (200) | — (no completed pass) | … | 120 ms | stable · 100 bytes | 2026-09-27 02:00 UTC |
+ *   **2 site(s) · 1 up · 0 down · 1 not checked · 0 checks · 0 failed**
+ *
+ * The same row says a pass completed a day ago — status, response time and
+ * last-check time all say so — and that no pass ever completed. The next real
+ * pass on that same file measured `100% (1 check)`, so the pass in that row did
+ * happen: the *counter* was what the file did not have, and the cell said
+ * nothing about which of the two was absent.
+ *
+ * Both facts are needed, and both are asked of the fields that already own them:
+ * `passRecorded` is the same one `unknownNote` and the summary line use, so the
+ * three surfaces cannot disagree. A site with no recorded pass keeps the old
+ * sentence byte for byte — that claim is true there.
+ *
+ * A counter that is *present and zero* while a pass is on the row is a third
+ * state, and it is deliberately not this one: nothing DeskUptime writes can
+ * produce it (`recordPass` increments both counters and writes them with the
+ * pass), so it is a hand-edited file, which `counters()` already clamps and
+ * repairs on the next pass. Naming a missing file there would be a second wrong
+ * claim in place of the first, so that row keeps the sentence it always had.
+ *
+ * @param {object} entry — the state entry's own counter fields plus the owner's
+ *   `passRecorded` fact
+ * @returns {boolean}
+ */
+export function counterNotRecorded({ passRecorded = false, checks, checksUp } = {}) {
+  const present = Number.isInteger(checks) && checks >= 0 && Number.isInteger(checksUp) && checksUp >= 0;
+  return passRecorded === true && !present;
+}
+
 function uptimeCell(site) {
+  if (site.counterNotRecorded) return '— (no counter in the state file)';
   if (site.uptimePercent === null) return '— (no completed pass)';
   const failures = site.failures > 0 ? `, ${site.failures} failed` : '';
   return `${site.uptimePercent}% (${counted(site.checks, 'check')}${failures})`;
@@ -814,7 +864,7 @@ export function renderReportMarkdown(report) {
     ...afterPassLines,
     ...uncheckableLines,
     '',
-    `Uptime is the share of completed monitoring passes that answered HTTP 200–399. "Uptime (all)" counts every pass since the site was added${since ? ` (earliest ${shortTime(since)})` : ''}; "Uptime (window)" counts the passes recorded in the last ${windowDays} days. A site with no completed pass yet shows — rather than 100%. "Uptime (window)" is counted from a separate daily history file, so a row can show a recent check with an empty window column; that column then names the file that is missing the pass rather than claiming the site was not monitored. The two files can also disagree the other way, with the history file holding recorded checks on days that are newer than the last pass in the state file; such a site is named below the table with the number of those days, so the window column is never read as checks this machine ran after it stopped watching. A site that was already being monitored when the window opened, but has fewer recorded days than the window, is named below the table with both counts, so the share and the period are not read as covering days nobody watched. The counts in the summary line are a partition: every site is in exactly one of up, down, not checked, status unknown or stale. "Up" and "down" describe sites checked within the last ${STALE_AFTER_DAYS} days; a site whose monitoring stopped is counted as stale and keeps the status from its last pass in the table, named with the age of that pass. "Status unknown" means a pass ran but its result cannot be read from the state file. A listed URL that is not a full address can never be measured at all: it is named below the table and counted separately, so its empty row is never read as a site that was simply quiet. The SSL column is what the last pass read, so its day count is the deadline the certificate had at that moment. A reading less than a day old is shown as measured; one old enough that the certificate may have lapsed since is named as such and is not counted as a renewal to schedule — run \`deskuptime check <url>\` for a fresh reading. A certificate that was replaced since monitoring is named below the table with the age it had when this report was generated; the SSL column counts down from the certificate that answered last, so it cannot show that it is a different one from the client's. The same line carries that certificate's serial number, because the issuer above and the serial are what a security review asks for as a pair, and a renewal that changed nothing else is the one case where the number is still worth reading. A certificate that now answers from an authority other than the one the site answered with when monitoring started is named the same way, with both names: a renewal keeps its issuer, and a hijack keeps every number above looking healthy. \`sslIssuer\` in \`--json\` names the authority behind the certificate the SSL column counts down from. The Content column is what the last pass that actually read the page saw: a page over the content-check limit is never read, so it shows — rather than a size, and a size left by an earlier pass is never presented as this check's measurement. "Changed" is a change measured since the site was added, and it is named below the table with the age it had when this report was generated — a page that was altered and then left alone is still a page a customer should know about, and the uptime columns do not cover it.`,
+    `Uptime is the share of completed monitoring passes that answered HTTP 200–399. "Uptime (all)" counts every pass since the site was added${since ? ` (earliest ${shortTime(since)})` : ''}; "Uptime (window)" counts the passes recorded in the last ${windowDays} days. A site with no completed pass yet shows — rather than 100%. Where a pass *is* on the row — a status, a response time, a last-check time — the — names the state file's missing check counter instead, because that pass ran and only the counter is not there; \`counterNotRecorded\` in \`--json\` is the same fact as a boolean. "Uptime (window)" is counted from a separate daily history file, so a row can show a recent check with an empty window column; that column then names the file that is missing the pass rather than claiming the site was not monitored. The two files can also disagree the other way, with the history file holding recorded checks on days that are newer than the last pass in the state file; such a site is named below the table with the number of those days, so the window column is never read as checks this machine ran after it stopped watching. A site that was already being monitored when the window opened, but has fewer recorded days than the window, is named below the table with both counts, so the share and the period are not read as covering days nobody watched. The counts in the summary line are a partition: every site is in exactly one of up, down, not checked, status unknown or stale. "Up" and "down" describe sites checked within the last ${STALE_AFTER_DAYS} days; a site whose monitoring stopped is counted as stale and keeps the status from its last pass in the table, named with the age of that pass. "Status unknown" means a pass ran but its result cannot be read from the state file. A listed URL that is not a full address can never be measured at all: it is named below the table and counted separately, so its empty row is never read as a site that was simply quiet. The SSL column is what the last pass read, so its day count is the deadline the certificate had at that moment. A reading less than a day old is shown as measured; one old enough that the certificate may have lapsed since is named as such and is not counted as a renewal to schedule — run \`deskuptime check <url>\` for a fresh reading. A certificate that was replaced since monitoring is named below the table with the age it had when this report was generated; the SSL column counts down from the certificate that answered last, so it cannot show that it is a different one from the client's. The same line carries that certificate's serial number, because the issuer above and the serial are what a security review asks for as a pair, and a renewal that changed nothing else is the one case where the number is still worth reading. A certificate that now answers from an authority other than the one the site answered with when monitoring started is named the same way, with both names: a renewal keeps its issuer, and a hijack keeps every number above looking healthy. \`sslIssuer\` in \`--json\` names the authority behind the certificate the SSL column counts down from. The Content column is what the last pass that actually read the page saw: a page over the content-check limit is never read, so it shows — rather than a size, and a size left by an earlier pass is never presented as this check's measurement. "Changed" is a change measured since the site was added, and it is named below the table with the age it had when this report was generated — a page that was altered and then left alone is still a page a customer should know about, and the uptime columns do not cover it.`,
     '',
     `Generated on one machine, without an account: no page content, response headers or license data is included, and nothing was uploaded.`,
   ].join('\n');
