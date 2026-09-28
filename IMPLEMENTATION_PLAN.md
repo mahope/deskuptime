@@ -1,8 +1,90 @@
-> **Seneste:** iteration 119 (P1-104, færdig) — historien står i køens afsnit
-> `P1-104 — FÆRDIG 2026-09-28` lige under `## Prioriteret kø`. Køen er igen tom
-> for målte kandidater; de målte fund er under `## ❓ Til Mads`.
+> **Seneste:** iteration 120 (P1-105, færdig) — historien står i køens afsnit
+> `P1-105 — FÆRDIG 2026-09-28` lige under `## Prioriteret kø`.
 
-## Status fra denne iteration (119, P1-104 — fire flader sagde "aldrig tjekket" om et site de havde tjekket 50 gange)
+## Status fra denne iteration (120, P1-105 — ét site skrevet en anden måde stoppede hele cron-passet og sagde "Free tier monitors 3 URLs")
+
+**Målt først, nul kode ændret.** Køen var tømt, så målingen gik på ❓ 21's
+konkrete spørgsmål: har `status`, `report` og `headers` den samme formfejl som
+`watch`/`unwatch` (P1-46) og `check` (P1-102)? De gør ikke — de to læser
+`Object.keys(state.urls)` og kan derfor ikke se en fejl. **Men målingen læste
+ved at læse koden, og det fandt den fjerde kommando med samme sygdom:** den
+cron-vej, der er den vej værktøjet er ment at køre overvåget på. Rigtig CLI,
+tre rigtige lokale servere, rigtig temp-HOME. Tre sites gemt som en browser viser
+dem — med skråstreg — og den **samme** liste til cron-kommandoen uden:
+
+```
+$ deskuptime watch http://127.0.0.1:62669/ … --once   →  exit 0, 3 grundlinjer, alle UP
+$ deskuptime watch http://127.0.0.1:62669  … --once   →  exit 1
+  ❌ Error: Free tier monitors 3 URLs. http://127.0.0.1:62669 not added.
+            Pro unlocks unlimited URLs and a 30s interval: https://buy.stripe.com/…
+  …tre gange, og **intet site blev tjekket**: `lastChecked` og `checks` stod præcis
+  hvor den første kørsel havde efterladt dem.
+$ deskuptime watch http://127.0.0.1:62669/ … --once   →  exit 0, all monitored sites OK
+```
+
+Tredje kørsel er kontrollen, og det er de samme tre sites. **Ét site af tre i en
+anden skrivemåde var nok:** de to perfekt skrevne sites blev heller ikke tjekket,
+fordi afvisningen tog alle tre væk fra kørslen.
+
+**Sætningen er den anden halvdel, og den er værre end stilheden.** For hvert site
+nævneværdie en grænse brugeren ikke var nået, over et site de allerede overvågede,
+og den endte i købslinket. Kontrakten siger, at Pro vises *"der, hvor brugeren
+mangler det"* — her manglede brugeren intet, og værktøjet pegede på kassen
+alligevel. En bruger der troede på beskeden havde betalt for en grænse, der aldrig
+var problemet.
+
+**Årsagen er ❓ 21 i sin fjerde kommando.** `addMonitoredUrls()` — loopens egen
+vej, rettet i P1-46 — har spurgt `findUrlKey()`, den ene ejer af "er dette site
+allerede gemt?", siden da; `check` lærte den samme lokale regel og blev målt med
+samme fejl i P1-102. Forudskridtet i `runOnce` spurgte `!state.urls[url]`, en
+præcis strenglæsning. Det er det **sidste** sted i `src/`, hvor en adresse
+sammenlignes med de gemte nøgler i hånden: læsningerne i `runPass` og
+`mergePersistedState` har alle nøglerne fra `Object.keys(state.urls)` og er derfor
+korrekte af konstruktion.
+
+**Målingen afgrænsede også to ting, så de ikke er rettet her.**
+`monitoredCount()` spørger allerede `urlIdentity()`, så en fil med begge
+skrivemåder bruger én plads og ikke to; og Pro springer forudskriddet over
+(`if (!pro)`), så en betalende kunde ramte det aldrig. **Det er en gratis-fejl,
+hvilket gør den til et konverteringsproblem frem for et funktionelt.**
+
+**Rettelsen er én linje og ingen ny regel.** `wanted` spørger nu ejeren. Den
+ledige plads (`monitoredCount`) var aldrig såret; kun spørgsmålet "hvad er nyt" var
+det. **Syv nye tests i `test/p105respell.test.js`**, alle gennem rigtig CLI +
+rigtig løbe + rigtig state-fil, dertil ét der spørger `runOnce` direkte om
+`rejected` aldrig kan indeholde et gemt site (et CLI-scalar kan se at et pass
+kørte, ikke hvorfor det ikke gjorde det) → **822/822** (815 + 7); audit 0/0;
+`matrix --check` 0; `node --check` og `git diff --check` grønne. **Tre mutationer
+målt, alle døde** (5 / 6 / 6 fejl): den oprindelige strenglæsning, ejeren med
+omvendt spørgsmål, og ejeren med det forkerte argument.
+
+**Én af mine egne tests var forkert og blev skrevet om, ikke slækket.** Den
+første version af afvisnings-testen lagde tre gemte + ét nyt site op og krævede at
+de tre blev tjekket — men "når intet passer, afvises der stadig FØR en eneste
+request" er P1-98's lås, så korrekt adfærd er at intet kører. Testen blev lavet om
+til den stærkere form: to gemte, én plads ledig, så ** ét af de to nye passer og ét
+afvises, og passet alligevel kører**. Koden var rigtig; forventningen var det ikke.
+
+**En ting valgt bevidst og ikke rettet:** efter rettelsen skriver cron-vejen
+`⚠️ Already monitoring this site as <gemt nøgle> — <cronens skrivemåde> not added.`
+for hvert site, hver kørsel. Det er P1-46's sætning fra loopens vej, den er
+sand, og den navngiver den nøgle brugeren skal skrive i cron-linjen for at få
+ro. At slå den fra ville være en ny regel i `addMonitoredUrls` og en afvigelse
+fra den vej loopen har brugt siden P1-46; det er Mads' valg, ikke mit.
+
+**Ingen deploy-note:** CLI-repo uden live-deploytarget, og ingen side blev
+ændret, så der er ingen trafik-baseline at skrive.
+
+**To filer rørt:** `src/watch.js` (én linje + begrundelsen ved den) og
+`test/p105respell.test.js` (ny, 7 tests).
+
+**Mønstret er værd at huske:** ❓ 21 spørger, om der skal låses mod at én formfejl
+kommer tilbage i en tredje kommando. Svaret her er det stærkere: den behøver
+ikke en lås for at finde den fjerde — **en gennemgang af de steder, der
+sammenligner en adresse med nøgler, er nok**, fordi den fejl altid efterlader ét
+håndlavet sted. Der er nu ingen tilbage.
+
+## Status fra tidligere iteration (119, P1-104 — fire flader sagde "aldrig tjekket" om et site de havde tjekket 50 gange)
 
 **Målt først, nul kode ændret.** Køen var tømt, så målingen gik på den ene fælde
 ❓ 22 havde peget på, men som ingen måling endnu havde fulgt: et fravær der
@@ -4706,10 +4788,45 @@ Den aktuelle gate-definition er registreret her:
 
 ## Prioriteret kø
 
-> **Køen er tom for målte kandidater** (iteration 119). De målte fund fra den
-> iteration ligger i afsnittet ovenfor og i `❓ Til Mads`. Næste iteration skal
-> **måle først** og finde sin egen opgave — den metode der har fundet de sidste
-> 96 opgaver. Se `❓ Til Mads` for de konkrete, målbare kandidater.
+> **Køen er tom for målte kandidater** (iteration 120). Næste iteration skal
+> **måle først** og finde sin egen opgave. Se `❓ Til Mads` for de konkrete
+> kandidater. ❓ 21 er nu besvaret i kode (P1-105) og lukket.
+
+### P1-105 — FÆRDIG 2026-09-28 (`ceo/respell-cron-slot`) — ét site skrevet en anden måde stoppede hele cron-passet og sagde "Free tier monitors 3 URLs"
+
+**Målt først, nul kode ændret.** Se afsnittet øverst. Kort fortalt: rigtig CLI,
+tre rigtige lokale servere, rigtig temp-HOME. Tre sites gemt med skråstreg — den
+form en browsers adresselinje viser, altså den brugeren kopierer — og den samme
+liste til cron-kommandoen uden. Exit 1, tre `Free tier monitors 3 URLs` med
+købslink, **og intet site tjekket**: `lastChecked` og `checks` urørte. Én omskrevet
+site ud af tre dræbte også de to andres tjek. Den fjerde kørsel som kontrol gav
+exit 0 på præcis de samme tre sites.
+
+**Årsagen:** `runOnce`'s forudskridt spurgte `!state.urls[url]` — en præcis
+strenglæsning — i stedet for `findUrlKey()`, ejeren af "er dette site allerede
+gemt". Det er den fjerde kommando med sygdommen efter `watch`/`unwatch` (P1-46) og
+`check` (P1-102), og det **sidste** sted i `src/` hvor en adresse sammenlignes med
+de gemte nøgler i hånden. ❓ 21 er hermed besvaret: `status`, `report` og `headers`
+har ikke fejlen (de læser `Object.keys(state.urls)`), så de fire kommandoer var
+alle der var.
+
+**Fix:** én linje, ingen ny regel, ingen ny sætning. `available` var aldrig såret,
+kun spørgsmålet "hvad er nyt". Syv nye tests i `test/p105respell.test.js` — hvoraf
+ét spørger `runOnce` direkte om `rejected` — → **822/822** (815 + 7); audit 0/0;
+`matrix --check` 0; `node --check`, `git diff --check` grønne. **Tre mutationer
+målt, alle døde** (5/6/6 fejl).
+
+**To ting målingen afgrænsede:** `monitoredCount()` bruger allerede `urlIdentity()`,
+så en fil med begge skrivemåder bruger én plads; og Pro springer forudskriddet over,
+så det er en **gratis**-fejl — altså et konverteringsproblem, ikke et funktionelt.
+
+**Én egen test var forkert** (krævede at tre gemte sites blev tjekket, selv om
+P1-98's lås siger at intet kører når intet passer) og blev skrevet om til den
+stærkere form med ét site der passer og ét der afvises.
+
+**Valgt bevidst:** `Already monitoring this site as …` skriver stadig på cron-
+vejen for hvert site pr. kørsel. Sandt, navngiver nøglen, og P1-46's sætning —
+at slå den fra ville være en ny regel og en afvigelse fra loopens vej.
 
 ### P1-104 — FÆRDIG 2026-09-28 (`ceo/recorded-pass`) — fire flader sagde "aldrig tjekket" om et site de havde tjekket 50 gange
 
@@ -8072,20 +8189,21 @@ for selv. Ingen gemt nøgle er omskrevet, ingen eksisterende adgangsd tilstand
     er den samme størrelse arbejde som P1-99.
 18. **Skal låset på ur-drift udvides til at finde *nye* filer med samme sygdom?** P1-94 lod målingen vise, at kun to af syv kandidater gik røde, og låste dem på navn — to mutationer døde på importen, ikke på adfærd. Låset kan altså ikke se en fil, der endnu ikke findes, med et fast ur i et state-fil, den kører en børneproces på. Jeg lod bevidst en regex-scanning ligge: den ville råbe om de tyve filer, der med vilje giver læser og skriver samme øjeblik, og P1-92 og P1-93 har begge skrevet den og kastet den væk efter måling. **Spørgsmålet er om det kan løses uden falske alarmer** — måske ved at køre hver testfil to gange med forskudt `TZ` frem for forskudt ur, fordi et ur-bundet ur kun fejler på *døgnkrydsninger*, ikke på urets stilling.
 
-21. **Skal der låses mod at *én* formfejl kommer tilbage i en tredje kommando?**
-    P1-46 fandt, at `https://kunde.dk` og `https://kunde.dk/` var to sites, og
-    rettede `watch` og `unwatch`. P1-102 fandt samme fejl to dage senere, i
-    `check` — fordi de to rettede steder lærte hver sin, lokal regel, og ingen
-    lås spurgte om den tredje kommando. Den konkrete kode er nu én ejer
-    (`findUrlKey`), så *den* fejl kan ikke komme tilbage. Det der kan komme
-    tilbage er **en ny** formfejl i en ny kommando, og intet i gaten ville se
-    den. Måden at finde ud af det er at køre hver overflade med to skrivemåder
-    af det samme site og kræve samme svar — en bænkbred ændring i
-    `tools/measure-e2e.mjs` (en ekstra skrivemåde pr. scenario) plus en test der
-    læser bænken. **Spørgsmålet er om det er værd at gøre permanent** — jeg har
-    gjort det for `check` i denne iteration som seks tests, men ikke for
-    `status`, `report` og `headers`, og jeg ved ikke om de har den samme fejl
-    uden at have målt dem.
+21. ~~Skal der låses mod at *én* formfejl kommer tilbage i en tredje kommando?~~
+    ~~Spørgsmålet~~ **Besvaret i kode 2026-09-28 (P1-105, `ceo/respell-cron-slot`):
+    ja — den kom, og den kom fire gange.** Historien: P1-46 fandt
+    `https://kunde.dk` og `https://kunde.dk/` som to sites og rettede `watch` og
+    `unwatch`. P1-102 fandt samme fejl i `check`, fordi de to rettede steder lærte
+    hver sin, lokal regel. P1-105 fandt den i **`runOnce`'s forudskridt** — den
+    cron-vej, værktøjet er ment at køre overvåget på — hvor den ikke bare
+    genkendte en nøgle forkert: den **drebte hele passet** på gratisniveauet og
+    sagde "Free tier monitors 3 URLs" med købslink for sites brugeren allerede
+    overvågede. `status`, `report` og `headers` har ikke fejlen, så de fire var
+    alle. **Det generelle svar er derfor ikke en lås, men en gennemgang:** de steder
+    der sammenligner en adresse med gemte nøgler er kun fire, de kan findes med
+    ét greb, og **der er nu ingen tilbage** — de øvrige læsninger i `runPass` og
+    `mergePersistedState` har alle nøglerne fra `Object.keys(state.urls)` og er
+    korrekte af konstruktion.
 
  22. **Er der andre steder, hvor ét fravær dækker to forskellige fakta?**
     ~~Spørgsmålet~~ **Delvist besvaret i kode 2026-09-28 (P1-104,
@@ -8172,6 +8290,23 @@ for selv. Ingen gemt nøgle er omskrevet, ingen eksisterende adgangsd tilstand
 
 ## Deploy-/release-noter
 
+- **Release-note P1-105:** En cron-kørsel på **gratisniveauet** kunne holde op
+  med at overvåge, uden at sige det. Hvis du gemmer dine sites i den skrivemåde
+  din browser viser — `https://kunde.dk/` — og skriver den samme liste i cron-kommandoen
+  uden skråstreg, sagde værktøjet `Free tier monitors 3 URLs` **for de sites du
+  allerede overvågede**, tilføjede **intet**, og tjekkede **intet**: `lastChecked`
+  og tællerne stod præcis, hvor de sidste gang havde stået. Exit 1, og tre
+  fejl med købslink i din cron-mail. Ét site af tre i en anden skrivemåde var
+  nok til også at de to andre ikke blev tjekket. Nu kører passet, tællerne flytter
+  sig, og den eneste du kan få er for et site du virkelig ikke har plads til.
+  **Mærket:** en plads du ikke har brugt forsvinder ikke, og **den ledige plads
+  bruges nu af det nye site** — før kunne en genstavning af et gemt site tage
+  pladsen og få et rigtigt nyt site afvist med beskeden om gratis-grænsen.
+  **Pro er urørt**, fordi den springer den tjekning over. Cron-vejen skriver
+  stadig `Already monitoring this site as <den gemte nøgle>` for hvert site, så
+  du kan se hvilken skrivemåde din liste skal bruge. *Ingen exit-kode, matrix-række,
+  købslink, JSON-felt eller hændelsestype er ændret.*
+
 - **Release-note P1-101:** Når en gratisbruger beder om webhook-alerts, sagde
   værktøjet `webhook alerts needs an active Pro license` — flertal med entalsverb.
   Nu siger det `webhook alerts **need** an active Pro license`. Det var de **to**
@@ -8223,6 +8358,43 @@ for selv. Ingen gemt nøgle er omskrevet, ingen eksisterende adgangsd tilstand
 - **Iteration 63 (P1-47, målt + fix):** ❓ 1–3 ubesvarede, så målingen gik på den betalte kanals *hyppighed* — den eneste del af alarmeringen ingen måling dækkede. Rigtig CLI, temp-HOME, rigtig lokal side med et token pr. forespørgsel: 3 pass → 3 `content changed`-alarmer, ingen af dem handlingsværdige; hver er en POST + en notifikation, så 2 880/dag ved 30 s. **Fix:** `readContentChangeAlert()` i `src/status.js` (1 time, pr. site, ur-baglæns undertrykker intet, intet kasseres) + brug i `runPass`; matrix-claim og §2 opdateret, så påstanden matcher leveringen. 10 nye tests → **431/431**; audit 0/0; `node --check`, `matrix --check`, `git diff --check` grønne på Node 26.7.0. Én ældre test opdateret (lagt krav på den gamle adfærd) og femte pass efter en time tilføjet, så dens eget formål er stærkere. To fejl i mine egne tests fundet (stub sendte `changed` på baseline; tabt `contentHash`-argument gjorde én test grøn af forkert grund). **Ingen mutationstest** — over tidsbudgeten. `ceo/content-alert-flood`, `54e8f54`.
 
 ## Iterationslog
+
+- **Iteration 120 (P1-105, målt + fix):** Køen var tømt, så research-iteration.
+  ❓ 21's konkrete spørgsmål var "har `status`, `report` og `headers` den samme
+  formfejl som `watch`/`unwatch` (P1-46) og `check` (P1-102)?" — målingen gik
+  ikke ud i terminalen først, men **gennem koden efter de steder der sammenligner
+  en adresse med gemte nøgler**, fordi det er dér fejlen efterlader et håndlavet
+  spor. Svaret: de tre flader har den ikke (de læser `Object.keys(state.urls)`),
+  men den **fjerde kommando** har den — `runOnce`'s forudskridt, som er cron-vejen.
+  Målt med rigtig CLI, tre rigtige lokale servere, rigtig temp-HOME, nul kode
+  ændret: tre sites gemt med skråstreg, samme liste til cron uden → exit 1, tre
+  `Free tier monitors 3 URLs` med købslink for **allerede overvågede** sites, og
+  `lastChecked`/`checks` urørte — intet tjekket. Kontrollen (samme liste med
+  skråstreg) gav exit 0. Én omskrevet site ud af tre dræbte også de to andres
+  tjek, fordi afvisningen tog alle tre væk fra kørslen. **En målefejl i min egen
+  måling, rettet:** første bænk brugte `execFileSync` i samme proces som
+  HTTP-fixturen, så serveren aldrig svarede og alle tre sites så "Request timed
+  out"   ud (syvende gang i mit arbejde i den fælde). Med async `execFile` blev
+  målingen rigtig. **Fix:** én linje — `wanted` spørger `findUrlKey()` i stedet for
+  `!state.urls[url]`. `available` var aldrig såret, kun spørgsmålet "hvad er nyt".
+  7 nye tests i `test/p105respell.test.js`, alle gennem rigtig CLI + rigtig løbe,
+  dertil ét der spørger `runOnce` direkte om `rejected` (et CLI-scalar kan se at
+  et pass kørte, ikke hvorfor det ikke gjorde det) → **822/822** (815 + 7); audit
+  0/0; `matrix --check` 0; `node --check`, `git diff --check` grønne. **Tre
+  mutationer målt, alle døde** (5/6/6 fejl), hver difset mod originalen: den
+  oprindelige strenglæsning, ejeren med omvendt spørgsmål, ejeren med det forkerte
+  argument. **Én af mine egne tests var forkert** (krævede at tre gemte sites blev
+  tjekket i et opsæt, hvor P1-98's lås siger at intet kører) og blev skrevet om
+  til den stærkere form — ét site der passer, ét der afvises, passet kører. Koden
+  var rigtig, forventningen var det ikke. **Målingen afgrænsede to ting, så de ikke
+  er rettet:** `monitoredCount()` bruger allerede `urlIdentity()` (én plads for
+  begge skrivemåder), og Pro springer forudskriddet over — altså en *gratis*-fejl,
+  et konverteringsproblem mere end et funktionelt. **Valgt bevidst:** cron-vejen
+  skriver stadig `Already monitoring this site as …` pr. site pr. kørsel; sandt,
+  navngiver nøglen, P1-46's sætning. `ceo/respell-cron-slot`. Ingen exit-kode,
+  matrix-række, købslink, JSON-felt eller hændelsestype ændret; ingen
+  deploy-note nødvendig (CLI-repo uden live-deploytarget). **Næste:** ❓ 1–3,
+  ❓ 14 og ❓ 20, ellers en målt opgave.
 
 - **Iteration 99 (P1-83, målt + fix):** køens øverste opgave, målt i P1-82 og ikke
   rettet der. Rigtig `buildReport`/`renderReportMarkdown` over én state-fil med

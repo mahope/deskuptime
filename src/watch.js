@@ -1318,7 +1318,29 @@ export async function runOnce(urls, opts = {}) {
     let rejected = [];
     if (!pro) {
       const available = Math.max(FREE.urlLimit - monitoredCount(state), 0);
-      const wanted = [...new Set(urls)].filter(url => !state.urls[url]);
+      // "Is this site already saved?" is `findUrlKey()`'s question, and it is the
+      // one `watch`, `unwatch` and `check` all ask. Measured 2026-09-28 on the
+      // free tier at its three-site limit, real CLI, three real local servers and
+      // a real state file: `https://kunde.dk/` saved, the same three sites given
+      // to the cron command as `https://kunde.dk` — no trailing slash — and the
+      // pass stopped dead. `!state.urls[url]` is an exact string read, so every
+      // respelling of an already-monitored site looked like a new one, the
+      // pre-flight thought all three needed a slot it did not have, and
+      // `rejected` took all three *away from the run*: nothing was measured, the
+      // counters stood still, exit 1 — and the sentence the user read, for a site
+      // they are already watching, was `Free tier monitors 3 URLs … Pro unlocks
+      // unlimited URLs` with the buy link. One respelled URL out of three was
+      // enough to stop the other two from being checked.
+      //
+      // Both spellings are the same site by `new URL()`, and the slash is not a
+      // typo to be corrected: it is the form a browser's address bar shows, so it
+      // is the form a user copies. The same line also spent a free slot that was
+      // really there — with two sites saved and one slot free, a cron list of
+      // [a-respelled-site, a-new-site] refused the new one. The loop's own
+      // `addMonitoredUrls()` has asked the owner since P1-46, which is why the
+      // running loop and this pre-flight disagreed, and `check` learned the same
+      // local rule once already (P1-102).
+      const wanted = [...new Set(urls)].filter(url => findUrlKey(state.urls, url) === null);
       rejected = wanted.slice(available);
       // `wanted` empty means every requested site is already monitored — a cron
       // `--once` re-running the same list. Nothing is over the limit then, and
