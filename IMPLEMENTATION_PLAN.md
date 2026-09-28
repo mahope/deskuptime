@@ -1,8 +1,53 @@
-> **Seneste:** iteration 103 (P1-87, færdig) — historien står i køens afsnit
-> `P1-87 — FÆRDIG 2026-09-28` lige under `## Prioriteret kø`.
-> Afsnittene for 97 og 98 er ældre og ligger henholdsvis øverst og nederst.
+> **Seneste:** iteration 104 (P1-89, færdig) — historien står i køens afsnit
+> `P1-89 — FÆRDIG 2026-09-28` lige under `## Prioriteret kø`.
 
-## Status fra denne iteration (103, P1-87 — målebænken målte et certifikat der ikke var udløbet, og kaldte det et udløbet)
+## Status fra denne iteration (104, P1-89 — `httpDownNote` hedder `down` og rummede `HTTP 200` på et UP-site)
+
+**Målt først, nul kode ændret.** Den `healthy`-tilstand, `tools/measure-surfaces.mjs`
+allerede skriver, gav i `report --json`:
+
+```
+før:  {"status": "up", "statusCode": 200, "httpDownKind": null, "httpDownNote": "HTTP 200"}
+efter:{"status": "up", "statusCode": 200, "httpDownKind": null, "httpDownNote": null}
+```
+
+Køens påstand var tegn for tegn rigtig. **Det var det eneste åbne punkt i køen**,
+så den er nu lukket — de fire målte kandidater fra iteration 101 er alle færdige.
+
+**Samme fejl som P1-84 og P1-73, én niveau højere:** ikke tre filer der skrev
+hver sin sætning, men én ejer der skrev en sætning den ikke havde. `httpDownKind`
+vidste præcis hvornår den havde noget at sige — `null` overalt undtagen de tre
+lukkede døre, som `httpDownLabel`, `certRotated` og `sslCoversHost` også er. Noten
+printede koden igen, uanset hvad der skete, og en maskinklient kan ikke skelne et
+svar fra `null` fra svaret `HTTP 200` uden en regel ingen flade nogensinde har
+fortalt. Derfor lå rettelsen i **ejeren**: de tre checkere og rapporten spørger
+`httpDownNote`, og kun `report.js:283` kunne overhovedet skrive den her — de tre
+checker-kald er målt vagtet af `!healthy`/`!response.ok`.
+
+**Valget mellem de to halvdele af acceptkriteriet:** køen tilbød `null` *eller* et
+notat om at feltet altid er efter `statusCode`. Jeg tog `null` **og** skrev
+notatet, fordi et notat alene flytter reglen *til læseren* — den skal skrive
+`if (note !== 'HTTP 200')` for at få den sandhed, som `null` giver gratis. Notatet
+er skrevet alligevel, fordi `404`/`5xx`-reglen er den samme regel en læser skal
+kende til.
+
+**Målt end-to-end, ikke kun i unit-tests:** rigtig lokal server med 401, 503 og
+200, to rigtige passes, rigtig rapport. Alle tre felter står rigtigt pr. site, og
+den menneskelæselige rapport er uændret — lukket-dør-linjen filtrerer på
+`httpDownKind`, som kun findes for 401/403/429, så **det dokument et bureau sender
+til sin kunde rørte denne diff ikke ved.** Det er samme egenskab P1-84, P1-83 og
+P1-55 alle krævede, holdt.
+
+**Gaten:** **736/736** (735 + 1) på Node 26.7.0 via `tools/run-tests.mjs`; audit
+0/0; `matrix --check` exit 0; `node --check` ren; `git diff --check` rent. **To
+mutationer målt, begge døde** (guarden slået fra: 2 fejl; `null` erstattet af
+koden i en anden form: 2 fejl).
+
+**Næste iteration:** køen er tømt for målte kandidater. Se `❓ Til Mads` — de åbne
+spørgsmål (1, 2, 3, 4, 5, 7, 8, 10, 11) kræver Mads' beslutning eller adgang til
+et repo uden for dette, så en ny iteration skal begynde med en måling.
+
+## Status fra tidligere iteration (103, P1-87 — målebænken målte et certifikat der ikke var udløbet, og kaldte det et udløbet)
 
 **Målt først, nul kode ændret.** Alle ni tilstande i `tools/measure-surfaces.mjs`
 kørt, alle fire flader læst i hver — den måling P1-87 bad om. **Otte af ni nåede
@@ -3649,6 +3694,87 @@ Den aktuelle gate-definition er registreret her:
 
 ## Prioriteret kø
 
+### P1-89 — FÆRDIG 2026-09-28 (`ceo/report-down-note-null`, `fb92692`) — `httpDownNote` hedder `down` og rummede `HTTP 200` på et UP-site
+
+**Målt først, nul kode ændret.** `node tools/measure-surfaces.mjs healthy` — den
+`healthy`-tilstand bænken allerede skriver (P1-87), altså det køns eneste
+sunde-site-tilstand. Den afsnits `report --json` gav:
+
+```
+{"status": "up", "statusCode": 200, "httpDownKind": null, "httpDownNote": "HTTP 200"}
+```
+
+**Påstanden i køen var bogstaveligt rigtig, tegn for tegn.** Et felt hvis *navn*
+er en påstand om en fejl, holdt en streng på et site der ikke fejlede, og
+strengen var den samme kode der allerede stod i `statusCode` lige ved siden af.
+En maskinklient der spørger "er der en ned-note?" kan ikke skelne et svar fra
+`null` fra svaret `HTTP 200` uden en regel denne fil aldrig har fortalt — og det
+er præcis den fejl P1-83 fandt i tre celler af samme dokument, og den P1-87 fandt
+i et måleinstrument.
+
+**Efter:**
+
+```
+{"status": "up", "statusCode": 200, "httpDownKind": null, "httpDownNote": null}
+```
+
+**Årsagen er samme fejl som P1-84 og P1-73: en ejer der ikke vidste, hvornår
+den havde noget at sige.** `httpDownKind` vidste det — den er `null` overalt undtagen
+401/403/429, som `httpDownLabel` også er, og som `certRotated` og `sslCoversHost`
+er. Kun noten Printede koden igen, uanset hvad der skete. Rettelsen er derfor i
+**ejeren** og ikke i rapporten: `httpDownNote` giver `null` for et sundt status
+(200–399, præcis `isHealthyStatus` i samme fil, som checkerne forgrener på), så de
+tre checker-kald og rapporten ikke kan få hver sin ordlyd. De tre
+checker-kallsteder (`ping.js:50`, `headers.js:155`, `content.js:89`) er alle
+vagtet af `!healthy`/`!response.ok`, så **kun `report.js:283` kunne overhovedet
+skrive den her** — målt, ikke antaget.
+
+**`null` betyder ikke "ulæseligt".** Et pass uden HTTP-svar er ikke sundt og siger
+stadig `HTTP error`; testen låser de to sætninger mod hinanden, så en fremtidig
+`?? null` ikke kan slå dem sammen. `404` og `5xx` er site, ikke adgang, og
+beholder deres rå kode tegn for tegn.
+
+**Den menneskelæselige del rørte jeg ikke.** Lukket-dør-linjen under tabellen
+filtrerer på `httpDownKind`, som kun findes for 401/403/429, så dokumentet et
+bureau sender til sin kunde er uændret. Målt end-to-end over en rigtig lokal
+server med 401, 503 og 200:
+
+```
+down  code=401  kind=auth-required  note="HTTP 401 — the site asked for a username and password…"
+down  code=503  kind=null           note="HTTP 503"
+up    code=200  kind=null           note=null
+| …/401 | DOWN (401) | 0% (2 checks, 2 failed) | … |     ← uændret
+| …/ok  | UP (200)  | 100% (2 checks)          | … |     ← uændret
+**One site answered with a closed door or a throttle rather than a page …**   ← uændret
+```
+
+**Acceptkriterier — alle syv opfyldt:**
+
+1. ✅ `httpDownNote` er `null` på alle sunde status (200, 201, 204, 301, 302, 304, 399).
+2. ✅ `null` på et up-site i `report --json`; `status`, `statusCode` uændrede.
+3. ✅ 401/403/429 og 404/5xx uændrede på **alle** flader — målt end-to-end over en
+   rigtig server, ikke kun i unit-tests.
+4. ✅ `HTTP error` består for et pass uden HTTP-svar; låst mod `null`.
+5. ✅ Den menneskelæselige rapport, rækker, andele, exit-koder og
+   `watch`-alarmen er tegn for tegn uændrede.
+6. ✅ `docs/agency-report.md` siger nu hvad `null` i begge felter betyder, og at
+   `httpDownKind` kun findes for de tre lukkede døre.
+7. ✅ 1 ny test i `test/httpdownreason.test.js` (736 = 735 + 1), der låser paritet
+   mellem `httpDownNote` og `isHealthyStatus` over 12 statusformer.
+
+**Gaten:** **736/736** på Node 26.7.0 via `tools/run-tests.mjs`; audit 0/0;
+`matrix --check` exit 0; `node --check` ren på alle ændrede JS; `git diff --check`
+rent. **To mutationer målt, begge døde:** guarden gjort til `false &&` (2 fejl —
+præcis denne opgaves fejl) og `null` erstattet af `` `HTTP ${statusCode}` `` under
+en anden form (2 fejl).
+
+**Beslutning om den anden halvdel af kandidatens acceptkriterium:** den tilbød
+også "et dokumenteret kontraktnotat om at feltet altid er efter `statusCode`".
+Jeg valgte `null` **og** dokumentationen, fordi et notat flytter reglen *til
+læseren* — den skal skrive `if (note !== 'HTTP 200')` for at få den sandhed `null`
+giver dem gratis. Notatet er skrevet alligevel, fordi `404`/`5xx`-reglen er den
+samme regel dokumentationen skal kende til.
+
 ### P1-88 — FÆRDIG 2026-09-28 (`ceo/action-closed-door`, `04f874c`) — GitHub Actionens summary skrev `❌ DOWN | 401` og lod tallet være forklaringen
 
 Historien står i afsnittet øverst. Kort: P1-84 gav seks flader grunden til en
@@ -3678,8 +3804,8 @@ mangler og exit 1. Fladerne printes stadig. Deploy-note ikke nødvendig
 
 ### Kandidater fra målingen i iteration 101 — målt grundlag, ikke gæt
 
-Rækkefølgen er efter hvad der griber flest brugere. Kandidater 1 og 2 er
-lukket 2026-09-28 (se afsnittet øverst); nr. 4 er åben.
+Rækkefølgen er efter hvad der griber flest brugere. **Alle fire er lukket
+2026-09-28** (se afsnittene øverst); køen er tømt for målte kandidater.
 
 1. ~~**P1-86 — De to gratislister tæller ikke et pass foran uret, men skriver
    stadig `✅`.**~~ **BESVARET 2026-09-28 (se afsnittet øverst):** ✅ + advarsel er
@@ -3701,12 +3827,13 @@ lukket 2026-09-28 (se afsnittet øverst); nr. 4 er åben.
    kontrakten. Den mindste ærlige rettelse er at **navngive** den lukkede dør i
    summary-cellen uden at flytte tal eller exit. **Acceptkriterium:** målt først på
    en rigtig lokal 401/403/429-server, så både før- og efterlinje står i planen.
-4. **P1-89 — `httpDownNote` hedder `down` og rummer `HTTP 200` på et UP-site.**
-   Målt i `--json`: `{"status": "up", "statusCode": 200, "httpDownKind": null,
-   "httpDownNote": "HTTP 200"}`. En maskinklient, der læser feltets *navn*, kan
-   tro at der står en fejl. **Acceptkriterium:** enten `null` på et up-site
-   (additivt, `httpDownKind` er allerede `null`) eller et dokumenteret
-   kontraktnotat om at feltet altid er efter `statusCode`.
+4. ~~**P1-89 — `httpDownNote` hedder `down` og rummer `HTTP 200` på et UP-site.**~~
+   **FÆRDIG 2026-09-28** (se afsnittet over dette). Målt i `--json`:
+   `{"status": "up", "statusCode": 200, "httpDownKind": null, "httpDownNote":
+   "HTTP 200"}` — påstanden var tegn for tegn rigtig. Valgt var den additive halvdel
+   af acceptkriteriet (`null` på et up-site) **plus** dokumentationen, fordi et
+   notat alene flytter reglen til læseren. Rettelsen lå i ejeren `httpDownNote`, så
+   de fire callsteder (tre checkere + rapporten) ikke kan få hver sin ordlyd.
 
 ### P1-84 — FÆRDIG 2026-09-28 (`ceo/closed-door-reason`) — `HTTP 401` var hele forklaringen, også i det dokument et bureau sender til kunden
 
