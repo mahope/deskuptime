@@ -1,8 +1,31 @@
-> **Seneste:** iteration 111 (P1-96, færdig) — historien står i køens afsnit
-> `P1-96 — FÆRDIG 2026-09-28` lige under `## Prioriteret kø`. Næste opgave er en
+> **Seneste:** iteration 112 (P1-97, færdig) — historien står i køens afsnit
+> `P1-97 — FÆRDIG 2026-09-28` lige under `## Prioriteret kø`. Næste opgave er en
 > ny målt opgave: køen er tømt for målte kandidater igen.
 
-## Status fra denne iteration (111, P1-96 — `headers` var den eneste flade der gik kæden igennem uden at spørge, hvem der svarede)
+## Status fra denne iteration (112, P1-97 — bureauets egen kommando skrev en parkeringssides HSTS som kundens fund)
+
+**Målt først, nul kode ændret.** To rigtige lokale servere, en `301` imellem dem, og
+den fremmede med de stærke headere. Målingen gav **ens ark**: `headers` om
+kunde-domænet og `headers` om parkeringssiden skrev de samme otte linjer om de fem
+sikkerhedsheadere og stacken. P1-96 havde målt rigtigt — `headers` sagde, at svaret
+kom fra en anden vært — men det var advarselslinjen *ovenfor* et ark, der bekræftede
+fremmedens server, tegn for tegn, i det dokument bureauet sender videre til kunden.
+`--json` havde ingen forskel på de to læsninger.
+
+**Rettelsen:** første hop er det eneste svar kundens egen server har sendt os, så en
+krydsende kæde læser sitets **egen** læsning, og en ny ejer i `status.js` siger hvis
+den er. Egen-vært-redirecten er uændret — der er sidens egen side der svarer. Den
+fælde jeg målte undervejs lå i JSON'en: `{ ...r }` lod `security` komme fra det
+forkerte svar, så rettelsen ville have flyttet løgnen ét felt højere i stedet for
+fjerne den.
+
+**Gaten:** **773/773** (767 + 6); mutation målt (4 af 6 døde på det gamle adfærd);
+`matrix --check` exit 0; audit 0/0; `node --check` ren; `git diff --check` rent.
+`ceo/header-source`, `9dbe294`.
+
+**Deploy-note ikke nødvendig:** CLI-repo uden live-deploytarget.
+
+## Status fra tidligere iteration (111, P1-96 — `headers` var den eneste flade der gik kæden igennem uden at spørge, hvem der svarede)
 
 **Målt først, nul kode ændret.** Køen var tømt, så målingen gik på den flade
 loopet har rørt mindst: `deskuptime headers` — bureauets egen kommando, den der
@@ -4032,6 +4055,107 @@ Den aktuelle gate-definition er registreret her:
 - ~~`tools/make_tarball.sh:14` udelader `src/checkers/headers.js`~~ **Rettet i P2-1 del A (2026-09-25), og linjen var forældet her:** scriptet kopierer nu hele `src/`-træet i stedet for en håndlavet filliste, og `test/tarball.test.js` låser det. `tools/install.sh:6` er derimod stadig fastsat til 0.1.4 mod `package.json`s 0.2.8 — en curl-bruger får altså en version tre minorer under npm-versionen, som mangler hele P1-13…P1-24's rettelser; nyeste publicerede `v*-cli` er v0.2.5-cli, så en ny release (❓ 10) er forudsætningen for at lukke det.
 
 ## Prioriteret kø
+
+### P1-97 — FÆRDIG 2026-09-28 (`ceo/header-source`, `9dbe294`) — `headers` skrev **fremmedens** sikkerhedsheadere som kundens fund
+
+**Målt først, nul kode ændret.** Køen var tømt, så målingen gik på bureauets egen
+kommando — den der skal forklare en kundes site. To rigtige lokale servere: A er
+kunde-domænet, B er parkeringssiden. A `301`er til B. B sender *stærke* headere
+samt `X-Powered-By: PHP/8.2.1`, så et læk er umuligt at overse.
+
+```
+$ deskuptime headers http://127.0.0.1:65108/          (A = kunden)
+   301 → http://127.0.0.1:65107/parked
+   Final: http://127.0.0.1:65107/parked (200) — redirected
+   ⚠️  answered by another host — the response came from 127.0.0.1:65107, not 127.0.0.1:65108
+   ⚠️  X-Powered-By exposed: PHP/8.2.1
+   ✅ strict-transport-security: max-age=63072000
+   ✅ content-security-policy: default-src 'none'
+   ✅ x-content-type-options: nosniff
+   ✅ x-frame-options: DENY
+   ✅ referrer-policy: no-referrer
+
+$ deskuptime headers http://127.0.0.1:65107/parked     (B = parkeringssiden)
+   …resten af arket er TEGN FOR TEGN ENS med det overfor, minus de to linjer om kæden
+```
+
+**Det er ikke en advarselslinje der mangler — det er en læsning der er lånt.** P1-96
+gjorde `headers` spørge *om svaret* kom fra en anden vært, og svaret stod rigtigt en
+linje ovenfor et ark, der **bekræftede alt andet**: fem grønne hæfter om *B's*
+server og en versionsstreng om *B's* stack, i et dokument der sendes videre til en
+kunde. `headers --json` lagde de samme fem værdier i `security` ved siden af
+`offHostRedirect: true` og **intet felt**, der kunne skelne dem fra en måling om det
+egne site. Et bureau-scan af et kunde-domæne — præcis det job kommandoen findes for
+— kunne skrive `✅ HSTS: max-age=63072000` og `afslører PHP/8.2.1` om en vært de ikke
+kontrollerer. Samme fejl tre gange: et udløbet domæne, et hijacket domæne, en
+tastefejl hos registraren — alle svarer 200, alle har en fremmed bag sig.
+
+**Årsagen er at læsningen lå på det forkerte svar.** `checkHeaders` læste de fem
+headere og de to stack-felter ud af **sidste** svar i kæden. Det er det korrekte
+valg for `www.acme.dk → acme.dk` — samme site der svarer to gange — og det forkerte
+for enhver anden vært, fordi de to tilfælde er ens i koden. P1-96 låste den kendsgerning
+den *havde* målt, og den lå låst, fordi den var sand.
+
+**Rettelsen er ikke en bedre advarsel: kundens egen server svarede jo.** Første hop
+er det eneste svar *sitets egen* server nogensinde har sendt os, så det er det eneste
+ark der kan tilskrives stedet. En gået kæde læser derfor de fem headere og de to
+stack-felter fra første læsning, og en ny ejer, `readHeaderSource` i `status.js`
+(ved siden af `readRedirectTarget`), siger hvilken vært arket kom fra. Målt med A der
+**selv** sender `HSTS: max-age=300` og en tom `X-Powered-By` på sin 301:
+
+```
+   ⚠️  the five security headers and the stack are 127.0.0.1:49384's own — they were read
+       from its first response, not from 127.0.0.1:49383
+   ⚠️  X-Powered-By sent with no value — the site sends the header, but it names no stack
+   ✅ strict-transport-security: max-age=300
+   ⬜ missing: content-security-policy
+```
+
+**Fælden var i JSON'en, ikke i terminalen, og den lå i én linje.** Grenen
+`{ ...r, offHostRedirect }` lod `security` komme fra det forkerte svar, mens
+terminalen viste det rigtige — så rettelsen ville have flyttet løgnen *én felt
+højere* i stedet for at fjerne den. Derfor udgiver JSON'en nu den **valgte** læsning
+og dropper `ownReading`, så de to læsninger ikke begge står i dokumentet:
+`headersFrom` er den spurgte vært, positivt og sammenligneligt i stedet for endnu
+et flag med samme regel.
+
+**Acceptkriterier — alle syv opfyldt:**
+
+1. ✅ Ingen af fremmedens værdier står på arket ved et krydsende svar, målt på rigtig
+   CLI mod to rigtige servere: `max-age=63072000`, `default-src 'none'`, `DENY`,
+   `no-referrer`, `nginx/1.18.0`, `PHP/8.2.1` — alle seks røde i påstanden.
+2. ✅ Sitets egen læsning står der i stedet (`max-age=300`, tom `X-Powered-By`), og
+   en linje siger hvis. `headers --json` giver `headersFrom: "127.0.0.1:49441"`,
+   `security` med *sitets* værdier, `server: "cloudflare"`, `poweredBy: ""`,
+   `offHostRedirect: true` — og ingen `ownReading`.
+3. ✅ De to ark deler **ikke én** headerlinje, målt ved at tage linjelisterne fra begge
+   og krydse dem. Før var de ens; det er den påstand, der låser rettelsen.
+4. ✅ Redirect på egen vært er tegn for tegn uændret: `max-age=31536000` fra den
+   endelige side, `max-age=99` fra første hop **ikke** med, ingen ny linje, exit 0.
+5. ✅ Ejers regel målt i sig selv: `note` tier på egen vært, siger begge værtnavne på
+   en fremmed, og `host` er `null` når der ingen læsning er at tilskrive — samme
+   mål som P1-26s `offHost` (reglen må ikke påstå noget den ikke målte).
+6. ✅ Struktur-lås: første læsning gemmes i checkeren, terminalen og JSON'en bruger
+   den **valgte** læsning, og ejers hele sætning findes kun i `status.js`. Låsen
+   måler på hele sætningen, ikke de tre første ord — samme fælde som P1-96 målte.
+7. ✅ 6 nye tests i `test/headersource.test.js`, alle mod rigtig CLI og rigtige
+   servere. **Mutation målt:** læsningen sat tilbage til altid det sidste svar →
+   4 af 6 døde, heraf struktur-låsen. De 2 der bliver grønne er præcis dem der
+   skal: egen-vært-redirecten og ejers enhedstest.
+
+**Gaten:** **773/773** på Node 26.7.0 via `tools/run-tests.mjs` (767 + 6);
+`matrix --check` exit 0; audit 0/0; `node --check` ren på alle fire filer;
+`git diff --check` rent. `ceo/header-source`. CI var grøn på `main` før start
+(ét kald, ingen polling).
+
+**Deploy-note ikke nødvendig:** CLI-repo uden live-deploytarget. Ingen side blev
+ændret, så der er ingen trafik-baseline at skrive; målingen er i kommandoens
+output, ikke på en side.
+
+**Tre filer i `src/` + én test.** Ingen anden overflade rørt: `checkHeaders` læses
+kun af `headers` (`cli.js:411`), så hverken `check`, `watch`, listerne eller
+rapporten er i spil — de har hver sin læsning af **deres** svar, som er deres eget
+og rigtigt.
 
 ### P1-96 — FÆRDIG 2026-09-28 (`ceo/headers-offhost`) — `headers` gik kæden igennem uden at spørge, hvem der svarede
 

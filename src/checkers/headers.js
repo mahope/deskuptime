@@ -29,6 +29,23 @@ function emptySecurity() {
   return Object.fromEntries(SECURITY_HEADERS.map(name => [name, null]));
 }
 
+/**
+ * The five security headers plus the two stack fields, off one response.
+ *
+ * `?? null`, not `|| null`: a header the site sent with no value is a fact about
+ * the site, and `||` threw it away and made it identical to a header it never
+ * sent. `readSecurityHeaders` reads the difference. One function so the site's
+ * own first response and the final response cannot drift apart in how they are
+ * read — the two are the same measurement of two different servers.
+ */
+function readResponseHeaders(r) {
+  const h = {};
+  r.headers.forEach((v, k) => { h[k.toLowerCase()] = v; });
+  const security = {};
+  for (const name of SECURITY_HEADERS) security[name] = h[name] ?? null;
+  return { security, server: h['server'] ?? null, poweredBy: h['x-powered-by'] ?? null };
+}
+
 function errorResult(originalUrl, currentUrl, error) {
   const https = readHttpsState({ startUrl: originalUrl });
   return {
@@ -63,6 +80,16 @@ function errorResult(originalUrl, currentUrl, error) {
  */
 export function checkHeaders(url, maxRedirects = 10, options = {}) {
   const steps = [];
+  // The site's *own* response, kept from the first hop. Measured 2026-09-28: the
+  // five security headers and `server`/`poweredBy` were read off whichever
+  // response came last, so a client domain that 301s to a parking page, a
+  // hijacked domain or a registrar's "did you mean" page reported *that host's*
+  // HSTS, CSP and `X-Powered-By: PHP/8.2.1` as findings about the client — and
+  // the sheet was byte-identical to what `headers` prints for the stranger. The
+  // first response is the only one the site's own server ever sent us, so it is
+  // the only reading that can be attributed to the site. `null` until a response
+  // arrives, and it stays `null` when the walk never gets one.
+  let ownReading = null;
   // `current` is what we request, `shown` what we may print: a `Location:` header
   // can carry a username and a password (P1-71), and the chain is read by three
   // surfaces — the terminal, `headers --json` and the CI job that pastes it into
@@ -91,6 +118,7 @@ export function checkHeaders(url, maxRedirects = 10, options = {}) {
         headers: { 'user-agent': 'deskuptime-headers/0.1 (+https://github.com/mahope/deskuptime)' },
       }).then((r) => {
         if (r.body) r.body.cancel().catch(() => {});
+        if (!ownReading) ownReading = readResponseHeaders(r);
         const loc = r.headers.get('location');
         if (r.status >= 300 && r.status < 400) {
           let next = null;
@@ -119,18 +147,18 @@ export function checkHeaders(url, maxRedirects = 10, options = {}) {
         resolve({
           ...errorResult(url, current, error),
           steps,
+          // Whatever the site's own host did send before the walk died, kept for
+          // the same reason: it is the only reading that belongs to the site. The
+          // five in `security` above stay `null` — that is `errorResult`'s
+          // contract and `securityChecked: false` beside it says why.
+          ownReading,
         });
       });
     };
 
     const finish = (r, stopReason = null) => {
-      const h = {};
-      r.headers.forEach((v, k) => { h[k.toLowerCase()] = v; });
-      const security = {};
-      // `?? null`, not `|| null`: a header the site sent with no value is a
-      // fact about the site, and `||` threw it away and made it identical to a
-      // header it never sent. `readSecurityHeaders` reads the difference.
-      for (const name of SECURITY_HEADERS) security[name] = h[name] ?? null;
+      const last = readResponseHeaders(r);
+      const security = last.security;
 
       const https = readHttpsState({ startUrl: url, finalUrl: current });
       const chain = readChain({ stopReason, statusCode: r.status, steps, limit: maxRedirects });
@@ -155,13 +183,15 @@ export function checkHeaders(url, maxRedirects = 10, options = {}) {
         error: healthy ? null : (chain.complete ? httpDownNote({ statusCode: r.status }) : null),
         forcesHttps: https.forcesHttps,
         startedHttp: https.startedHttp,
-        // `?? null`, not `|| null`, for the same reason as the five above: a
-        // server that sends `X-Powered-By: ` *is* disclosing that it sends the
-        // header, and `||` reported that site as disclosing nothing.
-        // `readDisclosure` reads the difference.
-        server: h['server'] ?? null,
-        poweredBy: h['x-powered-by'] ?? null,
+        // `?? null`, not `|| null`, for the same reason as the five: a server that
+        // sends `X-Powered-By: ` *is* disclosing that it sends the header, and
+        // `||` reported that site as disclosing nothing. `readDisclosure` reads
+        // the difference.
+        server: last.server,
+        poweredBy: last.poweredBy,
         security,
+        // The site's own host, from the first response of the walk — see above.
+        ownReading,
       });
     };
 
