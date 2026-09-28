@@ -182,6 +182,27 @@ function passDayInWindow(passMs, from, to) {
  * `passNotRecorded` says it, so the machine surface can reproduce the sentence
  * instead of inferring it. The shape is the same either way: `uptimePercent`
  * stays `null`, because there is genuinely no share to compute.
+ *
+ * `passesAfterLastPass` is the mirror of that disagreement, and it is measured
+ * the same way. `emptyWindow` is the history file missing a pass the state file
+ * demonstrably ran; this is the state file's last pass predating days the
+ * history file says were checked. Measured through the real `report` on a site
+ * whose newest pass was 8 days old while its history file held ten recorded
+ * days:
+ *
+ *   | http://c.dk/ | UP (200) ⚠️ stale — last check 8 d ago | 100% (3 checks) | 100% (10 recorded d, 240 checks) | … |
+ *
+ * and above the table, `**Monitoring data is stale for 1 site — no pass in the
+ * last 2 days:** http://c.dk/ (8 d)`. One row claiming 240 checks, a summary
+ * claiming no pass in two days, in the document an agency forwards. The 240 is
+ * not a fabricated number — it is what the other file holds — but a client
+ * cannot see which file is behind, and the two claims cannot both be true.
+ *
+ * It counts **whole recorded days**, never hours, and never triggers on a pass
+ * that is merely minutes late: a clock that disagrees with itself inside one day
+ * is not a disagreement worth a line in a customer document. A pass outside the
+ * window is not evidence of anything, so it counts `0` rather than guessing —
+ * the honest reading there is that the site is simply older than the window.
  */
 function emptyWindow({ days, from, to, passDay }) {
   if (!passDay) return null;
@@ -194,6 +215,9 @@ function emptyWindow({ days, from, to, passDay }) {
     from: passDay < from ? from : passDay,
     to,
     passNotRecorded: true,
+    // Nothing is recorded, so nothing can postdate the pass. Stated rather than
+    // left out, so a consumer branches on the field and not on its absence.
+    passesAfterLastPass: 0,
   };
 }
 
@@ -218,11 +242,13 @@ export function windowSummary(history, url, { days = DEFAULT_WINDOW_DAYS, now = 
   let failures = 0;
   let recordedDays = 0;
   let first = null;
+  const recorded = [];
   for (const [day, bucket] of Object.entries(buckets)) {
     if (!DAY_KEY.test(day) || day < from || day > to) continue;
     const dayChecks = counter(bucket?.checks);
     if (dayChecks === 0) continue;
     recordedDays++;
+    recorded.push(day);
     checks += dayChecks;
     failures += Math.min(counter(bucket?.failures), dayChecks);
     if (!first || day < first) first = day;
@@ -240,6 +266,10 @@ export function windowSummary(history, url, { days = DEFAULT_WINDOW_DAYS, now = 
     // Always present, so a consumer can branch on the field without first
     // having to prove it can be absent. The disagreement case is `emptyWindow`.
     passNotRecorded: false,
+    // The other direction of the same two-file disagreement, counted in whole
+    // days so a pass that is minutes late cannot trigger it. See
+    // `passesAfterLastPass` below for what the number is and is not.
+    passesAfterLastPass: passDay === null ? 0 : recorded.filter(day => day > passDay).length,
   };
 }
 

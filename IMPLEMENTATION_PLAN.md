@@ -1,3 +1,59 @@
+## Status fra denne iteration (92, P1-76 — kundenrapporten talte 240 checks for et site den holdt op med at tjekke for 8 dage siden)
+
+**Målt først, nul kode ændret.** Rigtig CLI, rigtig `state.json`, rigtig
+`history.json`, Pro fra `passthrough`-stubben (aldrig et kald til mahope.tools),
+intet stubbet ud over licensen. Ét site hvis nyeste pass var 8 dage gammelt, og
+ti registrerede dage á 24 checks i historikken:
+
+```
+| http://c.dk/ | UP (200) ⚠️ stale — last check 8 d ago | 100% (3 checks) | 100% (10 recorded d, 240 checks) | … |
+**3 site(s) · 1 up · 1 down · 17 checks · 4 failed · 1 stale (no check in the last 2 d)**
+**Monitoring data is stale for 1 site — no pass in the last 2 days:** http://c.dk/ (8 d)
+```
+
+Én række der påstår 240 checks, en resumelinje der påstår intet pass i to dage,
+i det dokument et bureau sender videre til den kunde, det fakturerer. **Ingen af
+tallet er opdigtet** — hvert af dem er hvad sin egen fil holder — men en kunde
+kan ikke se hvilken fil der er bag, og de to kan ikke begge være sande.
+
+**Årsagen er P1-30 halvvejs.** Vindueskolonnen læser `history.json`, alt andet i
+rækken læser `state.json`, og P1-30 lukkede *én* af de to retninger: historikken
+mangler et pass staten kender ran (`— (last check missing from the history file)`).
+Dens egen doc-kommentar siger det, ordret: `lastChecked` "is only ever used to say
+that the history file is missing a pass that demonstrably ran". Den anden retning
+havde ingen læser. Det er den retning, der læses som en pral: de 240 er ikke
+opfundet, de er bare checks maskinen tog **efter** den holdt op.
+
+**Rettelsen er spejlet i samme ejer.** `passesAfterLastPass` i `windowSummary()`,
+lige så tælle hele registrerede dage der ligger *efter* det seneste pass staten
+kender — ikke timer, så et ur der er minutter forsinket ikke kan sætte en linje i
+et kundedokument. Et pass uden for vinduet er ikke evidens for noget, så det tæller
+`0` frem for at gætte. `emptyWindow()` får feltet med, så `--json` kan forgrene på
+feltet og ikke på dets fravær. `windowPassesAfter` i rapporten + én navngiven linje
+under tabellen + én sætning i fodnoten.
+
+**Målt efter:** kun `http://c.dk/` udløser den, `a.dk` og `b.dk` er tegn for tegn
+uændrede — filer der er enige siger intet. **Ingen status, exit-kode, uptime-tal,
+celle eller resumetalt flytter sig**, og vinduestallet er ikke skjult: det er hvad
+historikken holder, og at skjule det ville være en tredje påstand frem for en
+opløsning af de to første.
+
+**7 nye tests i `test/passesafterlastpass.test.js`** → **661/661** (654 + 7);
+audit 0/0; `matrix --check` exit 0; `node --check` ren på alle JS, `git diff
+--check` rent. Én målt mutation dør med **3 fejl** (tælleren gjort til konstant 0).
+Ingen ny claim, ingen matrix-række, intet nyt krav, ingen deploy-note (CLI-repoet
+deployer ikke). `ceo/passes-after-last-pass`.
+
+**Én fejl i min egen test, fundet af gaten:** jeg hævdede at `emptyHistory()` giver
+`null`, som `windowSummary` gør for et site der aldrig er tjekket. Den giver
+`emptyWindow`-objektet med `passNotRecorded: true` — koden havde ret, testen låste
+den forkerte forventning, og begge tilfælde er nu hver sin påstand.
+
+**Næste:** ❓ 1–3, ❓ 14 og ❓ 16 afventer Mads. De to terminal-lister har den
+samme spejling åben: de læser hver kun `state.json`, så de kan ikke se den her
+uoverensstemmelse overhovedet — spørgsmålet er, om de *bør* sige noget, når
+historikken og staten er uenige.
+
 ## Status fra denne iteration (91, P1-74 — de to kommandoer beskrev ét site med to sætninger, og målingen fandt hvorfor i `undici`s kildekode)
 
 **Målt først, nul kode ændret.** Ren `main`, rigtig CLI, to rigtige lokale servere
@@ -6223,3 +6279,37 @@ ingen deploy-note (CLI-repoet deployer ikke).
 af den, og hver ny fil med tallet i er endnu en ejersom skal låses. CI-matrixen er bevidst
 kun på 24; lokal kørsel springer til den **højeste** understøttede Node, fordi det er
 nærmest ved det en bruger af den publicerede CLI kører.
+
+### P1-76 — FÆRDIG 2026-09-28 (`ceo/passes-after-last-pass`) — Kundenrapporten talte checks på dage maskinen holdt op med at tjekke
+
+**Målt 2026-09-28, nul kode ændret.** Rigtig CLI, rigtig `state.json`, rigtig
+`history.json`, Pro fra `passthrough`-stubben, intet stubbet ud over licensen. Ét
+site hvis nyeste pass var 8 dage gammelt, ti registrerede dage á 24 checks:
+
+```
+| http://c.dk/ | UP (200) ⚠️ stale — last check 8 d ago | 100% (3 checks) | 100% (10 recorded d, 240 checks) | … |
+**Monitoring data is stale for 1 site — no pass in the last 2 days:** http://c.dk/ (8 d)
+```
+
+P1-30 lukkede én retning af uoverensstemmelsen mellem de to filer og dokumenterede
+i sin egen kode, at `lastChecked` *kun* bruges til den retning. Den anden havde ingen
+læser, og den er den der læses som en pral.
+
+**Rettelsen:** `passesAfterLastPass` i `windowSummary()` som spejlet af
+`passNotRecorded`, talt i hele registrerede dage (aldrig timer, så et ur der er
+minutter forsinket ikke udløser den), `0` når passet ligger uden for vinduet, og
+feltet med i `emptyWindow()` så `--json` kan forgrene på feltet. `windowPassesAfter`
+på sitet, én navngiven linje under tabellen der siger hvilken kolonne der skal
+troes, og én sætning i fodnoten der nævner begge retninger.
+
+**Acceptkriterium, målt:** en maskine hvor de to filer er enige skriver **tegn for
+tegn** det samme som før; kun det site hvor historikken har dage efter det seneste
+pass får linjen. 7 nye tests i `test/passesafterlastpass.test.js` → **661/661**
+(654 + 7); audit 0/0; `matrix --check` 0; `node --check`, `git diff --check` grønne.
+Én målt mutation (tælleren → konstant 0) dør med 3 fejl. Ingen status, exit-kode,
+uptime-tal, celle, resumetalt, matrix-række eller ny claim ændret. **Ingen
+deploy-note** — CLI-repoet deployer ikke.
+
+**Åbent og bevidst ikke rettet:** de to terminal-lister (`status`, `watch --status`)
+læser kun `state.json` og kan derfor ikke se uoverensstemmelsen. Om de *bør* sige
+noget er et valg, ikke en måling, så det ligger ikke i denne opgave.
