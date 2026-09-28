@@ -57,3 +57,67 @@ export const ANCHOR = new Date();
 export function daysBefore(days, from = ANCHOR) {
   return new Date(from.getTime() - days * MS_PER_DAY).toISOString();
 }
+
+/**
+ * A Pro license whose `validatedAt` means what the field means: *this machine
+ * checked with the license server, and it was recent*.
+ *
+ * P1-94 — measured, not predicted. The plan expected these fixtures to rot the
+ * way P1-93's did, by printing a sentence whose age drifts. They do not. They
+ * rot through a different door, one the file never mentions, and it is the
+ * product's own contract doing it: `src/license.js` keeps a validated Pro
+ * status for `OFFLINE_GRACE_MS` (7 days) so a server outage never locks a
+ * paying customer out, and ages `validatedAt` against the *wall* clock. A test
+ * that writes a state file and then runs the **real** `report` in a child
+ * process therefore hands the command a license that expires in seven days:
+ *
+ *   $ deskuptime report
+ *   ❌ Error: the client report needs an active Pro license. This machine is
+ *      unverified with the license server (not verified for 10 days; …)
+ *
+ * Two files, one test each, both green today and both red from the eighth day
+ * on. It never looks like an age: the report is not produced at all, so there is
+ * no sentence to drift — the exit code is 1 and stdout is empty. Measured on
+ * the unchanged tree by moving every date literal in the file back N days, which
+ * is what N days of real time does to a frozen fixture:
+ *
+ *   +1d   +7d   +30d   +90d   +365d
+ *   0     1     1      1      1     test/history.test.js
+ *   0     1     1      1      1     test/reportkeyreason.test.js
+ *
+ * The five other files the plan listed keep a fixed instant and stay green at
+ * every horizon, and the reason is worth keeping: they hand the license to
+ * `buildReport`, which by its own contract does not read `state.license` at all
+ * (src/report.js:152). A fixed `now` for an in-process reader is determinism
+ * bought on purpose. It is only the stamp a *child* ages that has to follow
+ * the machine.
+ *
+ * So the two clocks in these files are deliberately different, and the split is
+ * the fix: `NOW` stays a literal because `buildReport` is handed it as
+ * `{ now }`, and the license comes from here because the wall clock is what
+ * ages it.
+ */
+export function validatedNow({ key = '0123456789abcdef0123456789abcdef', instance = 'deskuptime-test', ...rest } = {}) {
+  return { key, instance, plan: 'pro', status: 'active', validatedAt: new Date().toISOString(), ...rest };
+}
+
+/**
+ * The stamp `runPass` writes when a pass has just measured a site.
+ *
+ * P1-94, second door in the same test file. `test/history.test.js` wrote a
+ * state file whose `lastChecked` was the file's own fixed `NOW` and then ran the
+ * real `report` on it, so from the eighth day on the pass fell outside the
+ * `--days 7` window the test itself asks for, and the report said
+ * `— (no pass in the last 7 d)` — the exact sentence line 357 asserts it must
+ * *not* contain. The report was right and the fixture was a fiction that had
+ * expired, the same shape as P1-93's `oversizedpage`.
+ *
+ * So the rule is not "licences follow the clock" but the one underneath both:
+ * **a stamp that a child process ages must be this machine's clock.** A literal
+ * is only ever safe where the reader is handed the same instant in-process —
+ * `buildReport({…}, { now })`, `readEntry({…}, { now })` — and that is the whole
+ * reason the twenty files the plan flagged are correct as they are.
+ */
+export function checkedNow() {
+  return new Date().toISOString();
+}

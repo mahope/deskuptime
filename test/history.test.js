@@ -35,6 +35,7 @@ import {
 } from '../src/history.js';
 import { buildReport, renderReportJson, renderReportMarkdown, uptimePercent } from '../src/report.js';
 import { getStateFile, runPass } from '../src/watch.js';
+import { checkedNow, validatedNow } from './helpers/clock.mjs';
 
 const run = promisify(execFile);
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -327,8 +328,8 @@ test('--days is validated instead of silently ignored', async (t) => {
   const home = tempHome(t);
   mkdirSync(join(home, '.deskuptime'), { recursive: true });
   writeFileSync(join(home, '.deskuptime', 'state.json'), JSON.stringify({
-    license: { key: LICENSE_KEY, instance: 'deskuptime-agency', plan: 'pro', status: 'active', validatedAt: NOW.toISOString() },
-    urls: { [URL_A]: { wasUp: true, lastStatus: 200, checks: 4, checksUp: 4, lastChecked: NOW.toISOString() } },
+    license: validatedNow({ key: LICENSE_KEY, instance: 'deskuptime-agency' }),
+    urls: { [URL_A]: { wasUp: true, lastStatus: 200, checks: 4, checksUp: 4, lastChecked: checkedNow() } },
   }));
   const env = { ...process.env, HOME: home, USERPROFILE: home };
 
@@ -350,8 +351,12 @@ test('--days is validated instead of silently ignored', async (t) => {
   assert.match(good.stdout, /Uptime \(window\)/);
   assert.ok(!good.stdout.includes(LICENSE_KEY), 'the license key leaked into the CLI report');
   // No history file exists in this home, while the state file records a pass
-  // from NOW: the report must still render, and it must name the missing file
-  // rather than say the site was not monitored in the last 7 days (P1-30).
+  // from just now (`checkedNow()`, P1-94 — it used to be this file's fixed
+  // `NOW`, and from the eighth day on the pass fell outside the very window
+  // this test asks for, so the report printed the `no pass in the last 7 d` the
+  // next line forbids): the report must still render, and it must name the
+  // missing file rather than say the site was not monitored in the last 7 days
+  // (P1-30).
   assert.match(good.stdout, /last check missing from the history file/);
   assert.doesNotMatch(good.stdout, /no pass in the last 7 d/);
 });
