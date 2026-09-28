@@ -44,6 +44,7 @@ import { fileURLToPath } from 'node:url';
 import { getStateFile, runPass } from '../src/watch.js';
 import { readEntry } from '../src/status.js';
 import { buildReport, renderReportMarkdown } from '../src/report.js';
+import { ANCHOR, daysBefore } from './helpers/clock.mjs';
 
 const run = promisify(execFile);
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
@@ -51,7 +52,15 @@ const CLI = fileURLToPath(new URL('../src/cli.js', import.meta.url));
 
 const SITE = 'https://kunde.dk/';
 const OTHER_SITE = 'https://to.dk/';
-const BASE = '2026-09-27T09:00:00.000Z';
+/**
+ * The instant this file's fixtures age from: the machine's own clock, not a
+ * literal. The rows below are printed by a *child process* running the real
+ * `status` and `watch --status`, and those age a stamp against the wall clock —
+ * so a literal here made every expected age in this file true for exactly one
+ * day and false for ever after (P1-93, measured: `2 d ago` on the row, `3 d ago`
+ * in the assertion, seven tests red across three files).
+ */
+const BASE = ANCHOR;
 const SHA256 = 'a'.repeat(64);
 const NEW_SHA256 = 'b'.repeat(64);
 const OLD_AUTHORITY = 'Ganske Cloud A/S';
@@ -60,7 +69,7 @@ const NEW_AUTHORITY = 'Rogue Cert BV';
 const CHANGED = `🏢 certificate answers from a different issuer 2 d ago (${OLD_AUTHORITY} → ${NEW_AUTHORITY})`;
 
 function daysAgo(days) {
-  return new Date(new Date(BASE).getTime() - days * 24 * 60 * 60 * 1000).toISOString();
+  return daysBefore(days, BASE);
 }
 
 /** A site a real pass measured: 200, a certificate, and one known authority. */
