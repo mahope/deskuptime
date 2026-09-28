@@ -46,12 +46,12 @@ function showHelp() {
 USAGE:
   deskuptime check <urls...> [--json] [--timeout ms]  Check one or more URLs (--timeout budgets the whole check)
   deskuptime headers <url>      Redirect chain, HTTPS enforcement + security headers
-  deskuptime watch <url> [--interval 300] [--webhook URL]  Monitor in background (free: up to ${FREE.urlLimit} URLs)
+  deskuptime watch <url> [--interval 300] [--webhook URL] [--activate <key>]  Monitor in background (free: up to ${FREE.urlLimit} URLs)
   deskuptime watch <url> --once                      Run one monitoring pass and exit
   deskuptime unwatch <url> [url2 ...]  Stop monitoring URLs and free the slot
   deskuptime watch --status                         Saved status, no network calls (marks a pass older than ${STALE_AFTER_DAYS} d as stale)
   deskuptime report [--title "Client"] [--days 30] [--json]  Client-ready uptime report (Pro)
-  deskuptime activate <key>     Unlock Pro with your license key
+  deskuptime activate <key>     Unlock Pro with your license key (same flag: watch <url> --activate <key>)
   deskuptime deactivate         Free this machine's Pro seat (${PRODUCT.machines} machines per license)
   deskuptime status             Show license state (active/cached/unverified/invalid/free) + monitored URLs
   deskuptime --version          Show version
@@ -61,6 +61,7 @@ EXAMPLES:
   deskuptime check https://example.com
   deskuptime check https://site1.com https://site2.com
   deskuptime watch https://mystore.com --interval 300
+  deskuptime watch https://mystore.com --activate <license-key>   # just paid: unlock Pro and start monitoring in one command
   deskuptime report --title "Acme — uptime September" > acme-september.md
   deskuptime report --days 7 --title "Acme — this week" > acme-week.md
 

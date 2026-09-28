@@ -140,6 +140,35 @@ efter alder præcis som `refreshLicense` ville: inden for 7 dage `active`, deref
   `deactivated: true`. Ellers er pladsen stadig optaget, og det siger kommandoen
   til brugeren. *(Rust: samme regel.)*
 
+### 3.1 De to aktiveringsveje
+
+Der er to måder at sætte nøglen i `state.json`, og de skriver **samme record**
+felt for felt — `key`, `instance`, `plan`, `status: active`, `validatedAt` og de to
+valgfrie felter `machinesInUse` og termen fra `expires_at`:
+
+1. `deskuptime activate <license-key>` — egen kommando.
+2. `deskuptime watch <url> --activate <license-key>` — samme nølle ind i den
+   kommando, der starter loopen, så en der lige har betalt kan låse Pro op og
+   begynde at overvåge i én terminal.
+
+Målt 2026-09-28 før den anden vej blev nævnt nogensteds: de to skrev to forskellige
+filer. En kunde der havde kørt `activate` og derefter startede `watch` med samme
+nøgle fik en record uden `expiresAt` og uden `machinesInUse`, så `deskuptime status`
+sagde `Pro license: active, last verified …` — ingen udløbsdato, ingen pladser — for
+en kunde der lige var blevet fortalt `2 of 3 machines in use`. Derfor er der nu én
+record, ikke to.
+
+Reglerne for den anden vej er målt, ikke antaget:
+
+- den springes helt over, når maskinen **allerede** er Pro — en gyldig nøgle på en
+  Pro-maskine gør ingen ny serverkald og ingen ny record;
+- serveren kan ikke nås → `Nothing was changed. Try again when the server answers —
+  your Pro is unchanged.`, og **loopen starter alligevel på gratisniveauet**;
+- nøglen er ikke en nøgle → `Activation failed: …`, og looper starter på
+  gratisniveauet. Den bruger aldrig en plads på en nøgle serveren ikke bekræfter;
+- den kan ikke kombineres med `--once` eller `--status` (`--once cannot be combined
+  with monitoring options`), fordi en cron-kørsel ikke skal skrive en licens.
+
 ## 4. Hemmeligheder i output
 
 Alle fejlstrenge fra serveren og fra `fetch` passerer `redactSecrets()`, som

@@ -1,5 +1,67 @@
-> **Seneste:** iteration 120 (P1-105, færdig) — historien står i køens afsnit
-> `P1-105 — FÆRDIG 2026-09-28` lige under `## Prioriteret kø`.
+> **Seneste:** iteration 121 (P1-106, færdig) — historien står i køens afsnit
+> `P1-106 — FÆRDIG 2026-09-28` lige under `## Prioriteret kø`.
+
+## Status fra denne iteration (121, P1-106 — kommandoen der tager nøglen *og* starter overvågningen var bygget og nævnt nul steder)
+
+**Målt først, nul kode ændret.** Køen var tømt. ❓ 16 og ❓ 19 er begge
+forbrugervalg med en forbeholdsregel ("mål først", "sig til"), og ❓ 18 og ❓ 20
+kræver en beslutning eller en bænk der ikke kan gives herfra. Så målingen gik
+på den fjerde klasse: **er der en bygget vej til Pro, som ingen kundeflade nævner?**
+Grep på tværs af de tre flader en betalt kunde læser:
+
+```
+$ grep -c -- "--activate" README.md docs/*.md   →  0
+$ deskuptime --help | grep -c -- "--activate"  →  0
+$ grep -n "activateKey" src/cli.js src/watch.js
+  src/cli.js:705:        case '--activate':      ← parseren
+  src/cli.js:786:        activateKey: options.activateKey,   ← kaldsstedet
+  src/watch.js:1749:     if (opts.activateKey && !pro) {    ← aktiveringen
+```
+
+**Den var bygget, den virkede, og ingen vidste den.** `deskuptime watch <url>
+--activate <nøgle>` låser Pro op og starter loopen i én kommando — målt med rigtig
+CLI, rigtig lokal server, rigtig temp-HOME:
+
+```
+$ deskuptime watch http://127.0.0.1:55978/ --activate 0123…cdef
+  🔑 Activating license...
+  ✅ Pro activated (3 of 3 machines in use).
+  👀 Monitoring 1 URL(s), every 300s. [Pro]. Ctrl+C to stop.     ← Pro, ikke gratis
+```
+
+Det er præcis den kunde, der lige har betalt $19 og har nøglen i hånden. Den eneste
+vej værktøjet fortalte ham var to kommandoer: `deskuptime activate <key>` og så
+`deskuptime watch <url>`. På et repo med 35 npm-downloads om måneden og 0
+GitHub-stjerner er forskellen mellem en kunde, der overvåger fem minutter efter
+betaling, og en der ikke gør.
+
+**Målingen fandt også, at de to veje engang skrev to forskellige filer** — det er
+rettet i koden (kommentaren i `src/watch.js:1752`), men ingen flade havde nævnt at
+der *er* to veje, så ingen vidste at de skulle stemme overens.
+
+**Rettelsen er tre flader og en lås, ingen ny kode.** `--help` fik flaget på
+`watch`-linjen, et eksempel, og `activate`-linjen peger nu på flaget; README fik
+one-step-formen lige under nøglen den lige har købt, plus den påstand README nu
+gør og som låsen holder fast ved ("samme license record"); `docs/license-lifecycle.md`
+fik §3.1 med de to aktiveringsveje og de fire regler for flaget, alle fire målt.
+**Seks nye tests i `test/activateflag.test.js`** — tre overfladelåse (renderet
+`--help`, README, spec) og tre adfærdslåse gennem rigtig CLI + rigtig loop +
+rigtig licens-stub, så låsen ikke kan mættes med en linje prosa koden er holdt op
+at adlyde → **828/828** (822 + 6); audit 0/0; `matrix --check` tavs; `node --check`
+og `git diff --check` grønne. **To mutationer målt, begge døde** (2/2 fejl): fjernet
+flag fra `watch`-linjen, og fjernet one-step-formen fra README.
+
+**Fire filer rørt:** `src/cli.js` (tre linjer i hjælpeteksten), `README.md`,
+`docs/license-lifecycle.md`, `test/activateflag.test.js` (ny, 6 tests).
+
+**Valgt bevidst og ikke gjort:** at gøre `deskuptime activate <key> <url>` til en
+alternativ syntax. Der er to veje i dag, og de skriver samme record; at slå dem
+sammen er et redesign af en betalt kommando, ikke en dokumentationsopgave.
+
+**Ingen deploy-note:** CLI-repo uden live-deploytarget, og ingen kundeflade i et
+publiceret artifact blev ændret uden for README/help, som følger med næste
+npm-version. Ingen trafik-baseline at skrive — deskuptime.com ligger i et andet
+repo (P0-12 `BLOCKED`).
 
 ## Status fra denne iteration (120, P1-105 — ét site skrevet en anden måde stoppede hele cron-passet og sagde "Free tier monitors 3 URLs")
 
@@ -4788,9 +4850,38 @@ Den aktuelle gate-definition er registreret her:
 
 ## Prioriteret kø
 
-> **Køen er tom for målte kandidater** (iteration 120). Næste iteration skal
+> **Køen er tom for målte kandidater** (iteration 121). Næste iteration skal
 > **måle først** og finde sin egen opgave. Se `❓ Til Mads` for de konkrete
 > kandidater. ❓ 21 er nu besvaret i kode (P1-105) og lukket.
+
+### P1-106 — FÆRDIG 2026-09-28 (`ceo/activate-with-watch`) — kommandoen der tager nøglen *og* starter overvågningen var bygget og nævnt nul steder
+
+**Målt først, nul kode ændret.** Se afsnittet øverst. Kort fortalt: `deskuptime
+watch <url> --activate <nøgle>` låser Pro op og starter loopen i én kommando, den
+virkede første forsøg med rigtig CLI og rigtig løbe, og den stod i ** nul af de tre
+flader en kunde læser efter at have betalt: `grep -c -- "--activate" README.md
+docs/*.md` → 0, samme i `--help`. Kunden fik to kommandoer i stedet for én.
+
+**Rettelse:** tre flader (`--help`, README, `docs/license-lifecycle.md` §3.1) og en
+lås. Ingen ny kode, ingen ny regel, ingen ændret adfærd. Seks nye tests i
+`test/activateflag.test.js` — tre overflade, tre adfærd gennem rigtig CLI og rigtig
+licens-stub → **828/828** (822 + 6); audit 0/0; `matrix --check` tavs. To mutationer
+målt, begge døde.
+
+**Målt undervejs, kun til notat:** fire regler for flaget, alle skrevet ned i
+specen. (a) springes over når maskinen allerede er Pro; (b) serveren kan ikke nås →
+`Nothing was changed. Try again when the server answers — your Pro is unchanged.`,
+og loopen starter alligevel på gratisniveauet; (c) en nøgle serveren afviser (409)
+koster ingen plads og skriver ingen `license` i state-filen; (d) `--once` og
+`--status` afviser flaget, så en cron-kørsel ikke kan skrive en licens. **Ingen af
+dem er ændret** — de var allerede sådan.
+
+**Åbent punkt til en senere iteration:** de to veje er to steder i koden
+(`src/cli.js` og `src/watch.js`), der bygger den samme licensrecord felt for felt.
+Målt i dag at de gør; de to gør det kun fordi den anden blev rettet efter en måling
+der viste at de ikke gjorde det. En fælles ejer ville være det samme svar som
+❓ 22's "find den ene streng, der er alene om at svare" — ikke gjort her, fordi det
+er en refaktor af to betalte veje uden en målt fejl.
 
 ### P1-105 — FÆRDIG 2026-09-28 (`ceo/respell-cron-slot`) — ét site skrevet en anden måde stoppede hele cron-passet og sagde "Free tier monitors 3 URLs"
 
@@ -8147,13 +8238,20 @@ for selv. Ingen gemt nøgle er omskrevet, ingen eksisterende adgangsd tilstand
     sluttede på deres eget svar, og lagde taklinjen i **én** af dem. Det var et
     målt fund for de to der blev ladt ude: de læses af en CI-log og en cron-mail, og
     repoet sender en GitHub Action der kalder `check`. Den anden halvdel er et
-    **smagsspørgsmål, ikke et fund**: `deskuptime status` har købslinjen for
+    smagsspørgsmål, ikke et fund`: `deskuptime status` har købslinjen for
     gratisbrugere, men den daglige liste `watch --status` — den samme bruger
     kører hver dag — nævner Pro **aldrig**. Kontraktens konverteringsregel siger at
     Pro skal vises *"der, hvor brugeren mangler det"*, og en gratisbruger der
     kører listen dagligt med 1 af 3 pladser i brug mangler den. Målt den
     konkrete mangel først (hvor mange af dagens brugere rammer selve URL-væggen),
     og lad være med at sælge i footeren af en liste der er helt grøn.
+    **Målt 121 (P1-106) i en anden vinkel, som ikke er et smagsspørgsmål:** der
+    var en helt anden bygget vej til Pro, som var nævnt nul steder. Den er nu
+    dokumenteret. Det er det samme mønster ❓ 16 beskriver — en kunde skal ikke
+    kende en mulighed, kun fordi nogen har lavet den — og det peger på at
+    næste måling bør være: **hvilke andre byggede veje står i ingen kundeflade?**
+    Ikke kun Pro: også de gratis flader, og de steder hvor de to niveauer skal
+    mødes.
 
 12. ~~Vindueskolonnen dækker ikke hele vinduet.~~ **Besvaret i kode 2026-09-26 (P1-38, `ceo/incomplete-window`):** valget var (b), den navngiven linje. Målingen og de to betingelser står i afsnittet øverst og i `docs/agency-report.md` §4. Cellen er uændret; kun en ny linje, `1 with an incomplete window` i resumelinjen og fire additive felter. **Valget, og hvorfor:** (a) ville ændre en celle i et kundedokument bureauer har sat i systemer; (b) er additivt og rører ingen konsument. **(a) er stadig mulig** som en senere ændring, hvis Mads vil have antallet i cellen — målingen og koden til den ligger i `windowCoverage`.
 
@@ -8289,6 +8387,24 @@ for selv. Ingen gemt nøgle er omskrevet, ingen eksisterende adgangsd tilstand
 - **Iteration 65 (P1-49, målt + fix):** ❓ 1–3 ubesvarede, så målingen gik på den sidste del af P1-47's egen afvejning, som aldrig var målt: `down`/`up` er bevidst aldrig tynget. Målt først med rigtig `runPass` + rigtig `sendWebhook` mod en lokal side der skiftede 200/500 på et ur, 40 pass: **28 POSTs**, 2 016/døgn pr. site. Efter: **4**. Reglen er bevidst *ikke* P1-47s, fordi en ren tidsdæmpning af `down` kan bruge vinduet i stilhed på et rigtigt nedbrud; tærsklen (4 skift i vinduet) er derfor det bærende, og den er målt med to tests der begge siger at nedbrud **ikke** holdes. `readTransitionAlert()` i `src/status.js` er den ene ejer og beskrær selv tidslisten, fordi den strukturelle lås `four pass states are decided in one place` døde min første version, der alderede et tidspunkt i `watch.js`. 10 nye tests i `test/flap.test.js` (lagt til i `npm test`) → **446/446** (436 + 10); audit 0/0; `node --check`, `matrix --check`, `git diff --check` grønne på Node 26.7.0. Matrix-påstanden `Webhook alerts on every event` blev falsk og siger nu at en flappende site holdes på 1/time pr. art efter 4 skift. **Ingen mutationstest** — over tidsbudgeten. `ceo/flap-alerts`, `fe9e7db`, mergeet til `main` og pushet 2026-09-27. **Næste:** ❓ 1–3 og ❓ 14, ellers en målt opgave.
 
 ## Deploy-/release-noter
+
+- **Release-note P1-106:** Har du lige betalt for Pro og vil i gang med at
+  overvåge? **Én kommando gør begge dele:**
+  `deskuptime watch https://yoursite.com --activate <license-key>`. Den låser
+  Pro op og starter overvågningen i samme terminal, i stedet for at du skulle
+  køre `deskuptime activate` og derefter `deskuptime watch`. Vejen har altid
+  virket — den stod bare i ingen af de tre steder, du kigger i efter en betaling,
+  så værktøjet kunne kun fortælle dig de to kommandoer. Nu står den i `deskuptime
+  --help`, i README lige under den nøgle du har købt, og i
+  [`docs/license-lifecycle.md`](docs/license-lifecycle.md) §3.1.
+  **De to veje er stadig lige ældre:** de skriver den samme licensrecord, så
+  `deskuptime status` læser det samme uanset hvilken du brugte. Og nøklen
+  nægtes aldrig en plads, serveren ikke har bekræftet — kan serveren ikke
+  nås, siger kommandoen at intet er ændret, og overvågningen starter alligevel på
+  gratisniveauet. **Cron-kørsel kan ikke bruge flaget:** `--once` og `--status`
+  afviser det, fordi et planlagt job ikke skal skrive en licens. **Ingen
+  funktion, exit-kode, matrix-række, JSON-felt eller købslink er ændret** — kun
+  dokumentation, og en test der holder den fast.
 
 - **Release-note P1-105:** En cron-kørsel på **gratisniveauet** kunne holde op
   med at overvåge, uden at sige det. Hvis du gemmer dine sites i den skrivemåde

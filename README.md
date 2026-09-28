@@ -119,6 +119,18 @@ deskuptime activate <license-key>   # unlock Pro on this machine
 deskuptime deactivate               # free this machine's seat for another one
 ```
 
+Just bought, and you want to start watching right away? One command does both — it
+activates the key and starts the loop as Pro, in the same terminal:
+
+```bash
+deskuptime watch https://yoursite.com --activate <license-key>
+```
+
+The two ways to activate write the same license record, so `deskuptime status` reads
+the same afterwards either way. If the license server cannot be reached, the command
+says nothing was changed, your existing Pro state is untouched, and the loop starts
+on the free tier — it never spends a seat on a key the server has not confirmed.
+
 ### What leaves your machine
 
 <!-- BEGIN GENERATED: license data -->
