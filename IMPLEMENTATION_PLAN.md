@@ -1,3 +1,58 @@
+## Status fra denne iteration (95, P1-79 — kundenrapporten sagde "stable" om en side, der aldrig blev læst fordi den var for stor)
+
+**Målt først, nul kode ændret.** Rigtig `runPass`, rigtig `state.json`, rigtig rapport,
+rigtig 3 MiB-side, Pro fra `passthrough`-stubben, intet stubbet ud over licensen:
+
+```
+report | http://…/stor | UP (200) | 100% (1 check) | … | stable · 3145728 bytes, read at an unknown time |
+```
+
+`stable` er påstanden om, at siden blev læst og ikke har ændret sig — i det ene
+dokument et bureau sender videre, om en side der **aldrig blev åbnet**. Samme
+falske fri kort som P1-21 fjernede fra `check --json`, nu i den betalte flade.
+Og fodnotens egen løfte er brudt: "a page over the content-check limit is never
+read, so it shows — rather than a size" — den siger `stable` med en størrelse.
+
+**Årsagen er at passet aldrig fik P1-21s regel.** `readContentState` skelner
+siden 2026-09-26 mellem *målt* og *erklæret* (`measured`), og det er den
+ejer `check --json` spørger. `runPass` testede `Number.isFinite(contentLength)` —
+et tal, en server *erklærer* på en side vi så bagefter springer over, også
+erklærer. Så den erklarede størrelse blev lagret som en målt størrelse, mens
+`lastContentReadAt` (kun stemplet hvor der skrives en hash) forblev tom — derfor
+"read at an unknown time".
+
+**Målingen fandt hvorfor de eksisterende tests var grønne.** Den *samme* side
+serveret uden `content-length` gav `contentLength: null`, nåede aldrig linjen og
+svarede `—` korrekt. Samme grænse, samme ulæste side, to svar: P1-78's test
+kunne ikke se den erklærende form. Begge former måles nu i samme test, så de to
+svar ikke kan glide fra hinanden igen.
+
+**Rettelsen er at spørge den ene ejer.** `runPass` spørger nu
+`readContentState(result.content).measured` — samme kald `check` og
+`check --json` bruger — så writer og læser ikke kan være uenige om hvilke tal
+der beskriver en læsning. **Målt efter:** begge former skriver intet, rapporten
+skriver `—`, begge terminal-lister tier som de gør for en ulæst side. En side
+der *blev* læst beholder sin størrelse tegn for tegn; en side der voksede over
+grænsen beholder den målte størrelse fra passet der læste den, med sit eget
+`lastContentReadAt` — P1-78's alder er urørt.
+
+**5 nye tests i `test/oversizedpage.test.js`** → **683/683** (678 + 5); audit
+0/0; `matrix --check` exit 0; `node --check` ren på alle JS, `git diff --check`
+rent. **Tre målte mutationer døde alle** (3 fejl hver): den gamle
+`Number.isFinite`-port, en `fetched ||`-port, og porten fjernet helt.
+`ceo/oversized-page-size`.
+
+**To fejl i mine egne tests, fundet af gaten:** den første version startede fra
+en tom `state.json`, så det første pass endte exit 2 (DOWN) og `promisify` slog
+alle fire tests ihjel — de skal starte fra et UP-baseline-pass, som de andre
+filters gør. Og testen der sammenlignede de to rækker hele, fejlede på portnummer
+og responstid, som netop er de ting der *skal* være forskellige: kun
+Content-cellen er påstanden, så den sammenlignes nu alene.
+
+**Næste:** ❓ 1–3, ❓ 14 og ❓ 16 afventer Mads. Køen er tømt; nye opgaver skal
+findes ved måling, som denne. Målingen nåede igen den betalte rapport gennem de
+to lister — samme vej.
+
 ## Status fra denne iteration (94, P1-78 — kundenrapporten trykkede sidens størrelse uden at sige, hvor gammel den var, mens begge lister sagde det)
 
 **Målt først, nul kode ændret.** Rigtig CLI, rigtig `state.json`, rigtig rapport,
@@ -5465,6 +5520,8 @@ for selv. Ingen gemt nøgle er omskrevet, ingen eksisterende adgangsd tilstand
 10. **Skal der skæres en ny `v0.2.9-cli`-release?** P0-9b gør curl-stien væsentligt bedre, men *kun* en release med et publiceret `.sha256` gør checksum-verificeringen obligatorisk; lige nu advarer installeren om 0.2.5, fordi ingen af de 12 releases har en sidecar. Release-workflowen uploader automatisk sidecaren, så det eneste arbejde er `git tag v0.2.9-cli && git push --tags` (det gør Mads — agenten laver aldrig tags) og `npm publish` af 0.2.9. Samme release synkroniserer Homebrew-formlen, som stadig peger på en ældre version i det eksterne tap-repo.
 11. Er `v1`-tagget (2026-08-26) med gamle 0.1.3-tarballs og 0.1.4/0.2.6-desktopsassets stadig nødvendigt, eller er det et rodet relikvieskilt, der bør slettes eller omdøbes? Det er det eneste release uden versionssuffix, og det ligger lige i installérens kandidatliste (den springes over i dag, fordi der intet `deskuptime-<ver>.tar.gz`-asset passer til `v1`).
 
+- **Release-note P1-79:** En kunde side, der er vokset over **2 MiB**, blev skrevet som **`stable`** i rapporten — altså "siden er læst, og den har ikke ændret sig" — i det dokument du sender videre til kunden. Siden var aldrig læst: værktøjet springer overlarge sider over, så det er ikke et nedbrud, bare ingen sidesignal. Før skrev rapporten `stable · 3145728 bytes, read at an unknown time`, og de to terminal-lister skrev samme tal. Nu siger rapporten `—` og listerne tier, præcis som for en side der aldrig er blevet læst. **Mærket:** det er kun den erklærende form. Server du sender **en stor side med `content-length` på**, var den gemt som en målt størrelse; samme side **streamet uden den** var allerede korrekt. Begge former er nu målt og dækket af test, så de ikke kan glide fra hinanden igen. **En side der *er* læst, beholder sin størrelse tegn for tegn**, og en side der voksede over grænsen beholder den målte størrelse fra det pass der læste den — med sin egen alder, som siden P1-78. `check` og `check --json` er urørte: de fortæller stadig, hvor stor siden er, og at de sprang den over med grænsen og et nedre tal. **Ingen exit-kode, matrix-række eller JSON-felt er ændret.**
+
 - **Release-note P1-38:** `deskupreport` kan nu se forskel på et site der var overvåaget hele perioden, og et site hvor bureauets eget overvågningsloop lå ned i to dage. Før skrev `Uptime (window)`-kolonnen `95.83% (28 recorded d, 1344 checks, 56 failed)` i et dokument, hvis fodnot siger at kolonnen tæller "the passes recorded in the last 30 days" — to tal om de samme 30 dage, hvor det ene dækker 28 af dem. Nu skriver rapporten under tabellen **Fewer days recorded than the window for 1 site — the uptime above covers part of the period, not all of it:** `<url> (28 of 30 d)`, og resumelinjen tæller `1 with an incomplete window`. **Cellen er uændret**, så intet i jeres systemer brydes; kun en linje er tilføjet, og `report --json` får fire additive felter (`windowRecordedDays`, `windowGap`, `windowMissingDays`, `summary.windowGaps`). **Et site der først blev overvågt i denne uge får aldrig linjen** — 3 registrerede dage ud af 30 er hele sandheden om et site I netop har tilføjet — og det samme gælder en historikfil der kun startede at blive skrevet i går, uanset hvor længe I har overvåget sitet. Vi kan ikke bevise en mangel på dage, filerne ikke indeholder, og det gælder især lige nu: de daglige buckets startede først at blive skrevet da `report` udkom.
 - **Release-note P1-37:**
 - **Release-note P1-36:** `deskuptime report`, `deskuptime status` og `deskuptime watch --status` kan nu se forskel på et certifikat der er målt i dag, og et der blev målt for flere dage siden. Før skrev en kunderapport, hvis seneste pass var 36 timer gammelt og havde læst `1 d` tilbage, `⚠️ 1 d — renew soon`, talte det i resumelinjen som `1 SSL expiring soon` og skrev `SSL certificate expiring within 14 days — renewal needed: <url> (1 d)` — altså bad den kunde, rapporten er skrevet til, fornye et certifikat der næsten sikkert var udløbet. Dages-tallet er målt på **passets** tidspunkt (`validDays = Math.round((validTo - now) / døgn)`), så det er en nedtælling, ikke en påstand om nu, og rapporten læste det som det modsatte. Nu skriver SSL-kolonnen `🔴 may be expired — last reading: 1 d left, checked 1 d ago` for en læsning der er gammel nok til at certifikatet kan være væk, og det tælles som `1 SSL may be expired` i stedet for som en fornyelse der kan planlægges; linjen under tabellen beder kunden hente en frisk læsning med `deskuptime check <url>`. **Alt under ét dage er tegn for tegn uændret** — en frisk læsning af `3 d` skriver stadig `⚠️ 3 d — renew soon`, en læsning af `20 d` fra i går skriver stadig `20 d`, og et certifikat der *blev* målt som udløbet skriver stadig `🔴 expired 3d ago`, fordi et udløbet certifikat ikke bliver gyldigt af at rapporten er gammel. **Exit-kode, matrix-rækker og alle øvrige felter er uændrede**; `report --json` får to additive felter, `sslMayHaveExpired` og `sslReadingAgeDays`.
@@ -5509,6 +5566,8 @@ for selv. Ingen gemt nøgle er omskrevet, ingen eksisterende adgangsd tilstand
 - **Iteration 63 (P1-47, målt + fix):** ❓ 1–3 ubesvarede, så målingen gik på den betalte kanals *hyppighed* — den eneste del af alarmeringen ingen måling dækkede. Rigtig CLI, temp-HOME, rigtig lokal side med et token pr. forespørgsel: 3 pass → 3 `content changed`-alarmer, ingen af dem handlingsværdige; hver er en POST + en notifikation, så 2 880/dag ved 30 s. **Fix:** `readContentChangeAlert()` i `src/status.js` (1 time, pr. site, ur-baglæns undertrykker intet, intet kasseres) + brug i `runPass`; matrix-claim og §2 opdateret, så påstanden matcher leveringen. 10 nye tests → **431/431**; audit 0/0; `node --check`, `matrix --check`, `git diff --check` grønne på Node 26.7.0. Én ældre test opdateret (lagt krav på den gamle adfærd) og femte pass efter en time tilføjet, så dens eget formål er stærkere. To fejl i mine egne tests fundet (stub sendte `changed` på baseline; tabt `contentHash`-argument gjorde én test grøn af forkert grund). **Ingen mutationstest** — over tidsbudgeten. `ceo/content-alert-flood`, `54e8f54`.
 
 ## Iterationslog
+
+- **Iteration 95 (P1-79, målt + fix):** ❓ 1–3, ❓ 14 og ❓ 16 stadig ubesvarede, så målingen gik på den betalte rapports **Content-celle**. Rigtig `runPass`, rigtig state-fil, rigtig 3 MiB-side, rigtig rapport: `stable · 3145728 bytes, read at an unknown time` om en side der aldrig blev læst — og fodnotens egen løfte ("a page over the content-check limit is never read, so it shows — rather than a size") var brudt af den celle den selv definerer. `readContentState` har skelnet målt/erklæret siden P1-21, og `check --json` spørger den; `runPass` testede `Number.isFinite(contentLength)`, som en server-*erklæring* også opfylder. **Målingen fandt hvorfor P1-78's test var grøn:** samme side uden `content-length` giver `contentLength: null`, nåede aldrig linjen og svarede `—` — samme grænse, samme ulæste side, to svar. Fix: `runPass` spørger `readContentState(result.content).measured`, den ene ejer. Efter: begge former `—`, listerne tier, læste sider urørte, P1-78's alder urørt. 5 nye tests i `test/oversizedpage.test.js` → **683/683** (678 + 5); audit 0/0; `matrix --check` 0; `node --check`, `git diff --check` grønne. Tre mutationer målt, alle døde (3/3/3 fejl). `ceo/oversized-page-size`. **To fejl i mine egne tests fundet af gaten** (tom state → exit 2 slog alle ihj; hel-række-sammenligning fejlede på port og responstid, som netop skal være forskellige). **Næste:** ❓ 1–3, ❓ 14, ❓ 16; ellers en målt opgave.
 
 - **Iteration 89 (P1-75, målt + fix):** ❓ 1–3, ❓ 14 og ❓ 16 stadig ubesvarede, så målingen gik på P1-75, fundet under P1-72's mutationstest: **gaten var rød på maskinens egen `node`, ikke på koden.** Målt på ren `main` 2026-09-28, intet stubbet: `node tools/run-tests.mjs` med `node` først på PATH (**22.23.2**) → **615/635, 20 fejl**, alle 20 `Node.js 24+ is required` (7 fra `install.sh`, 13 fra `action.yml`); samme suite på **26.7.0** → 635/635. Det er jordemoderstudies fælde fra 23. august, vendt: der brød ved deploy fordi byggeserveren var for gammel, her bryder den *før* deploy fordi min egen maskine er, og 20 røde linjer læses som 20 fejl der inviterer en rettelse som intet ændrer. Fix: ny `tools/node-gate.mjs` som **læser** kravet i `package.json` `engines` (aldrig en sjette kopi af tallet) og **måler** hvert kandidat ved at køre det; `resolveRuntime()` i `tools/run-tests.mjs` skifter så suiten kører under en understøttet Node, med den valgte Nodes mappe **først i barnets `PATH`** — målt afgørende, for de 20 fejl kommer fra tests der kører `install.sh` og `action.yml` i en skal: mutation med hele suiten, kun runnerens Node skiftet, viste **14 fejl** (de 13 action-tests + den strukturelle lås), så uden PATH-allet havde rettelsen løst 7 af 20. Skiftet tales højt, højst ét (`DESKUPTIME_NODE_SWITCHED`, fordi en maskine med alle versioner en versionmanager har installeret er almindelig), og uden brugbar Node kommer **én** besked der siger hvad der sker og fire rettelser — målt exit 1, 0 fejlrækker. 14 nye tests i `test/nodegate.test.js` → **649/649** (635 + 14) **målt fra maskinens egen `node` uden `export PATH`**, hvilket var acceptkriteriet. Én test kan ikke stubbes (en rigtig fil: eksekverbar melder sin major, fil uden execute-bit melder intet), og ét **seks-ejeres-lås** binder `engines` ↔ `.nvmrc` ↔ `action.yml`s check og fejltekst ↔ `install.sh` ↔ de fire workflows — før var kun ét par låst. Tre målte mutationer døde alle (1/14/1/1). **To fejl i mine egne tests fundet og rettet i testene, ikke i koden**: `>=24 <25` er korrekt læst som 24, og min "kør aldrig en sti der ikke findes"-påstand havde en probe der kastede i stedet for at svare. Audit 0/0, `matrix --check` 0, `node --check` alle JS, `sh -n`/`bash -n`, `git diff --check` grønne. `ceo/node-gate`, `a0e5511`. **Ingen afhængighed, exit-kode, matrix-række eller claim ændret.** **Næste:** P1-73 og P1-74; ❓ 1–3, ❓ 14, ❓ 16.
 

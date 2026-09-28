@@ -17,7 +17,7 @@ import { readFileSync, writeFileSync, mkdirSync, existsSync, renameSync, unlinkS
 import { dirname, posix, win32 } from 'path';
 import { homedir } from 'os';
 import { createHash, randomUUID } from 'crypto';
-import { assertValidHttpUrls, expiredNote, findUrlKey, isNewerPass, partitionUsableUrls, readCertIdentity, readCertIssuerState, readCertRotation, readCertRotationAlert, readContentChange, readContentChangeAlert, readEntry, readEvent, readRedirectTarget, readSslIssuer, readTransitionAlert, queuedAgeMs, readSslState, STALE_AFTER_DAYS, unusableUrlNote, urlIdentity, withoutCredentials, certRotationCount } from './status.js';
+import { assertValidHttpUrls, expiredNote, findUrlKey, isNewerPass, partitionUsableUrls, readCertIdentity, readCertIssuerState, readCertRotation, readCertRotationAlert, readContentChange, readContentChangeAlert, readContentState, readEntry, readEvent, readRedirectTarget, readSslIssuer, readTransitionAlert, queuedAgeMs, readSslState, STALE_AFTER_DAYS, unusableUrlNote, urlIdentity, withoutCredentials, certRotationCount } from './status.js';
 import { recordPass } from './report.js';
 import { formatMs, safeText } from './display.js';
 import { historyFileFrom, pruneHistory, readHistoryFile, recordHistoryPass, saveHistory, historyWriteErrorMessage } from './history.js';
@@ -705,7 +705,33 @@ export async function runPass(state, opts = {}) {
     recordPass(entry, result);
     recordHistoryPass(history, url, result, { now });
     if (result.content?.hash) entry.lastHash = result.content.hash;
-    if (Number.isFinite(result.content?.contentLength)) entry.lastContentLength = result.content.contentLength;
+    // The size of a page, from the one owner of what the content check measured.
+    // `Number.isFinite(contentLength)` used to be the test, and that number is also
+    // what a server *declares* on a page we then declined to read: `content.js`
+    // skips a body over 2 MiB and keeps the declaration, so an oversized page was
+    // stored as a measured size while `lastContentReadAt` — stamped only where a
+    // hash was written — stayed empty. Measured 2026-09-28, real `runPass` over a
+    // 3 MiB page served with a `content-length`, no code changed:
+    //
+    //   | http://…/stor | UP (200) | 100% (1 check) | … | stable · 3145728 bytes, read at an unknown time |
+    //
+    // `stable` is a claim that the page was read and did not change, in the one
+    // document an agency forwards, about a page that was never opened — the same
+    // false all-clear P1-21 removed from `check --json` and P1-78 removed from the
+    // age. The report's own footnote already promises the opposite ("a page over
+    // the content-check limit is never read, so it shows — rather than a size"),
+    // so the writer and the document had stopped being the same claim. The same
+    // page served *without* a `content-length` never reached this line at all,
+    // which is why the existing P1-78 test (a streamed 3 MiB body) passed while
+    // the declared form was wrong: same limit, same never-read page, two answers.
+    //
+    // `readContentState` is what `check --json` already asks, so the two surfaces
+    // now agree on which numbers describe a reading. A page that was read keeps
+    // its size; a page that was skipped keeps the size of the last pass that did
+    // read it, with that pass's own age — and a site never read stays `—`.
+    if (readContentState(result.content).measured && Number.isFinite(result.content?.contentLength)) {
+      entry.lastContentLength = result.content.contentLength;
+    }
     // When the page was last *read*, separate from when it last *changed*. The
     // two are different facts and the report needs both: `content.js` skips a
     // page over 2 MiB, so a byte count can survive a pass that never looked at
