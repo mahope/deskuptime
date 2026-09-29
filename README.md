@@ -48,6 +48,9 @@ npx @mahope/deskuptime check https://yoursite.com --timeout 30000
 # Security-header scan as JSON — pipe it into your own tooling
 npx @mahope/deskuptime headers https://yoursite.com --json | jq '.security'
 
+# Scan several sites in one run — as many URLs as you like, like `check`
+npx @mahope/deskuptime headers https://kunde1.dk https://kunde2.dk
+
 # `headers --timeout` gives up on a single slow response (per response, not per call)
 npx @mahope/deskuptime headers https://yoursite.com --timeout 5000
 
@@ -76,7 +79,12 @@ HTTP `400–599`, timeouts, refused connections and other network failures are *
 `reachable` in JSON only means that an HTTP response was received, so a `404` or `500`
 has `reachable: true` but `healthy: false`. Redirects are followed and the final status
 is evaluated. A multi-URL check validates every URL before sending any request; one
-invalid URL fails the complete check with exit code `1`.
+invalid URL fails the complete check with exit code `1`. `headers` follows the same
+rule and the same `2` on a site it could not scan, whichever URL it was in the list.
+
+`headers` takes any number of URLs, like `check`. With one URL its `--json` output is
+the object `jq '.security'` reads; with several it is an array of those objects, in the
+order you listed them.
 
 `--timeout <ms>` is a budget for the **whole** check — the reachability request, the
 TLS handshake and the page read share it, so `--timeout 500` cannot take 30 seconds.

@@ -424,9 +424,14 @@ test('cli: unknown options fail instead of being ignored', async () => {
     run(process.execPath, [CLI, 'check', URL_UNDER_TEST, '--timeout=50']),
     (error) => error.code === 1 && /Unknown option: --timeout=50/.test(error.stderr)
   );
+  // A second bare word used to be refused as `Unexpected argument`. Since
+  // P1-113 `headers` scans any number of URLs — the promise the generated matrix
+  // row makes — so a second word is a second *address*, and it is still refused
+  // before anything connects, as `Invalid URL` rather than as a connection
+  // error. The claim this test makes is unchanged; only the sentence is.
   await assert.rejects(
     run(process.execPath, [CLI, 'headers', URL_UNDER_TEST, 'stray']),
-    (error) => error.code === 1 && /Unexpected argument: stray/.test(error.stderr)
+    (error) => error.code === 1 && /Invalid URL: stray/.test(error.stderr)
   );
   await assert.rejects(
     run(process.execPath, [CLI, 'headers', URL_UNDER_TEST, '-x']),

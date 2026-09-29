@@ -5,7 +5,7 @@
  *
  * Usage:
  *   deskuptime check <url> [url2 url3 ...]
- *   deskuptime headers <url>          Redirect chain + security headers
+ *   deskuptime headers <url> [url2 ...] Redirect chain + security headers
  *   deskuptime watch <url> [--interval 300] [--webhook URL]  Monitor URLs
  *   deskuptime unwatch <url> [url2 ...]  Stop monitoring URLs
  *   deskuptime --version
@@ -45,7 +45,7 @@ function showHelp() {
 
 USAGE:
   deskuptime check <urls...> [--json] [--timeout ms]  Check one or more URLs (--timeout budgets the whole check)
-  deskuptime headers <url> [--json] [--timeout ms]  Redirect chain, HTTPS enforcement + security headers
+  deskuptime headers <url> [more...] [--json] [--timeout ms]  Redirect chain, HTTPS enforcement + security headers
   deskuptime watch <url> [--interval 300] [--webhook URL] [--activate <key>]  Monitor in background (free: up to ${FREE.urlLimit} URLs)
   deskuptime watch <url> --once                      Run one monitoring pass and exit
   deskuptime unwatch <url> [url2 ...]  Stop monitoring URLs and free the slot
@@ -61,6 +61,7 @@ EXAMPLES:
   deskuptime check https://example.com
   deskuptime check https://site1.com https://site2.com
   deskuptime headers https://yoursite.com --json | jq '.security'   # same scan as JSON, for scripts and CI
+  deskuptime headers https://kunde1.dk https://kunde2.dk   # scan several client sites in one run
   deskuptime headers https://yoursite.com --timeout 5000            # give up on one slow response after 5 s (per response)
   deskuptime watch https://mystore.com --interval 300
   deskuptime watch https://mystore.com --activate <license-key>   # just paid: unlock Pro and start monitoring in one command
@@ -384,47 +385,79 @@ if (command === 'check') {
 
 // ── Headers (redirect chain + security headers) ──
 if (command === 'headers') {
-  const url = args[1];
-  if (!url) {
-    console.error('❌ Error: a URL is required');
-    console.error('Usage: deskuptime headers <url> [--json] [--timeout ms]');
-    process.exit(1);
-  }
-  const invalidUrls = invalidHttpUrls([url]);
-  if (invalidUrls.length > 0) {
-    console.error(`❌ Error: ${invalidUrlMessage(url)}`);
-    process.exit(1);
-  }
-
-  const rawArgs = args.slice(2);
+  const rawArgs = args.slice(1);
   const allowedFlags = new Set(['--json', '--timeout']);
-  const unknownFlag = rawArgs.find(value => value.startsWith('--') && !allowedFlags.has(value));
-  if (unknownFlag) {
-    console.error(`❌ Error: Unknown option: ${unknownFlag}`);
-    process.exit(1);
-  }
 
   const optionTimeoutIndex = rawArgs.indexOf('--timeout');
-  const unexpectedArg = rawArgs.find((value, index) => {
-    if (value === '--json' || value === '--timeout') return false;
-    if (optionTimeoutIndex !== -1 && index === optionTimeoutIndex + 1) return false;
-    return true;
-  });
-  if (unexpectedArg) {
-    const label = unexpectedArg.startsWith('-') ? 'Unknown option' : 'Unexpected argument';
-    console.error(`❌ Error: ${label}: ${unexpectedArg}`);
+  // Both the flag and the value after it are set aside, by index and not by
+  // shape: a `--timeout` whose value is missing is reported as a bad timeout
+  // below, and one whose value happens to look like a URL must not be scanned
+  // as a second site. The `+ 1` is guarded, because with no `--timeout` at all
+  // the index is -1 and the unguarded form would swallow the *first* URL.
+  const timeoutValueIndex = optionTimeoutIndex === -1 ? -1 : optionTimeoutIndex + 1;
+
+  // A token that looks like a flag is never an address, and answering
+  // `Invalid URL: -x` would be a worse sentence than the one this command used
+  // to give for it. Asked before the timeout is read, so a typo in one option
+  // is not reported as a fault in another. `--json` and `--timeout` are the
+  // flags this command has; the value after `--timeout` is a bare number and is
+  // not this check's business.
+  const strayFlag = rawArgs.find((value, index) =>
+    index !== timeoutValueIndex
+    && !allowedFlags.has(value)
+    && value.length > 1
+    && value.startsWith('-')
+    && !/^https?:\/\//i.test(value)
+  );
+  if (strayFlag) {
+    console.error(`❌ Error: Unknown option: ${strayFlag}`);
     process.exit(1);
   }
 
-  const timeoutArg = args.indexOf('--timeout');
-  const timeoutValue = timeoutArg !== -1 ? args[timeoutArg + 1] : null;
+  const timeoutValue = optionTimeoutIndex !== -1 ? rawArgs[optionTimeoutIndex + 1] : null;
   const timeoutMs = timeoutValue == null ? undefined : Number(timeoutValue);
-  if (timeoutArg !== -1 && (!timeoutValue || timeoutValue.startsWith('--') || !Number.isInteger(timeoutMs) || timeoutMs < 1)) {
+  if (optionTimeoutIndex !== -1 && (!timeoutValue || timeoutValue.startsWith('--') || !Number.isInteger(timeoutMs) || timeoutMs < 1)) {
     console.error('❌ Error: --timeout must be a positive integer');
     process.exit(1);
   }
 
+  // The generated matrix has promised "`check` and `headers` on any number of
+  // URLs" in the README, in `--help` and on the npm page since P1-1, and only
+  // `check` ever honoured it: a second URL answered `Unexpected argument`.
+  // The promise is the documented behaviour, so the code is what moves. A
+  // bureau auditing twelve client domains is the case the row is written for,
+  // and it had to be a shell loop over a command that refused to be a loop.
+  const urls = rawArgs.filter((value, index) =>
+    !value.startsWith('--') && index !== timeoutValueIndex
+  );
+
+  if (urls.length === 0) {
+    console.error('❌ Error: at least one URL required');
+    console.error('Usage: deskuptime headers <url> [url2 url3 ...] [--json] [--timeout ms]');
+    process.exit(1);
+  }
+
+  // All URLs are validated before any request is sent, so a typo in the fourth
+  // address does not leave a bureau with three scans and a partial answer. This
+  // is `check`'s rule, and its own status policy already states it for the
+  // command this row names alongside it.
+  const invalidUrls = invalidHttpUrls(urls);
+  if (invalidUrls.length > 0) {
+    for (const invalid of invalidUrls) {
+      console.error(`❌ Error: ${invalidUrlMessage(invalid)}`);
+    }
+    process.exit(1);
+  }
+
   const { checkHeaders } = await import('./checkers/headers.js');
+  const json = rawArgs.includes('--json');
+  // One document per URL, printed together. A single URL keeps publishing the
+  // bare object `jq '.security'` has always read, so every existing script is
+  // untouched; two or more publish an array, which is the shape `check --json`
+  // already uses for the same "more than one URL" question.
+  const sheets = [];
+
+  for (const url of urls) {
   const r = await checkHeaders(url, 10, { timeoutMs });
 
   // One reading of the walk, asked once and handed to both surfaces: the terminal
@@ -469,7 +502,7 @@ if (command === 'headers') {
   // crossing nobody saw.
   const redirect = readRedirectTarget({ url, finalUrl: chain.measured ? r.finalUrl : null });
 
-  if (args.includes('--json')) {
+  if (json) {
     // `headersFrom` is the sentence the JSON could not say about *whose* sheet
     // this is. A script compares it with the host it asked; it differs exactly
     // when another host answered, and it is `null` when there is no reading at
@@ -481,7 +514,7 @@ if (command === 'headers') {
     // the same lie one field over. `ownReading` is the walk's internal bookkeeping
     // and is dropped: the two readings must not both be in the document.
     const { ownReading, ...rest } = r;
-    console.log(JSON.stringify({
+    sheets.push({
       ...rest,
       server: reading.server,
       poweredBy: reading.poweredBy,
@@ -491,7 +524,7 @@ if (command === 'headers') {
       securityChecked: chain.measured,
       securityEmpty: security.empty,
       disclosureEmpty: disclosure.empty,
-    }, null, 2));
+    });
     if (!r.healthy) process.exitCode = 2;
   } else if (r.error) {
     console.log(`🧭 ${safeText(url, { max: 0 })}`);
@@ -554,6 +587,22 @@ if (command === 'headers') {
   // not a pass. Before this, `headers` on a redirect loop printed a clean sheet
   // and exited 0 while `check` on the same URL called it DOWN and exited 2.
   if (!r.healthy) process.exitCode = 2;
+  }
+  // Sheets are separated so a bureau reading a terminal can tell where one
+  // site's findings end and the next begin — the same blank line `check` prints
+  // between its blocks. `--json` prints nothing here: the array below is the
+  // output, and it is printed once so the document is a single valid array
+  // rather than one object per line that no parser can read as a whole.
+  if (!json) console.log('');
+  }
+
+  if (json) {
+    // One URL keeps the bare object every published `jq '.security'` reads, so
+    // the shape only changes for a caller who asked for more than one URL — and
+    // then it is the array `check --json` already publishes for the same
+    // question. The exit code is the strictest one seen, not the last URL's:
+    // a scan of twelve sites is not green because the twelfth happened to be.
+    console.log(JSON.stringify(sheets.length === 1 ? sheets[0] : sheets, null, 2));
   }
 }
 

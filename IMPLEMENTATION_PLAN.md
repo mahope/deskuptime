@@ -1,5 +1,64 @@
-> **Seneste:** iteration 127 (P1-112, færdig) — historien står i køens afsnit
-> `P1-112 — FÆRDIG 2026-09-29` lige under `## Prioriteret kø`.
+> **Seneste:** iteration 128 (P1-113, færdig) — historien står i køens afsnit
+> `P1-113 — FÆRDIG 2026-09-29` lige under `## Prioriteret kø`.
+
+## Status fra denne iteration (128, P1-113 — matrixrækken lovede `headers` alle URL'er, og kommandoen sagde `Unexpected argument`)
+
+**Målt først, nul kode ændret.** Køen var tømt, så målingen gik på det samme
+spørgsmål ❓ 16's egen anvisning stiller — *hvilke andre byggede veje står i
+ingen kundeflade?* — men denne gang på **løftet** og ikke på koden. Og
+løftet hang lige i den genererede matrix:
+
+```
+$ grep -n "any number of URLs" README.md
+  102:| `check` and `headers` on any number of URLs | ✅ | ✅ | In both tiers |
+$ node src/cli.js --help | grep -c "headers <url> \[more"
+  0
+$ deskuptime headers https://example.com https://example.org
+  ❌ Error: Unexpected argument: https://example.org          exit 1
+$ deskuptime check  https://example.com https://example.org
+  🔍 Checking 2 URL(s)…                                          exit 0
+```
+
+**Én kommando holdt rækken, den anden afviste den.** Rækken er ikke håndskrevet:
+`src/features.js:52` er `en: '`check` og `headers` på vilkårlig mange URL'er'`, og
+den ene streng genereres til README, til `--help` og til npm-siden. Siden P1-1 —
+altså siden matrixen blev source of truth — har den altså sagt til en bureau-bruger,
+at de måtte køre `headers` på vilkårligt mange kunders domæner, og kommandoen har
+svaret med en fejl der **ikke navngiver noget af de sites den ville have scannet**.
+En shell-løkke omkring den ville desuden have tabt site nummer fire, uden at sige
+hvilket.
+
+Det er den **femte** skikkelse af én sygdom, målt fire gange før: bygget kode ingen
+kan se (P1-91), et flag ingen flade nævner (P1-108), en ref der ikke findes
+(P1-107), en tabelrække der står i stedet for en demonstration (P1-111) — og nu
+en tabelrække koden aktivt modstår. Fælles for alle fem: **bygget kode eller
+lovet kode, ingen kunde kan nå, er ikke en vare.**
+
+**Rettelsen er, at løftet bliver sandt.** `headers` tager nu vilkårligt mange
+URL'er, validerer dem alle *før* der sendes noget (`check`s egen regel, som README's
+status policy allerede skrev ned), og dømmer på **alle** sider: exit 2 hvis ét site
+ikke svarer, uanset hvor i listen det står — ikke den sidste URL's domme. Et ark pr.
+URL med en blank linje imellem, som `check` gør.
+
+**To ting flytter sig ikke, fordi de er publiceret.** (a) **Ét URL's `--json` er
+stadig det bare objekt**, `jq '.security'` i README og i `--help` læser, så ingen
+publiceret script skal ændre sig; to eller flere giver et array — samme form som
+`check --json` allerede bruger til det samme spørgsmål. (b) `-x` og `--jsonn` er
+stadig `Unknown option`, ikke `Invalid URL`; `test/status.test.js` låste den sætning
+og holdt den.
+
+**→ 861/861** (855 + 6); audit 0/0; `matrix --check` tavs; `node --check` over alle
+kilder grøn; `git diff --check` grøn.
+
+**Fire mutationer målt, alle fire døde.** M1 (løkken tilbage til ét URL) → 5 røde.
+M2 (sidste URL's domme vinder) → præcis exit-kode-testen rød. M3 (array altid) →
+præcis formtesten rød, altså låsen holder den publicerede enkelt-URL-form. M4
+( validering efter scanningen) → præcis "ingen request sendt"-testen rød.
+⚠️ Som i P1-112 målt på md5 og repareret fra en `cp` uden for repoet; en mutation,
+der døde af en anden grund end den tilsigtede, ville set ud som at låsen virker.
+
+**Ingen deploy-note:** CLI-repo uden live-deploytarget, og ingen side blev ændret
+(`deskuptime.com` ligger i et andet repo, P0-12 `BLOCKED`).
 
 ## Status fra denne iteration (127, P1-112 — den ulæste flake fik en årsag, en rettelse og en lås)
 
@@ -5266,10 +5325,55 @@ Den aktuelle gate-definition er registreret her:
 
 ## Prioriteret kø
 
-> **Køen er tom for målte kandidater** (iteration 127). Næste iteration skal
+> **Køen er tom for målte kandidater** (iteration 128). Næste iteration skal
 > **måle først** og finde sin egen opgave. Se `❓ Til Mads` for de konkrete
 > kandidater. ❓ 21 er nu besvaret i kode (P1-105) og lukket, ❓ 16 ligeledes
-> (P1-109).
+> (P1-109). Målingen i iteration 128 fandt **ikke** flere løfter i matrixen:
+> de otte øvrige rækker er hver især målt i en tidligere iteration.
+
+### P1-113 — FÆRDIG 2026-09-29 (`ceo/headers-many`) — matrixrækken lovede `headers` alle URL'er, og kommandoen sagde `Unexpected argument`
+
+**Målt først, nul kode ændret.** Den genererede matrixrække —
+`` `check` and `headers` on any number of URLs `` — har stået i README, i `--help`
+og på npm-siden siden P1-1. Målt med rigtig CLI:
+
+```
+$ deskuptime headers https://example.com https://example.org
+  ❌ Error: Unexpected argument: https://example.org      exit 1
+$ deskuptime check  https://example.com https://example.org
+  🔍 Checking 2 URL(s)…                                      exit 0
+```
+
+Én kommando holdt rækken, den anden afviste den. Bureauet, rækken er skrevet til,
+skulle køre `headers` på hver kundes domæne og fik en fejl, der ikke navngiver
+nogen af de sites den ville have scannet.
+
+**Rettelsen:** `headers` tager vilkårligt mange URL'er. Alle valideres før nogen
+request sendes (`check`s regel, som README's status policy allerede skrev ned), ét
+ark pr. URL med blank linje imellem som `check`, og exit 2 hvis **noget** site ikke
+svarer — ikke det sidste URL's domme.
+
+**To publicerede ting er urørt, og det er derfor de står i testene:**
+- ét URL's `--json` er stadig det bare objekt, `jq '.security'` i README og i
+  `--help` læser; to eller flere giver et array, samme form som `check --json`.
+- `-x` og `--jsonn` er stadig `Unknown option`. `test/status.test.js:429` låste
+  `Unexpected argument: stray` — holdt mod mig, rettet med en begrundelse, fordi
+  et andet ord nu er en anden *adresse* (men stadig afvist før den forbinder).
+
+**Låsen er adfærdsmålt, fordi en assertion på matrixen kunne have bevist at den
+var enig med sig selv:** `test/headersmany.test.js` (6 tests) kører rigtig CLI mod
+rigtige lokale servere, scanner tre sider i én kørning og læser arkene, prøver
+array-og-objekt-formen, flytter et nedbrud frem og tilbage i listen, skriver en
+skrivefejl i den fjerde adresse og kræver nul output, kører `--timeout` i tre
+stillinger, og beder `check` og `headers` det samme spørgsmål.
+
+**Fire mutationer målt, alle fire døde:** M1 (ét URL igen) 5 røde · M2 (sidste
+URL's domme) exit-testen rød · M3 (array altid) formtesten rød · M4 (validering
+efter scanning) "ingen request"-testen rød.
+
+**Målt:** 861/861 (855 + 6), audit 0/0, `matrix --check` tavs, `node --check` over
+alle kilder grøn, `git diff --check` grøn på Node 26.7.0. Baseline uændret: npm 16
+downloads/uge, ★0, Plausible `/` 3 besøgende/28 d.
 
 ### P1-112 — FÆRDIG 2026-09-29 (`ceo/tarball-flake`) — den ulæste flake var aldrig flaky; den var en flyvende promise
 
@@ -9050,6 +9154,20 @@ for selv. Ingen gemt nøgle er omskrevet, ingen eksisterende adgangsd tilstand
 - **Iteration 65 (P1-49, målt + fix):** ❓ 1–3 ubesvarede, så målingen gik på den sidste del af P1-47's egen afvejning, som aldrig var målt: `down`/`up` er bevidst aldrig tynget. Målt først med rigtig `runPass` + rigtig `sendWebhook` mod en lokal side der skiftede 200/500 på et ur, 40 pass: **28 POSTs**, 2 016/døgn pr. site. Efter: **4**. Reglen er bevidst *ikke* P1-47s, fordi en ren tidsdæmpning af `down` kan bruge vinduet i stilhed på et rigtigt nedbrud; tærsklen (4 skift i vinduet) er derfor det bærende, og den er målt med to tests der begge siger at nedbrud **ikke** holdes. `readTransitionAlert()` i `src/status.js` er den ene ejer og beskrær selv tidslisten, fordi den strukturelle lås `four pass states are decided in one place` døde min første version, der alderede et tidspunkt i `watch.js`. 10 nye tests i `test/flap.test.js` (lagt til i `npm test`) → **446/446** (436 + 10); audit 0/0; `node --check`, `matrix --check`, `git diff --check` grønne på Node 26.7.0. Matrix-påstanden `Webhook alerts on every event` blev falsk og siger nu at en flappende site holdes på 1/time pr. art efter 4 skift. **Ingen mutationstest** — over tidsbudgeten. `ceo/flap-alerts`, `fe9e7db`, mergeet til `main` og pushet 2026-09-27. **Næste:** ❓ 1–3 og ❓ 14, ellers en målt opgave.
 
 ## Deploy-/release-noter
+
+- **Release-note P1-113:** Har du flere klientdomæner, skulle `deskuptime headers`
+  tage dem alle på én gang — det stod i matrixen, i `--help` og på npm-siden, siden
+  matrixen blev source of truth. **Det gjorde det ikke:** den anden adresse fik
+  `❌ Error: Unexpected argument: …` og exit 1, altså præcis den kommando der skulle
+  spare dig for en shell-løkke. Nu scanner den alle URL'er i én kørsel, ét ark pr.
+  adresse, og **alle** sider tæller: ét domæne der ikke svarer giver exit 2, uanset
+  hvor i listen det står. En skrivefejl i den fjerde adresse stopper hele kørslen
+  *før* der sendes noget, så du ikke sidder med tre scanninger og et delvis svar.
+  **To ting er uændrede, fordi de står i opskrifter du kan have kopieret:** ét
+  URL's   `--json` er stadig det objekt `jq '.security'` læser (to eller flere giver
+  et array, som `check --json` allerede gør), og en ukendt indstilling som `-x` er
+  stadig `Unknown option`. *Ingen exit-kode for ét URL, matrix-række, felt i
+  JSON'en eller købslink er ændret.*
 
 - **Release-note P1-106:** Har du lige betalt for Pro og vil i gang med at
   overvåge? **Én kommando gør begge dele:**
