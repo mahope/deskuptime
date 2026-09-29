@@ -80,6 +80,54 @@ export function freeLimitMessage(url) {
 }
 
 /**
+ * What the free tier's slots look like right now, for the daily list.
+ *
+ * Measured 2026-09-29 with the real CLI, three real local servers and a real
+ * state file, at three of three slots: `deskuptime watch --status` — the
+ * command the plan itself calls "the daily list", and the one this product's
+ * own ❓ 16 says a free user runs every day — printed
+ *
+ *   📋 3 monitored URL(s):
+ *     ✅ up  http://…/a (200) …      ← three green rows
+ *     ✅ up  http://…/b (200) …
+ *     ✅ up  http://…/c (200) …
+ *     That helped — thank you. …donate…
+ *
+ * and stopped. The `3` is the free tier's whole allowance, so the very next
+ * `deskuptime watch <url>` answers `Free tier monitors 3 URLs … not added`
+ * with exit 1 — but the only place the ceiling was ever visible was that
+ * refusal, i.e. the user learns they are full by being turned away. So the
+ * list answered "is my monitoring fine?" with "yes", and the surface that
+ * should have shown the wall ended on a tip jar. A number that is a limit
+ * printed as a bare count is the same defect as a status printed without its
+ * age: the reader cannot tell it is a boundary.
+ *
+ * Two walls, and both are already the rule for the other two Pro gates in
+ * this file:
+ *
+ *   - The checkout only appears when the wall is actually reached. ❓ 16 says
+ *     it plainly: "lad være med at sælge i footeren af en liste der er helt
+ *     grøn". Below the limit this is a bare fact with no link, and it stays
+ *     quiet while there is room.
+ *   - Only on the free tier, and only for `FREE`, the same test the thank-you
+ *     line above uses. A Pro customer has no ceiling to be told about, and a
+ *     released or unverified seat is someone who paid — the rule that keeps
+ *     both off the checkout everywhere else in this repo.
+ *
+ * The count is `monitoredCount()`, never `rows.length`, because those are two
+ * different numbers and only the first one holds a slot: measured, three saved
+ * keys where two are the same site spelled `https://kunde.dk` and
+ * `https://kunde.dk/` give `rows.length === 3` and `monitoredCount() === 2`,
+ * and a key that is not an address at all holds no slot either. The ceiling
+ * this line reports is therefore the same one `addMonitoredUrls()` enforces, so
+ * the list cannot say "2 of 3" an hour before the third URL is accepted.
+ */
+export function freeSlotsNote(used, { limit = FREE.urlLimit } = {}) {
+  if (used < limit) return `Free tier: ${used} of ${limit} URL slots in use.`;
+  return `Free tier: all ${limit} URL slots in use — the next URL will not be added. ${upgradeHint(`unlimited URLs and a ${PRO.minIntervalSeconds}s interval`)}`;
+}
+
+/**
  * One sentence for "you asked for a faster interval than this tier runs".
  *
  * Measured 2026-09-27 with the real CLI: a free user who typed `--interval 30`
@@ -1097,6 +1145,16 @@ export function printStatus(options = {}) {
   // seat is a customer who paid (the same rule that keeps `released` and
   // `unverified` off the checkout in `deskuptime status`).
   const free = describeLicense(state.license, { now: now.getTime() }).status === LICENSE_STATUS.FREE;
+
+  // Where the free tier's slots stand, asked of the same owner the limit itself
+  // is enforced by, and printed above the thank-you line so the two never compete
+  // for the last line: the thanks answers "was it worth it", the slots answer
+  // "can I still add a site" — and the second question is the one that is
+  // invisible until the refusal.
+  if (free) {
+    console.log(`\n${freeSlotsNote(monitoredCount(state))}`);
+  }
+
   if (worthThanking(rows) && free) {
     console.log(`\n${renderThanks()}`);
   }

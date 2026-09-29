@@ -1,7 +1,74 @@
-> **Seneste:** iteration 123 (P1-108, færdig) — historien står i køens afsnit
-> `P1-108 — FÆRDIG 2026-09-29` lige under `## Prioriteret kø`.
+> **Seneste:** iteration 124 (P1-109, færdig) — historien står i køens afsnit
+> `P1-109 — FÆRDIG 2026-09-29` lige under `## Prioriteret kø`.
 
-## Status fra denne iteration (123, P1-108 — `headers` tog to flag i brug og nævnte dem nul steder i `--help`)
+## Status fra denne iteration (124, P1-109 — den daglige liste vidste ikke, at `3` var en grænse)
+
+**Målt først, nul kode ændret.** Køen var tømt, så målingen gik på det åbne
+spørgsmål ❓ 16 stillede — og på den del af det, der *krævede* en måling:
+*"mål den konkrete mangel først, hvor mange af dagens brugere rammer selve
+URL-væggen."* Rigtig CLI, tre rigtige lokale servere, rigtig state-fil, rigtig
+temp-HOME:
+
+```
+$ deskuptime watch --status          (gratis, 3 af 3 pladser brugt)
+📋 3 monitored URL(s):
+
+  ✅ up  http://127.0.0.1:61001/ (200) @ 2026-09-29T00:25:05.708Z · 67 bytes
+  ✅ up  http://127.0.0.1:61002/ (200) @ 2026-09-29T00:25:05.723Z · 67 bytes
+  ✅ up  http://127.0.0.1:61003/ (200) @ 2026-09-29T00:25:05.723Z · 67 bytes
+
+That helped — thank you. If it earned its keep: https://donate.stripe.com/…    exit 0
+
+$ deskuptime watch http://127.0.0.1:61004/ --once
+❌ Error: Free tier monitors 3 URLs. http://…/61004/ not added. Pro unlocks …  exit 1
+```
+
+**Tallet i overskriften *er* hele gratiskontingentet.** Listen svarer altså
+"er min overvågning i orden?" med "ja", og den næste kommando afviser. En
+gratisbruger fandt først ud af, at være fuld, ved at blive afvist — og den
+flade, der burde have vist væggen, endte på en donationslinje. Det er samme
+slags fejl som en status uden sin alder: **et tal der er en grænse, trykt som
+et rent antal.**
+
+**Målingen fandt også den anden fælde, som lå i selve rettelsen.** Overskriften
+tæller *rækker*, væggen tæller *sites* — målt i samme måling:
+
+```
+3 gemte nøgler, hvor to er samme site med/uden skråstreg
+  → rækker i overskriften: 3      det der holder en plads: 2
+```
+
+Hvis linjen havde brugt `rows.length`, kunne den have sagt "3 af 3 — væggen er
+nået" imens `deskuptime watch` stadig accepterede den tredje URL. Derfor tæller
+den `monitoredCount()` — **den samme ejer `addMonitoredUrls()` håndhæver
+grænsen med** — og en lås kræver i testen at de to er ens.
+
+**Rettelsen er én linje og én ejer.** `freeSlotsNote()` i `src/watch.js`, lige
+ved siden af de to andre Pro-gates den ikke må modsige, og den genbruger
+`upgradeHint()` — så den kan ikke pege på et andet køb end afviselsen gør.
+Kaldes fra `printStatus()` **før** taklinjen, så de to ikke konkurrerer om den
+sidste linje.
+
+**To vægge, begge allerede regel i den fil.** Købslinket kommer **kun** når
+væggen faktisk er nået — ❓ 16's egen ordlyd: *"lad være med at sælge i footeren
+af en liste der er helt grøn."* Under væggen er det en ren kendsgerning uden
+link. Og kun på gratisniveau og kun for `FREE`, samme test taklinjen bruger:
+en Pro-kunde har intet loft at blive fortalt om, og en `released`/`unverified`-sæde
+er nogen der har betalt — den regel, der holder begge væk fra kassen overalt i
+repoet. Målt efter rettelsen: 1 af 3 → `Free tier: 1 of 3 URL slots in use.` og
+**nul** købslink; Pro med 3 → hverken slot-linje eller tak.
+
+**→ 843/843** (835 + 8 i `test/freeslots.test.js`); audit 0/0; `matrix --check`
+tavs; `node --check` og `git diff --check` grønne. **Fire mutationer målt, alle
+fire døde** (3 / 2 / 2 / 1 fejl): købslinket fjernet fra væggen, købslink også
+under væggen, `rows.length` i stedet for `monitoredCount(state)`, og
+`if (free)` gjort til `if (true)`.
+
+**Ingen deploy-note:** CLI-repo uden live-deploytarget, og ingen side blev
+ændret — `deskuptime.com` ligger i et andet repo (P0-12 `BLOCKED`). Baseline
+uændret: npm 16 downloads/uge, ★0, Plausible `/` 3 besøgende/28 d.
+
+## Status fra tidligere iteration (123, P1-108 — `headers` tog to flag i brug og nævnte dem nul steder i `--help`)
 
 **Målt først, nul kode ændret.** Køen var tømt. Målingen gik på den sidste
 kanundeflade, der ikke var målt endnu: **hvilke flag parseren accepterer, og hvor
@@ -4967,7 +5034,7 @@ Dette offentlige repo leverer den gratis, fuldt brugbare DeskUptime-CLI (MIT). D
 Den aktuelle gate-definition er registreret her:
 
 - Root: `npm ci --ignore-scripts` skal lykkes med den committede lockfil.
-- Root: `npm test` (**751 tests, 751 passed på Node 26.7.0 efter P1-91**: 741 + 9 i `test/thanks.test.js` + 1 i `test/matrix.test.js`; de 597/P1-65-tallet herunder er forældet, og tællet stiger med hver målte iteration, så læs tallet herfra `npm test` selv). **Bemærk, målt igen 27/9:** på en maskine hvor `node` er 22 fejler **20** tests — de 7 installtests (`install.sh` kræver Node 24+) og 13 action-tests (`action.yml` kræver Node 24+) — fordi begge scripts korrekt afviser en ældre Node. Det er ikke en fejl i repoet. Brug den installerede `PATH`-node (26.7.0) — på Mads' maskine `/opt/homebrew/bin/node` eller `/opt/homebrew/opt/node@26/bin/node` — ellers er gate ikke grøn af miljøårsager. Bemærk at den `node` der ligger først i `PATH` her var 22, så `PATH=/opt/homebrew/bin:$PATH npm test` er den sikre form.
+- Root: `npm test` (**843 tests, 843 passed på Node 26.7.0 efter P1-109**: 835 + 8 i `test/freeslots.test.js`; de 597/P1-65-tallet herunder er forældet, og tællet stiger med hver målte iteration, så læs tallet herfra `npm test` selv). **Bemærk, målt igen 27/9:** på en maskine hvor `node` er 22 fejler **20** tests — de 7 installtests (`install.sh` kræver Node 24+) og 13 action-tests (`action.yml` kræver Node 24+) — fordi begge scripts korrekt afviser en ældre Node. Det er ikke en fejl i repoet. Brug den installerede `PATH`-node (26.7.0) — på Mads' maskine `/opt/homebrew/bin/node` eller `/opt/homebrew/opt/node@26/bin/node` — ellers er gate ikke grøn af miljøårsager. Bemærk at den `node` der ligger først i `PATH` her var 22, så `PATH=/opt/homebrew/bin:$PATH npm test` er den sikre form.
 - Root: `npm run audit` skal rapportere 0 sårbarheder.
 - Root: `npm run lint` findes ikke i `package.json`; rapporteres som manglende gate, ikke som grønt.
 - Root: `npm run build` findes ikke i `package.json`; der er ingen JS-build/typecheck-script.
@@ -5000,9 +5067,34 @@ Den aktuelle gate-definition er registreret her:
 
 ## Prioriteret kø
 
-> **Køen er tom for målte kandidater** (iteration 123). Næste iteration skal
+> **Køen er tom for målte kandidater** (iteration 124). Næste iteration skal
 > **måle først** og finde sin egen opgave. Se `❓ Til Mads` for de konkrete
-> kandidater. ❓ 21 er nu besvaret i kode (P1-105) og lukket.
+> kandidater. ❓ 21 er nu besvaret i kode (P1-105) og lukket, og ❓ 16 ligeledes
+> (P1-109).
+
+### P1-109 — FÆRDIG 2026-09-29 (`ceo/free-slots`) — den daglige liste vidste ikke, at `3` var en grænse
+
+**Målt først, nul kode ændret.** Se afsnittet øverst. Kort fortalt: ❓ 16's
+egen målingsopgave — *hvor rammer dagens brugere selve URL-væggen* — viste, at
+`watch --status` ved 3 af 3 pladser skrev `3 monitored URL(s)`, viste tre
+grønne rækker og endte på en donationslinje. Tallet er hele
+gratis-kontingentet, så næste `watch` svarer `Free tier monitors 3 URLs … not
+added` med exit 1: brugeren fandt ud af at være fuld ved at blive afvist.
+
+**Rettelse:** én ejer, `freeSlotsNote()` i `src/watch.js`, kaldt fra
+`printStatus()` før taklinjen. Den tæller `monitoredCount()` — den samme ejer
+`addMonitoredUrls()` håndhæver grænsen med, målt til at være et andet tal end
+`rows.length` — og genbruger `upgradeHint()`, så den ikke kan pege på et andet
+køb end afviselsen. Købslink kun når væggen er nået (❓ 16's egen regel), kun på
+gratisniveau, kun for `FREE`. → **843/843** (835 + 8); audit 0/0; `matrix
+--check` tavs. **Fire mutationer målt, alle fire døde** (3/2/2/1).
+
+**Besvarer ❓ 16 (andet ben).** Den anden halvdel af ❓ 16 — *"skal den daglige
+liste nævne Pro?"* — er et smagsspørgsmål, og det er **begrundet nej** for det
+generelle tilfælde: listen skal ikke sælge til en bruger, der har plads. Den er
+kun *begrundet ja* i den ene tilstand, målingen afdømmer: når væggen **er**
+nået, og kun da. Det er præcis kontraktens regel om at vise Pro *"der, hvor
+brugeren mangler det"*.
 
 ### P1-108 — FÆRDIG 2026-09-29 (`ceo/headers-help-flags`) — `headers` tog to flag i brug og nævnte dem nul steder i `--help`
 
@@ -8460,20 +8552,33 @@ for selv. Ingen gemt nøgle er omskrevet, ingen eksisterende adgangsd tilstand
     ikke kan læses i en hel uge, er et site bureauet bør høre om med det samme.
     Svar afgør om næste iteration laver en alarmtype eller lader den ligge.
 
-16. **Skal de to andre succesflader også sige tak — og skal den daglige liste
-    nævne Pro?** P1-91 målte, at `check`, `watch --once` og `watch --status` alle
-    sluttede på deres eget svar, og lagde taklinjen i **én** af dem. Det var et
-    målt fund for de to der blev ladt ude: de læses af en CI-log og en cron-mail, og
-    repoet sender en GitHub Action der kalder `check`. Den anden halvdel er et
-    smagsspørgsmål, ikke et fund`: `deskuptime status` har købslinjen for
-    gratisbrugere, men den daglige liste `watch --status` — den samme bruger
-    kører hver dag — nævner Pro **aldrig**. Kontraktens konverteringsregel siger at
-    Pro skal vises *"der, hvor brugeren mangler det"*, og en gratisbruger der
-    kører listen dagligt med 1 af 3 pladser i brug mangler den. Målt den
-    konkrete mangel først (hvor mange af dagens brugere rammer selve URL-væggen),
-    og lad være med at sælge i footeren af en liste der er helt grøn.
+16. ~~**Skal de to andre succesflader også sige tak — og skal den daglige liste
+    nævne Pro?**~~ **Besvaret 2026-09-29 (P1-109, `ceo/free-slots`) — målingen
+    afgjorde den anden halvdel, og den pegede et andet sted end spørgsmålet
+    gættede.** P1-91 målte, at `check`, `watch --once` og `watch --status` alle
+    sluttede på deres eget svar, og lagde taklinjen i **én** af dem. Den anden
+    halvdel var et smagsspørgsmål, fordi den var formuleret som *"skal listen
+    nævne Pro?"* — det er det forkerte spørgsmål. Den skal nævne **hvor meget
+    den har tilbage af sin kvote**, og det er en kendsgerning, ikke en salgstale.
+    Målt med rigtig CLI ved 3 af 3 pladser: `📋 3 monitored URL(s)` + tre grønne
+    rækker + taklinje, exit 0 — mens næste `watch` afvises med exit 1. Tallet i
+    overskriften *er* grænsen, trykt som et antal.
+
+    **Besvaret begrundet nej for det generelle tilfælde, ja for væggen:** listen
+    sælger ikke til en bruger med plads tilbage (❓ 16's egen advarsel), men den
+    siger nu `Free tier: 1 of 3 URL slots in use.` under væggen og
+    `Free tier: all 3 URL slots in use — the next URL will not be added` + købslink
+    **på** den. Kun gratisniveau, kun `FREE` — en Pro-kunde har intet loft at blive
+    fortalt om. Tællingen er `monitoredCount()`, den samme ejer væggen håndhæves
+    med, målt til at være et andet tal end antallet rækker.
+
+    **De to andre succesflader (`check`, `watch --once`) er bevidst urørt:** de
+    læses af en CI-log og en cron-mail, hvor en købslinje er støj, og de rammer
+    aldrig URL-væggen — de tjekker, de gemmer ikke. Det er den afgørende forskel,
+    ikke en smagssag: kun listen kan vise kapacitet.
+
     **Målt 121 (P1-106) i en anden vinkel, som ikke er et smagsspørgsmål:** der
-    var en helt anden bygget vej til Pro, som var nævnt nul steder. Den er nu
+    var en helt andre bygget vej til Pro, som var nævnt nul steder. Den er nu
     dokumenteret. Det er det samme mønster ❓ 16 beskriver — en kunde skal ikke
     kende en mulighed, kun fordi nogen har lavet den — og det peger på at
     næste måling bør være: **hvilke andre byggede veje står i ingen kundeflade?**
