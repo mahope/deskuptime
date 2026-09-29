@@ -22,7 +22,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
-import { join, sep } from 'node:path';
+import { dirname, join, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { assertTempHome, effectiveHome, isTempHome, tempHome } from './helpers/env.mjs';
@@ -186,7 +186,14 @@ test('the state file this suite writes is the suite\'s own', () => {
   const touched = existsSync(state) ? statSync(state).mtimeMs : null;
   assert.notEqual(state, real);
   assert.ok(isTempHome(join(process.env.HOME, '.deskuptime')));
-  assert.ok(touched === null || typeof touched === 'number');
+  // P1-116 — this was `touched === null || typeof touched === 'number'`, which
+  // is what the line above always produces, so it could not fail. The real
+  // claim is directional: the real home is never the one measured, and whatever
+  // was touched belongs to the throwaway home — not merely to *some* directory.
+  assert.ok(
+    touched === null || isTempHome(dirname(state)),
+    'a state file was written outside the throwaway home',
+  );
 });
 
 /**

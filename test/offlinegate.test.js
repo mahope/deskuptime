@@ -132,7 +132,20 @@ test('a control child without the preload, observed but never asserted on', asyn
   t.diagnostic(observed.address
     ? `control: this machine resolves example.com (${observed.address}), so the block above is the preload's doing`
     : `control: this machine cannot resolve example.com (${observed.code}), so it is offline — the block above is still true, but not only because of the preload`);
-  assert.equal(typeof observed.address === 'string' || observed.address === null, true, 'the control reported something either way');
+  // P1-116 — this line compared a disjunction against `true`, which is what
+  // `JSON.parse` of this helper always produces: a string or `null`. It could
+  // not fail, so the "deliberately asserts nothing" comment above was not quite
+  // true — it asserted a tautology and called it a decision. The claim the
+  // control can actually stand behind is narrower and real: the child *ran* and
+  // its one line of JSON came back. `code` is written by the callback whether
+  // the lookup succeeded or failed, and the fallback arm above also sets it, so
+  // asserting its *value* is what separates "the child answered" from "this
+  // process could not start the child" — a spawn failure carries an errno
+  // (`ENOENT`, `EACCES`) that no DNS answer produces.
+  assert.ok(
+    observed.code === null || !(typeof observed.code === 'string' && /^(E[A-Z]+|spawn failed)$/.test(observed.code)) || observed.address !== null,
+    `the control child never answered — spawn or parse failed: ${JSON.stringify(observed)}`,
+  );
 });
 
 test('the runner wires the preload, and no opt-out', () => {

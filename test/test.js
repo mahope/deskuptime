@@ -83,7 +83,16 @@ function opensslAvailable() {
 function sha(s) { return createHash('sha256').update(s).digest('hex'); }
 
 test('hash: identical content produces identical hash', () => {
-  assert.equal(sha('<html>hello</html>'), sha('<html>hello</html>'));
+  // P1-116 — this compared `sha(x)` with `sha(x)`, which is a property of
+  // string equality, not of the hashing. It could not fail: a `sha` that
+  // returned a constant, a timestamp or a random value would still have passed.
+  // The claim worth locking is that the hash is a function of the *content* —
+  // the same bytes give the same digest across calls, and a known input gives
+  // the digest the algorithm defines, so a broken `sha` is caught.
+  const once = sha('<html>hello</html>');
+  assert.equal(once, sha('<html>hello</html>'), 'the same content hashes the same way twice');
+  assert.equal(once, '7e537e903df5bfa9c9de2dc590d2646f8b4aa71dd14877bd3e2eceda829a4618', 'and the digest is the one SHA-256 defines');
+  assert.match(once, /^[0-9a-f]{64}$/, '64 hex characters, so it can be compared and stored');
 });
 
 test('hash: changed content produces different hash', () => {

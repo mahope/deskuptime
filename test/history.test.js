@@ -122,7 +122,13 @@ test('retention keeps the window plus slack, and forgets emptied URLs', () => {
   recordHistoryPass(history, URL_B, { healthy: true }, { now: daysAgo(HISTORY_DAYS + 5) });
   pruneHistory(history, { now: NOW });
   assert.equal(Object.keys(history.urls).length, 1, 'a URL with no day left in the window must be dropped');
-  assert.deepEqual(Object.keys(history.urls[URL_A]).sort(), Object.keys(history.urls[URL_A]).sort());
+  // P1-116 — the day keys themselves, not the count. The line this replaces
+  // compared one sorted list with the *same* sorted list, so it could not fail;
+  // only the `length` below it was real, and a history holding the right number
+  // of wrong days passed.
+  const expected = [];
+  for (let index = HISTORY_DAYS - 1; index >= 0; index--) expected.push(dayKey(daysAgo(index)));
+  assert.deepEqual(Object.keys(history.urls[URL_A]).sort(), expected.sort(), 'the kept days are the window, day for day');
   assert.equal(Object.keys(history.urls[URL_A]).length, HISTORY_DAYS);
   assert.equal(history.urls[URL_A][dayKey(NOW)].checks, 1, 'today must survive pruning');
   assert.ok(!history.urls[URL_A][dayKey(daysAgo(HISTORY_DAYS))], 'a day outside the window survived');

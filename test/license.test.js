@@ -95,8 +95,17 @@ test('device id: Windows CLI and desktop agree on a long machine name', () => {
 });
 
 test('device id: CLI and desktop both read COMPUTERNAME on Windows', () => {
+  // P1-116 — this line compared `getDeviceId(args)` with itself, so it could not
+  // fail. The claim is that Windows uses COMPUTERNAME and *not* the 15-char
+  // NetBIOS name `os.hostname()` returns, so it is measured against the id the
+  // same env produces when the two disagree — which is the case that matters.
   const args = { platform: 'win32', env: { COMPUTERNAME: 'WORKSTATION-NORD-01' }, host: 'WORKSTATIO-NORD-01' };
-  assert.equal(getDeviceId(args), getDeviceId(args));
+  assert.equal(getDeviceId(args), 'deskuptime-workstation-nord-01', 'COMPUTERNAME wins over the truncated host name');
+  assert.equal(
+    getDeviceId({ ...args, host: 'HELT-ANDEN-MAS' }),
+    'deskuptime-workstation-nord-01',
+    'the host name is ignored entirely when COMPUTERNAME is set',
+  );
 });
 
 test('activate: posts key, device_id and product to /activate', async () => {

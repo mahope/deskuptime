@@ -1,5 +1,90 @@
-> **Seneste:** iteration 130 (P1-115, færdig) — historien står i køens afsnit
-> `P1-115 — FÆRDIG 2026-09-29` lige under `## Prioriteret kø`.
+> **Seneste:** iteration 131 (P1-116, færdig) — historien står i køens afsnit
+> `P1-116 — FÆRDIG 2026-09-29` lige under `## Prioriteret kø`.
+
+## Status fra denne iteration (131, P1-116 — fem assertioner der ikke kunne fejle, så lås var grønne fordi de ingenting målte)
+
+**Målt først, nul kode ændret.** Køen var tømt, så målingen gik på ❓ 16's egen
+ansvisning — *hvilke byggede veje modsiger det de siger?* — for **fjerde** gang, som
+P1-130's afsnit anbefalede, men denne gang på **låsene selv**. Ikke på endnu en
+kundeflade: på de 869 assertioner, der holder sammen om 34 filer.
+
+**Målingen er en sletning, fordi en mutation ikke kan vise det her.** Min første
+mutation skrev en *forkert* værdi ind i hver tautologi — det beviser intet, for en
+ændret assertion fejler jo altid. Den rigtige spørgsmål er: *bærer denne linje
+noget som helst?* Sådan:
+
+```
+$ # D1: slet history.test.js:125 (en liste sammenlignet med sig selv)
+$ node --test test/history.test.js          # 19 pass / 0 fail  (uændret)
+$ # D2: slet license.test.js:99             # 48 pass / 0 fail
+$ # D3: slet offlinegate.test.js:135        #  5 pass / 0 fail
+$ # D4: slet isolation.test.js:189          # (via `npm test`) 867/867
+```
+
+**Alle fire sletninger: 867/867.** Hver af de fire linjer bar nul. Og da scanneren
+kom på arbejde, fandt den en **femte** i `test/test.js:86`, som ingen måling havde
+ramt:
+
+| fil | assertion | hvorfor den er død |
+|---|---|---|
+| `history.test.js:125` | `assert.deepEqual(X.sort(), X.sort())` | én liste mod sig selv |
+| `license.test.js:99` | `assert.equal(getDeviceId(a), getDeviceId(a))` | ét kald mod sig selv |
+| `offlinegate.test.js:135` | `assert.equal(typeof x === 'string' \|\| x === null, true)` | disjunktionen dækker hele domænet |
+| `isolation.test.js:189` | `assert.ok(touched === null \|\| typeof touched === 'number')` | samme |
+| `test.js:86` | `assert.equal(sha('<html>hello</html>'), sha('<html>hello</html>'))` | to ens strenge |
+
+Det er **otte skikkelse af den sygdom** planen har målt syv gange (P1-91, 108, 107,
+111, 113, 114, 115) — og igen en ny variant: ikke en løftefejl i kundenfladen, men
+en lås der var grøn, fordi den aldrig spurgte det eneste spørgsmål, en lås stiller.
+
+**Rettelsen måler den regel, titlen lovede.** `license.test.js` siger *"CLI og
+desktop læser begge COMPUTERNAME på Windows"* — den måler nu at `COMPUTERNAME`
+**vinder** over det afkortede værtsnavn, ved at kræve samme id når `host` er en
+komplet anden maskine. `history.test.js` kræver nu de **konkrete dagsnøgler**
+og ikke kun et antal. `test.js` kræver det digest SHA-256 definerer — hvilket
+første gang jeg skrev den **forkert**, sådan at den løb rød: en lås der aldrig har
+kørt mod en rigtig værdi, kan ikke rammes af en rigtig værdi.
+
+**Og låsen fangede min egen rettelse.** Første udkast til `offlinegate.test.js`
+skrev `assert.ok(observed.address === null || typeof observed.address === 'string')`
+— præcis den døde form, jeg var i gang med at fjerne. Scanneren rapporterede den
+på min egen diff. Det er det bedste bevis på at den virker, og det er grunden til
+at den endnu står.
+
+**To nye låse, fordi P1-115's to var svage.** (1) `no test asserts something that
+cannot fail` — gennemgår alle filer i `test/` på de to statisk afgørige former.
+(2) `the scanner reports its own failure` — planter hver form i en syntetisk
+kilde *og* de naboer der ikke må rapporteres, så en scanner der holdt op med at
+finde ville fejle der og ikke tie. Begge er målt: M1 (en `SELF` skrevet tilbage i
+`license.test.js`), M2 (en `DOMAIN` i `isolation.test.js`) og M5 (ødelagt
+citat-test) dør hver med **1 rød** og fil + linje i beskeden.
+
+**Bygget som en tilstandsmaskine, ikke en regex, fordi P1-115's egen ⚠️ sagde
+præcis det.** Og mutationerne bekræfter hvorfor: **M3 (bytte rækkefølgen på
+citatkontrollen) og M4 (ødelægge nylinjeregelen) overlever begge.** Det er ikke et
+hul — det er den *anden* halvdel af samme måling. En regex' korrekthed afhænger af
+rækkefølgen dens alternativer står i, og intet i en test bemærker den; en
+tilstandsmaskine har ingen rækkefølge at bytte om. M3/M4 kan ikke slås ihjel,
+fordi de rører en adfærd som **gyldig JavaScript ikke har** (et literal der aldrig
+lukkes), så ingen fixture kan adskille dem. Det står skrevet i filens header, så
+næste iteration ikke tror at låsen er stærkere end den er.
+
+**⚠️ To fejl undervejs, fordi jeg læste min egen fejl som scannerens.** (a) Jeg
+skrev først en fejl-kastende `mask` og troede den havde fundet en reel desync i
+seks filer — den havde ikke; `apostrof i en // kommentar` er en **begrænsning**,
+ikke en fejl, og `test.js:589` har altid haft en. (b) Jeg brugte en halvdags
+bisect med en sentinel, som var falsk-positiv, fordi sentinelen blev maskeret
+inde i en blokkommentar. Den egentlige fejl var en simpel: jeg målte på en
+debug-kopi, der var ældre end filen. Den læring — *en måling der ikke kan
+genkøres mod den rigtige fil er ingen måling* — er grunden til at mutationerne
+ovenfor er skrevet ind i filen med `cp` + `node --test` og verificeret med `rg`.
+
+**→ 869/869** (867 + 2); audit 0/0; `matrix --check` tavs; `node --check` over alle
+kilder **og alle 79 testfiler** grøn; `git diff --check` grøn. Baseline uændret:
+npm 16 downloads/uge, ★0, Plausible `/` 3 besøgende/28 d.
+
+**Ingen deploy-note:** CLI-repo uden live-deploytarget, og ingen side blev ændret
+(`deskuptime.com` ligger i et andet repo, P0-12 `BLOCKED`).
 
 ## Status fra denne iteration (130, P1-115 — en test gav CLI'en en `HOME` som var et objekt, så gaten skrev `[object Object]` i repo-roden og låste det alligevel grønt)
 
@@ -5483,15 +5568,102 @@ Den aktuelle gate-definition er registreret her:
 
 ## Prioriteret kø
 
-> **Køen er tom igen for målte kandidater** (iteration 130). Næste iteration skal
+> **Køen er tom igen for målte kandidater** (iteration 131). Næste iteration skal
 > **måle først** og finde sin egen opgave. Se `❓ Til Mads` for de konkrete
 > kandidater. ❓ 21 er nu besvaret i kode (P1-105) og lukket, ❓ 16 ligeledes
-> (P1-109). Målingen i iteration 130 gik på **det gaten efterlod i arbejdstræet**
-> i stedet for på endnu en kunde flade — og fandt en lås, der var grøn fordi den
-> kørte mod det forkerte. ❓ 16's anvisning (*hvilke byggede veje modsiger det de
-> siger?*) er brugt på løfter (128), exit-koder (129) og låse (130); næste
-> brug bør være den **fjerde** art: hvilke andre tests er grønne fordi de slet ikke
-> nåede det, de påstår at måle.
+> (P1-109). Målingen i iteration 130 gik på **det gaten efterlod i arbejdstræet**,
+> 131 på **om låsene overhovedet måler noget** — og fandt **fem assertioner, der
+> ikke kunne fejle**, hvoraf den ene lå i en lås. ❓ 16's anvisning (*hvilke byggede
+> veje modsiger det de siger?*) er brugt på løfter (128), exit-koder (129), låse
+> (130) og ** assertionernes egen vægt** (131); næste brug bør være den **femte**
+> art, eller en anden måling helt: de to mutationer der overlevede i 131 (M3, M4)
+> er dokumenteret som uobserverbare, så næste iteration bør lede efter en måling
+> der *kan* dø, ikke en der kun kan grønnes.
+
+### P1-116 — FÆRDIG 2026-09-29 (`ceo/vacuous-locks`) — fem assertioner der ikke kunne fejle, så lås var grønne fordi de ingenting målte
+
+**Målt først, nul kode ændret.** Køen var tømt, så målingen gik på ❓ 16's egen
+ansvisning — *hvilke byggede veje modsiger det de siger?* — for fjerde gang, som
+P1-130 anbefalede, men denne gang på **låsene selv**: de 869 assertioner, der
+holder sammen om 34 filer.
+
+**En mutation kan ikke vise det her.** Min første mutation skrev en *forkert* værdi
+ind i hver tautologi — det beviser intet, for en ændret assertion fejler jo altid.
+Det rigtige spørgsmål er om en linje *bærer noget som helst*, og det måles ved
+sletning. Alle fire sletninger, én ad gangen:
+
+```
+$ node --test test/history.test.js     # 19 pass / 0 fail   (linjen slettet)
+$ node --test test/license.test.js     # 48 pass / 0 fail
+$ node --test test/offlinegate.test.js #  5 pass / 0 fail
+$ npm test                              # 867/867            (isolation)
+```
+
+**Alle fire bar nul.** Og scanneren fandt en **femte** i `test/test.js:86`, som
+målingen ikke havde ramt. Fem døde assertioner, på tre former:
+
+| fil | assertion | hvorfor den er død |
+|---|---|---|
+| `history.test.js:125` | `assert.deepEqual(X.sort(), X.sort())` | én liste mod sig selv |
+| `license.test.js:99` | `assert.equal(getDeviceId(a), getDeviceId(a))` | ét kald mod sig selv |
+| `offlinegate.test.js:135` | `assert.equal(typeof x === 'string' \|\| x === null, true)` | disjunktionen dækker hele domænet |
+| `isolation.test.js:189` | `assert.ok(touched === null \|\| typeof touched === 'number')` | samme |
+| `test.js:86` | `assert.equal(sha('<html>hello</html>'), sha('<html>hello</html>'))` | to ens strenge |
+
+Det er **otte skikkelse af den sygdom** planen har målt syv gange (P1-91, 108, 107,
+111, 113, 114, 115) — igen en ny variant: ikke en løftefejl i kundenfladen, men en
+lås der var grøn, fordi den aldrig spurgte det eneste spørgsmål, en lås stiller.
+
+**Rettelsen måler den regel, titlen lovede.** `license.test.js` kræver nu at
+`COMPUTERNAME` **vinder** over det afkortede værtsnavn, ved at kræve samme id når
+`host` er en komplet anden maskine. `history.test.js` kræver de **konkrete
+dagsnøgler**, ikke kun et antal. `test.js` kræver det digest SHA-256 definerer —
+hvilket **første gang jeg skrev den var forkert**, sådan at den løb rød. En lås der
+aldrig har kørt mod en rigtig værdi kan ikke rammes af en rigtig værdi.
+
+**Og låsen fangede min egen rettelse.** Første udkast til `offlinegate.test.js` skrev
+`assert.ok(observed.address === null || typeof observed.address === 'string')` —
+præcis den døde form jeg var ved at fjerne. Scanneren rapporterede den på min
+egen diff.
+
+**To nye låse.** (1) `no test asserts something that cannot fail` gennemgår alle
+filer i `test/`. (2) `the scanner reports its own failure` planter hver form i en
+syntetisk kilde *og* de naboer der ikke må rapporteres. Målt: M1 (en `SELF` skrevet
+tilbage i `license.test.js`), M2 (en `DOMAIN` i `isolation.test.js`) og M5 (ødelagt
+citat-test) dør hver med **1 rød** og fil + linje i beskeden.
+
+**Bygget som en tilstandsmaskine, ikke en regex, fordi P1-115's egen ⚠️ sagde det.**
+Mutationerne bekræfter hvorfor: **M3 (bytte rækkefølgen på citatkontrollen) og M4
+(ødelægge nylinjeregelen) overlever begge.** Det er ikke et hul, men den anden
+halvdel af samme måling: en regex' korrekthed afhænger af rækkefølgen dens
+alternativer står i, og intet i en test bemærker den; en tilstandsmaskine har ingen
+rækkefølge at bytte om. M3/M4 kan ikke slås ihjel, fordi de rører en adfærd som
+**gyldig JavaScript ikke har** — et literal der aldrig lukkes — så ingen fixture kan
+adskille dem. Det står i filens header, så næste iteration ikke tror at låsen er
+stærkere end den er.
+
+**⚠️ To fejl undervejs, fordi jeg læste min egen fejl som scannerens.** (a) Jeg skrev
+først en fejl-kastende `mask` og troede den havde fundet en reel desync i seks filer
+— den havde ikke; `apostrof i en // kommentar` er en **begrænsning**, ikke en fejl,
+og `test.js:589` har altid haft en. (b) Jeg brugte en bisect med en sentinel, som
+var falsk-positiv, fordi sentinelen blev maskeret inde i en blokkommentar. Den
+egentlige fejl var en simpel: jeg målte på en debug-kopi, der var ældre end filen.
+Den læring — *en måling der ikke kan genkøres mod den rigtige fil er ingen
+måling* — er grunden til at mutationerne er skrevet ind i filen med `cp` +
+`node --test` og verificeret med `rg`.
+
+**→ 869/869** (867 + 2); audit 0/0; `matrix --check` tavs; `node --check` over alle
+kilder **og alle 79 testfiler** grøn; `git diff --check` grøn.
+
+**⚠️ Mutation M2 i P1-115 døde stadig ikke med den nye lås**, og det er korrekt: de
+ting den rørte (en regex' alternativrækkefølge) er ikke en assertion, så
+`vacuousassert` kan ikke se den. Den påstand står derfor uændret, og nye
+scannere skal fortsat have *deres egen* selvlås — hvilket er præcis hvad
+P1-130's ⚠️ sagde, og grunden til at mutationerne ovenfor er målt i stedet for
+antaget.
+
+**Ingen deploy-note:** CLI-repo uden live-deploytarget, og ingen side blev ændret
+(`deskuptime.com` ligger i et andet repo, P0-12 `BLOCKED`).
 
 ### P1-115 — FÆRDIG 2026-09-29 (`ceo/badtesthome`) — en test gav CLI'en en `HOME` som var et objekt, så gaten skrev `[object Object]` i repo-roden
 
