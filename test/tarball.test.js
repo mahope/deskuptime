@@ -56,7 +56,7 @@ if (!skip) {
       DESKUPTIME_SELFCHECK_URL: SITE
     }
   });
-  run('mkdir', ['-p', EXTRACTED]);
+  await run('mkdir', ['-p', EXTRACTED]);
   await run('tar', ['-xzf', TARBALL, '-C', EXTRACTED]);
 }
 

@@ -1,5 +1,68 @@
-> **Seneste:** iteration 126 (P1-111, færdig) — historien står i køens afsnit
-> `P1-111 — FÆRDIG 2026-09-29` lige under `## Prioriteret kø`.
+> **Seneste:** iteration 127 (P1-112, færdig) — historien står i køens afsnit
+> `P1-112 — FÆRDIG 2026-09-29` lige under `## Prioriteret kø`.
+
+## Status fra denne iteration (127, P1-112 — den ulæste flake fik en årsag, en rettelse og en lås)
+
+**Målt først.** Køen var tømt, så målingen tog den ene ting planen selv havde
+lagt til side ulæst **to gange**: `test/tarball.test.js` slog gaten rød med
+`test failed` på fil-niveau uden årsag i både iteration 125 og 126, og kunne ikke
+reproduceres i 4 gatkørsler + 12 målrettede. Jeg startede med at jage den som
+flaky og fandt den *ikke* — 8 målrettede kørsser + 1 fuld gatkørsel, alle grønne.
+Det viste sig at være det forkerte spor: den var aldrig flaky.
+
+**Målingen af mechanismen, ikke af tilfældet.** En spawn hvis promise ikke
+awaites er en flyvende promise, og når den afvises *efter* det sidste test er
+færdigt, dræber Node's test-runner hele filen. Målt med en probe-fil i `test/`:
+
+```
+ℹ Error: A resource generated asynchronous activity after the test ended.
+  …which triggered an unhandledRejection event, caught by the test runner.
+✖ test/zzcrashprobe.test.js (66.242541ms)
+✖ failing tests:
+test at test/zzcrashprobe.test.js:1:1
+✖ test/zzcrashprobe.test.js
+  'test failed'
+```
+
+**Det er præcis den signatur planen har skrevet ned to gange.** Og den afslører
+hvorfor ingen kunne finde den: **alle tests i filen bestod.** Ingen test fejlede,
+så overskriften hedder `test failed`, navngiver ingen, og grunden står en skærm
+oppefter i rulleteksten. Den næste iteration måtte så jage den i stedet for at
+læse den.
+
+**Og der var præcis én af slagsen.** `test/tarball.test.js:59` havde
+`run('mkdir', ['-p', EXTRACTED])` — ikke awaitet, lige før et awaitet
+`tar -xzf … -C` ind i *samme* mappe. Den er awaitet nu. Scannen fandt ingen
+andre: 6 `execFileSync` er synkroniske og kan ikke flyve (de kaster i stedet for
+at afvise), så de er bevidst undtaget.
+
+**Låsen er en scanning, og en scanning der intet finder kan ikke skelnes fra en
+der er i stykker.** Derfor planter `scanneren genkender sin egen fejl`Formerne i
+en syntetisk kilde og kræver at de der flyver bliver fundet, og de der ikke
+gør bliver ladt være. En scanner der holdt op med at ramme dør *der*, ikke
+stille i gaten.
+
+**Tre mutationer målt, alle tre døde.** M1 (sæt den flyvende `mkdir` tilbage i
+tarball.test.js) → låsen rød. M2 (scanneren returnerer altid `[]`) → selve
+påvisningen rød. M3 (fjern `*Sync`-udelukkelsen) → begge tests rød.
+
+> ⚠️ **Mutationerne lævede en gang i denne iteration, og det er værd at
+> skrive ned:** M2's reparation var `git checkout test/floatingspawn.test.js` på
+> en **u-tracket** fil, som intet gør. Den fejlede stille, M2's mutation blev
+> stående, og M3's måling var dermed *sammenbrudt* før den kørte. Den så ud
+> til at dø (0 pass / 2 fail), hvilket den også gør — men af en grund der ikke
+> var den tilsigtede. Først et md5-baseret baseline (`md5 -q` før mutation)
+> afslørede det. **Fremgangsmåde for en ny fil i dette repo: mål på checksum, og
+> lav altid reparationen fra en `cp` uden for repoet, aldrig fra `git checkout`
+> på en fil der ikke er tracked.**
+
+**→ 855/855** (853 + 2); audit 0/0; `matrix --check` tavs; `node --check` og
+`git diff --check` grønne. Baseline uændret: npm 16 downloads/uge, ★0,
+Plausible `/` 3 besøgende/28 d. Rettelsen rører kun testene, så intet i
+produktet eller på npm-siden ændrer sig.
+
+**Ingen deploy-note:** CLI-repo uden live-deploytarget, og ingen side blev
+ændret (`deskuptime.com` ligger i et andet repo, P0-12 `BLOCKED`).
 
 ## Status fra denne iteration (126, P1-111 — den betalte rapport var det eneste produkt ingen kundeflade viste)
 
@@ -64,9 +127,11 @@ rammer kun GitHub/npm-fladerne og kræver ingen ny release, fordi npm-siden ikke
 renderer README-sektioner. Baseline uændret: npm 16 downloads/uge, ★0, Plausible
 `/` 3 besøgende/28 d.
 
-**⚠️ Ulæst fra iteration 125:** `test/tarball.test.js` slog gaten rød én gang
+**✅ Læst i iteration 127 (P1-112):** `test/tarball.test.js` slog gaten rød én gang
 med `test failed` uden årsag (fil-niveau, 1054 ms) og kunne ikke reproduceres i
-4 gatkørsler + 12 målrettede. Genopstod ikke i de to gaten her.
+4 gatkørsler + 12 målrettede. Genopstod ikke i de to gaten her. **Årsagen er
+fundet:** en ikke-awaitet `run('mkdir', …)` i linje 59, som dræber hele filen når
+den afvises *efter* det sidste test. Rettet og låst af en scanning af hele suiten.
 
 ## Status fra denne iteration (125, P1-110 — ét state-fil, tre tal, to skærme)
 
@@ -5201,10 +5266,45 @@ Den aktuelle gate-definition er registreret her:
 
 ## Prioriteret kø
 
-> **Køen er tom for målte kandidater** (iteration 126). Næste iteration skal
+> **Køen er tom for målte kandidater** (iteration 127). Næste iteration skal
 > **måle først** og finde sin egen opgave. Se `❓ Til Mads` for de konkrete
-> kandidater. ❓ 21 er nu besvaret i kode (P1-105) og lukket, og ❓ 16 ligeledes
+> kandidater. ❓ 21 er nu besvaret i kode (P1-105) og lukket, ❓ 16 ligeledes
 > (P1-109).
+
+### P1-112 — FÆRDIG 2026-09-29 (`ceo/tarball-flake`) — den ulæste flake var aldrig flaky; den var en flyvende promise
+
+**Målt først.** Den eneste ting planen selv havde lagt ulæst, to gange:
+`test/tarball.test.js` slog gaten rød med `test failed` på fil-niveau uden
+årsag i både iteration 125 og 126. Ikke reproducerbar i 4 gatkørsler + 12
+målrettede, så to hele iterationer gik med at jage den som flaky. **Målingen
+sagde det modsatte: 8 målrettede kørsser + 1 fuld gatkørsel, alle grønne.**
+
+**Mechanismen, målt med en probe-fil lagt i `test/`:** en spawn hvis promise ikke
+er awaitet er en flyvende promise, og når den afvises efter det sidste test er
+færdigt, dræber test-runneren hele filen. Nøjagtig den signatur der stod i
+planen to gange — og den afslører hvorfor ingen fandt den: **alle tests i filen
+bestod**, så `✖ failing tests` siger `test failed` og navngiver ingen, mens
+grunden ligger en skærm oppefter i rulleteksten.
+
+**Rettelsen:** `test/tarball.test.js:59` awaitede ikke sit `run('mkdir', …)`
+lige før et awaitet `tar -xzf … -C` ind i samme mappe. Én `await`.
+
+**Låsen er en scanning af hele suiten, ikke af den ene fil** — 33 filer, så
+den dækker den næste der skriver den samme fejl. `*Sync` er undtaget på
+måling (6 opkald i dag, synkroniske, kan ikke flyve). Selve påvisningen er
+selvlåst af `scanneren genkender sin egen fejl`, fordi en scanning der intet
+finder ikke kan skelnes fra en der er i stykker.
+
+**Tre mutationer målt, alle tre døde** (M1 flyvende mkdir tilbage / M2
+scanneren død / M3 Sync-udelukkelsen væk). ⚠️ M2's reparation var `git checkout`
+på en u-tracket fil og fejlede **stille** — M3's måling var dermed sammenbrudt
+før den kørte, sådan at den så ud til at dø af en anden grund end den
+tilsigtede. Fandet ved md5-baseline. Ny fil i dette repo: mål på checksum og
+reparér fra en `cp` uden for repoet.
+
+**→ 855/855** (853 + 2); audit 0/0; `matrix --check` tavs. Kun testene røres,
+så intet i produktet eller på npm-siden ændrer sig. Baseline uændret:
+npm 16 downloads/uge, ★0, Plausible `/` 3 besøgende/28 d.
 
 ### P1-111 — FÆRDIG 2026-09-29 (`ceo/report-showcase`) — den betalte rapport var det eneste produkt ingen kundeflade viste
 
@@ -5297,9 +5397,11 @@ af de tre nøgler ikke var en adresse — altså krævede den, at overskriften
 løj om noget den ikke kan vide. Samme form som P1-104's rettelse af
 `statusline.test.js`.
 
-**Åbent fund, ulæst:** `test/tarball.test.js` slog gaten rød én gang i denne
-iterations start (fil-niveau, `test failed`, ingen årsag, 1054 ms) og kunne ikke
-reproduceres i 4 gatkørsler + 12 målrettede kørsler. Se afsnittet øverst.
+**✅ Åbent fund, læst i iteration 127 (P1-112):** `test/tarball.test.js` slog
+gaten rød én gang i denne iterations start (fil-niveau, `test failed`, ingen
+årsag, 1054 ms) og kunne ikke reproduceres i 4 gatkørsler + 12 målrettede kørsler.
+**Årsagen var en flyvende promise**, ikke flakiness: `test/tarball.test.js:59`
+awaitede ikke sit `run('mkdir', …)`. Se P1-112 i køens afsnit.
 
 ### P1-109 — FÆRDIG 2026-09-29 (`ceo/free-slots`) — den daglige liste vidste ikke, at `3` var en grænse
 
