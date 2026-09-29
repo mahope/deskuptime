@@ -20,7 +20,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -170,6 +170,10 @@ test('npm test still goes through the runner that owns the lock', () => {
   assert.ok(existsSync(join(ROOT, 'tools', 'run-tests.mjs')), 'the runner exists');
   const runner = readFileSync(join(ROOT, 'tools', 'run-tests.mjs'), 'utf8');
   assert.match(runner, /USERPROFILE: home/, 'and it sets both variables the CLI reads');
+  // P1-115 — the fourth lock: the suite must not write into the repo it runs
+  // from. It is pinned here for the same reason the runner is pinned above —
+  // a lock that one deleted `const` removes is worth less than it looks.
+  assert.match(runner, /repoTreeStamp/, 'the runner also compares the repo tree before and after');
 });
 
 test('the state file this suite writes is the suite\'s own', () => {
@@ -183,4 +187,73 @@ test('the state file this suite writes is the suite\'s own', () => {
   assert.notEqual(state, real);
   assert.ok(isTempHome(join(process.env.HOME, '.deskuptime')));
   assert.ok(touched === null || typeof touched === 'number');
+});
+
+/**
+ * P1-115 — a home variable in a test file whose value is not a path.
+ *
+ * Measured: `test/unwatchpartial.test.js` passed `HOME: { …process.env, HOME: home }`.
+ * Node stringifies an env value, so the CLI ran with `HOME=[object Object]` — a
+ * *relative* path — and created `[object Object]/.deskuptime` in `cwd`, which is
+ * the repo root. Every assertion in that test still passed, because an empty
+ * state file says "not monitored" about every address. The runner's tree check
+ * above catches the consequence; this catches the cause, so a test that tidies
+ * up after itself cannot reopen it.
+ *
+ * Only the values that are statically decidable as "not a path" are listed. A
+ * call (`HOME: mkdtempSync(…)`) returns a string and is left alone — a scanner
+ * that could not tell would have to be a type checker.
+ */
+/**
+ * Strip comments and string literals, so this file's own fixtures and the
+ * header that quotes the bug are not reported back as findings. Same reason
+ * `test/floatingspawn.test.js` skips both.
+ */
+function codeOnly(src) {
+  // Quotes come *first* in the alternation, so a literal that opens with `//` or
+  // `/*` is a literal and not a comment — the order costs a limitation instead:
+  // an apostrophe in a `//` comment can start a literal that never closes, so
+  // literals are not allowed to span lines. A home variable that needs two lines
+  // to say is not a shape worth catching here.
+  const skip = /'(?:\\.|[^'\\\n])*'|"(?:\\.|[^"\\\n])*"|`(?:\\.|[^`\\\n])*`|\/\*[\s\S]*?\*\/|\/\/[^\n]*/g;
+  return src.replace(skip, (match) => (match.includes('\n') ? '\n' : ' '));
+}
+
+function nonPathHomes(src) {
+  const hits = [];
+  for (const m of codeOnly(src).matchAll(/\b(HOME|USERPROFILE)\s*:\s*([^\n,}]+)/g)) {
+    const value = m[2].trim();
+    if (/^[{[\d]|^(null|true|false)\b/.test(value)) hits.push(`${m[1]}: ${value}`);
+  }
+  return hits;
+}
+
+test('no test file hands the CLI a HOME that is not a path', () => {
+  const offenders = [];
+  for (const name of readdirSync(join(ROOT, 'test')).filter((n) => n.endsWith('.js'))) {
+    for (const hit of nonPathHomes(readFileSync(join(ROOT, 'test', name), 'utf8'))) {
+      offenders.push(`${name}  ${hit}`);
+    }
+  }
+  assert.deepEqual(offenders, [], `Node stringifies et env-værdi, så en ikke-streng HOME bliver en relativ mappe i cwd:\n${offenders.join('\n')}`);
+
+  // The scanner recognises its own error, or "found nothing" and "is broken"
+  // look the same from the outside.
+  assert.deepEqual(
+    nonPathHomes("const a = { HOME: { ...process.env, HOME: home } };"),
+    ['HOME: { ...process.env'],
+    'the object literal that caused this must be reported',
+  );
+  assert.deepEqual(
+    nonPathHomes("const b = { HOME: home, USERPROFILE: home };"),
+    [],
+    'a real temp path is left alone',
+  );
+  // This file quotes the bug in a comment and in two strings, and those must
+  // not come back as findings — the lock would otherwise be unsatisfiable.
+  assert.deepEqual(
+    nonPathHomes("// HOME: { …process.env, HOME: home }\nconst c = { USERPROFILE: null };"),
+    ['USERPROFILE: null'],
+    'comments and strings are skipped, real code is not',
+  );
 });

@@ -59,13 +59,26 @@ import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { assertTempHome } from './helpers/env.mjs';
+
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const CLI = join(ROOT, 'src', 'cli.js');
 
 function run(args, { env = {} } = {}) {
+  const childEnv = { ...process.env, ...env };
+  // P1-115: this line is the lock, and it was missing for a reason worth
+  // keeping in the file. The first version of the fourth test passed
+  // `HOME: { ...process.env, HOME: home }` — an *object*. Node stringifies an
+  // env value, so the CLI ran with `HOME=[object Object]`, resolved it
+  // relative to its working directory and created `[object Object]/.deskuptime`
+  // in the repo root on every gate run. The assertions still passed, because
+  // an empty state file also says "not monitored" — the test held for the
+  // wrong reason and left a directory behind. `assertTempHome` is the one owner
+  // of this rule and it rejects a non-string HOME before anything is spawned.
+  assertTempHome(childEnv, 'unwatchpartial');
   return new Promise((resolve) => {
     execFile(process.execPath, [CLI, ...args], {
-      env: { ...process.env, ...env },
+      env: childEnv,
       maxBuffer: 8 * 1024 * 1024,
     }, (error, stdout, stderr) => {
       resolve({ code: error?.code ?? 0, stdout, stderr });
@@ -127,13 +140,24 @@ test('alle bedte adresser var overvågede: exit 0, som før', async (t) => {
 test('ét site: exit 1 for et ukendt site og exit 0 for et kendt, som før', async (t) => {
   const { home, dir } = withThree(t);
 
-  const unknown = await run(['unwatch', 'http://k1.dk/'], { env: { HOME: { ...process.env, HOME: home } } });
-  assert.equal(unknown.code, 1);
+  // P1-115: den ukendte adresse hedder `aldrig-overvaaget.dk` og ikke `k1.dk`.
+  // Den gamle version af denne test bad om `k1.dk`, som **er** overvåget i
+  // fixture'en, og fik exit 1 alligevel — fordi HOME var `[object Object]`, så
+  // CLI'en læste en tom state-fil, hvor alt er ukendt. Sætningen på linjen
+  // ovenfor holdt altså for den forkerte grund.
+  const unknown = await run(['unwatch', 'http://aldrig-overvaaget.dk/'], { env: { HOME: home, USERPROFILE: home } });
+  assert.equal(unknown.code, 1, `exit ${unknown.code} — en adresse der ikke overvåges skal give 1`);
+  assert.match(unknown.stderr, /not monitored: http:\/\/aldrig-overvaaget\.dk\//);
   assert.deepEqual(watched(dir).sort(), ['http://k1.dk/', 'http://k2.dk/', 'http://k3.dk/']);
 
   const known = await run(['unwatch', 'http://k2.dk/'], { env: { HOME: home, USERPROFILE: home } });
-  assert.equal(known.code, 0);
+  assert.equal(known.code, 0, known.stderr);
   assert.deepEqual(watched(dir).sort(), ['http://k1.dk/', 'http://k3.dk/']);
+
+  // Beviset på at CLI'en læste fixture'en og ikke en tom mappe: tallet i
+  // kvældningslinjen er de to sites der stadig er. En CLI med en forkert HOME
+  // siger `0 URL(s) still monitored`, fordi den ikke kender nogen.
+  assert.match(known.stdout, /2 URL\(s\) still monitored/, 'CLI\'en skal have læst den rigtige state-fil');
 });
 
 test('to delvist fejlede oprydninger efterlader præcis de pladser de frigjorde — og siger det', async (t) => {

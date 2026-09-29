@@ -130,6 +130,31 @@ function allTestFiles() {
   return ['test.js', ...suffixed].map((name) => join('test', name));
 }
 
+/**
+ * P1-115 — the top-level names in the repo, so a suite that writes into its own
+ * working tree is *verified* to have done so, not assumed not to.
+ *
+ * The companion of `realStateStamp()` below, and it closes a hole that one
+ * missed because it only watched the user's home. A test that hands the CLI a
+ * `HOME` which is not a string gets it stringified: `HOME: { … }` became
+ * `HOME=[object Object]`, which is a *relative* path, so the CLI created
+ * `[object Object]/.deskuptime` in `cwd` — the repo root — on every gate run,
+ * and the assertions in that test still passed. Names, not mtimes: the suite
+ * legitimately rewrites gitignored build artifacts (`deskuptime-*.tar.gz`),
+ * and a check on mtimes would fire on those.
+ *
+ * A name that was already there before the run is not a finding — the lock is
+ * about what the suite *creates*, so a developer's untracked leftovers do not
+ * turn the gate red.
+ */
+function repoTreeStamp() {
+  try {
+    return readdirSync(ROOT).sort().join('\n');
+  } catch {
+    return null;
+  }
+}
+
 /** Metadata only — never the contents. A developer's state file is not read. */
 function realStateStamp() {
   try {
@@ -157,6 +182,7 @@ async function main() {
   }
 
   const before = realStateStamp();
+  const treeBefore = repoTreeStamp();
   const child = spawn(process.execPath, ['--test', ...suite], {
     cwd: ROOT,
     stdio: 'inherit',
@@ -180,7 +206,19 @@ async function main() {
     );
   }
 
-  if (code === 0 && !moved && !process.env.DU_KEEP_TEST_HOME) {
+  const treeAfter = repoTreeStamp();
+  const added = treeBefore === null || treeAfter === null
+    ? []
+    : treeAfter.split('\n').filter((name) => name && !treeBefore.split('\n').includes(name));
+  if (added.length > 0) {
+    console.error(
+      `\n✖ the suite wrote into the repo it runs from: ${added.join(', ')}. ` +
+      `A test handed the CLI a HOME that is not a path — Node stringifies it, so an object ` +
+      `becomes the relative directory "[object Object]". Use tempHome() from test/helpers/env.mjs.`,
+    );
+  }
+
+  if (code === 0 && !moved && added.length === 0 && !process.env.DU_KEEP_TEST_HOME) {
     // Only a green run tidies up after itself: a failure keeps the HOME so the
     // state a test wrote can be read.
     rmSync(home, { recursive: true, force: true });
@@ -188,7 +226,7 @@ async function main() {
     console.log(`\nsuite HOME kept at ${home}`);
   }
 
-  process.exit(code === 0 && !moved ? 0 : 1);
+  process.exit(code === 0 && !moved && added.length === 0 ? 0 : 1);
 }
 
 if (resolve(process.argv[1] ?? '') === fileURLToPath(import.meta.url)) {

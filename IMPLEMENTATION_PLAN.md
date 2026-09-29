@@ -1,5 +1,88 @@
-> **Seneste:** iteration 129 (P1-114, færdig) — historien står i køens afsnit
-> `P1-114 — FÆRDIG 2026-09-29` lige under `## Prioriteret kø`.
+> **Seneste:** iteration 130 (P1-115, færdig) — historien står i køens afsnit
+> `P1-115 — FÆRDIG 2026-09-29` lige under `## Prioriteret kø`.
+
+## Status fra denne iteration (130, P1-115 — en test gav CLI'en en `HOME` som var et objekt, så gaten skrev `[object Object]` i repo-roden og låste det alligevel grønt)
+
+**Målt først, nul kode ændret.** Køen var tømt, så målingen gik på ❓ 16's egen
+ansvisning — *hvilke byggede veje modsiger det de siger?* — men på **det, gaten
+ efterlod i arbejdstræet** denne gang. Første `ls` efter en gatkørsel:
+
+```
+$ ls
+…
+[object Object]/            ←  ikke i .gitignore, ikke tracked, tom
+$ find "[object Object]"
+[object Object]
+[object Object]/.deskuptime
+```
+
+En mappe med `[object Object]` som **navn** i repo-roden. Ikke et relikt fra en
+gammel kørsel: den lå der igen efter hver eneste `npm test`, og en bisect over de
+34 filer (`node --test <fil>` + `ls`) pegede på én — `test/unwatchpartial.test.js`,
+den lås P1-114 skrev i gårs.
+
+**Årsagen er én linje, og den er målt med rigtig CLI.** `test/unwatchpartial.test.js:130`
+skrev `env: { HOME: { ...process.env, HOME: home } }` — HOME var et **objekt**.
+Node stringificerer et env-værdi ved spawn, så CLI'en fik `HOME=[object Object]`,
+som er en **relativ** sti, og dens `getStateFile()` lagde `state.json` i
+`[object Object]/.deskuptime` — i *sit eget working directory*, som er repo-roden:
+
+```
+$ HOME='[object Object]' deskuptime unwatch http://k1.dk/     # state har k1.dk
+  ❌ Error: not monitored: http://k1.dk/                       exit 1
+  work/[object Object]/.deskuptime/                            ← oprettet i cwd
+  fixture urørt                                                ← læst aldrig
+```
+
+**Og heraf det værre: låsen holdt for den forkerte grund.** Testen hed
+`ét site: exit 1 for et ukendt site og exit 0 for et kendt` og bad om
+`unwatch http://k1.dk/` — som **er** overvåget i dens egen fixture. Den fik exit 1,
+fordi den læste en *tom* state-fil, hvor alt er ukendt. Samme kald med rigtig HOME:
+
+```
+$ HOME=$temp deskuptime unwatch http://k1.dk/
+  ✅ No longer monitoring: http://k1.dk/                       exit 0
+  2 URL(s) still monitored …
+```
+
+Den skal have svaret 0. **Testen påstod en regel den aldrig målte, og dens
+`deepEqual(watched(dir), [k1,k2,k3])` bevidste det aldrig** — den holder, fordi
+CLI'en aldrig rørte `dir`. Det er **det syvende** skikkelse af den sygdom planen har
+målt seks gange før (P1-91, 108, 107, 111, 113, 114) og en **ny variant**: ikke
+en løftefejl i kundenfladen, men en lås der er grøn fordi den kørte mod det forkerte.
+
+**Rettelsen er to dele.** (a) `unwatchpartial.test.js` bruger nu
+`assertTempHome()` fra `test/helpers/env.mjs` før *hvert* spawn — den ene ejer af
+reglen, som P1-58 byggede og som 17 filer allerede bruger; denne var en af dem der
+rullede sin egen `run()` uden den. (b) Den ukendte adresse hedder
+`http://aldrig-overvaaget.dk/` og ikke `k1.dk`, så testen måler den regel dens titel
+lover, og en ny linje kræver `2 URL(s) still monitored` — et tal kun en CLI der
+læste den rigtige state-fil kan skrive.
+
+**To nye låse, fordi P1-58's tre låse alle så på `HOME` og ikke på cwd.**
+(1) `tools/run-tests.mjs` får et fjerde sammenligningspunkt: **navnene i
+repo-roden før og efter kørslen**. Navne, ikke mtimes — suiten skriver lovligt
+gitignorede byggeartefakter, så en mtime-tjek ville skrige på dem. (2) En statisk
+scanning af alle filer i `test/`: en `HOME:`/`USERPROFILE:`-værdi der ikke er en
+sti. Kun statisk afgørige værdier er med (`{`, tal, `null`, `true/false`); et kald
+som `mkdtempSync(…)` returnerer en streng og røres ikke. Begge låse er målt.
+
+**→ 867/867** (866 + 1); audit 0/0; `matrix --check` tavs; `node --check` over alle
+kilder grøn; `git diff --check` grøn. Baseline uændret: npm 16 downloads/uge, ★0,
+Plausible `/` 3 besøgende/28 d.
+
+**⚠️ Én mutation døde ikke, og det står her fordi næste iteration ikke må tro
+andet.** M1 (objekt-HOME'en tilbage) døde med 2 røde — scanneren **og** testens egen
+`assertTempHome`. M2 (bytte rækkefølgen i `codeOnly`, så kommentarer læses før
+citater) gav **grønt**. Målingen er sikker — mutationen blev skrevet til en fil og
+rapporterede `applied`, og reparationen blev md5-verificeret mod baseline — så
+selvlåsten i scanneren dækker ikke den ombygning. Jeg rettede i stedet kommentaren
+ved den tredje fixture, så den siger hvad den faktisk viser. Næste iteration bør
+lave scanneren til en tilstandsmaskine (som `floatingspawn.test.js` gør) i stedet for
+en regex, hvis den skal tåle en ombygning.
+
+**Ingen deploy-note:** CLI-repo uden live-deploytarget, og ingen side blev ændret
+(`deskuptime.com` ligger i et andet repo, P0-12 `BLOCKED`).
 
 ## Status fra denne iteration (129, P1-114 — `unwatch` sagde exit 0 om et kald, hvor en adresse ikke var overvåget)
 
@@ -5400,15 +5483,111 @@ Den aktuelle gate-definition er registreret her:
 
 ## Prioriteret kø
 
-> **Køen er tom igen for målte kandidater** (iteration 129). Næste iteration skal
+> **Køen er tom igen for målte kandidater** (iteration 130). Næste iteration skal
 > **måle først** og finde sin egen opgave. Se `❓ Til Mads` for de konkrete
 > kandidater. ❓ 21 er nu besvaret i kode (P1-105) og lukket, ❓ 16 ligeledes
-> (P1-109). Målingen i iteration 128 fandt **ikke** flere løfter i matrixen:
-> de otte øvrige rækker er hver især målt i en tidligere iteration. Målingen i
-> iteration 129 gik et andet sted hen — **exit-koderne for de kommandoer der tager
-> flere URL'er** — efter at ❓ 16's anvisning blev brugt på løfterne to gange.
-> Den er nu brugt på *modsigelser* i det samme: `check`, `headers` og `unwatch`
-> skal give samme svar på "ét af mine URL'er fejlede", og gør de (P1-114).
+> (P1-109). Målingen i iteration 130 gik på **det gaten efterlod i arbejdstræet**
+> i stedet for på endnu en kunde flade — og fandt en lås, der var grøn fordi den
+> kørte mod det forkerte. ❓ 16's anvisning (*hvilke byggede veje modsiger det de
+> siger?*) er brugt på løfter (128), exit-koder (129) og låse (130); næste
+> brug bør være den **fjerde** art: hvilke andre tests er grønne fordi de slet ikke
+> nåede det, de påstår at måle.
+
+### P1-115 — FÆRDIG 2026-09-29 (`ceo/badtesthome`) — en test gav CLI'en en `HOME` som var et objekt, så gaten skrev `[object Object]` i repo-roden
+
+**Målt først, nul kode ændret.** Køen var tømt, så målingen gik på ❓ 16's egen
+ansvisning — *hvilke byggede veje modsiger det de siger?* — men på **det, gaten
+efterlod i arbejdstræet**. Første `ls` efter en gatkørling:
+
+```
+$ ls
+…
+[object Object]/            ←  ikke i .gitignore, ikke tracked, tom
+$ find "[object Object]"
+[object Object]
+[object Object]/.deskuptime
+```
+
+En mappe med `[object Object]` som **navn** i repo-roden. Ikke et relikt fra en
+gammel kørsel: den lå der igen efter hver eneste `npm test`, og en bisect over de
+34 filer (`node --test <fil>` + `ls`) pegede på én — `test/unwatchpartial.test.js`,
+den lås P1-114 skrev i gårs.
+
+**Årsagen er én linje, og den er målt med rigtig CLI.** `test/unwatchpartial.test.js:130`
+skrev `env: { HOME: { ...process.env, HOME: home } }` — HOME var et **objekt**.
+Node stringificerer et env-værdi ved spawn, så CLI'en fik `HOME=[object Object]`,
+som er en **relativ** sti, og dens `getStateFile()` lagde `state.json` i
+`[object Object]/.deskuptime` — i *sit eget working directory*, som er repo-roden:
+
+```
+$ HOME='[object Object]' deskuptime unwatch http://k1.dk/     # state har k1.dk
+  ❌ Error: not monitored: http://k1.dk/                       exit 1
+  work/[object Object]/.deskuptime/                            ← oprettet i cwd
+  fixture urørt                                                ← læst aldrig
+```
+
+**Og heraf det værre: låsen holdt for den forkerte grund.** Testen hed
+`ét site: exit 1 for et ukendt site og exit 0 for et kendt` og bad om
+`unwatch http://k1.dk/` — som **er** overvåget i dens egen fixture. Den fik exit 1,
+fordi den læste en *tom* state-fil, hvor alt er ukendt. Samme kald med rigtig HOME:
+
+```
+$ HOME=$temp deskuptime unwatch http://k1.dk/
+  ✅ No longer monitoring: http://k1.dk/                       exit 0
+  2 URL(s) still monitored …
+```
+
+Den skal have svaret 0. **Testen påstod en regel den aldrig målte, og dens
+`deepEqual(watched(dir), [k1,k2,k3])` bevidste det aldrig** — den holder, fordi
+CLI'en aldrig rørte `dir`. Det er **det syvende** skikkelse af den sygdom planen har
+målt seks gange før (P1-91, 108, 107, 111, 113, 114) og en **ny variant**: ikke
+en løftefejl i kundenfladen, men en lås der er grøn fordi den kørte mod det forkerte.
+P1-114's egen fil — den målte *exit-koder* — havde en lås i den anden halvdel af
+samme test, der viste exit 1 for en URL der aldrig blev læst.
+
+**Rettelsen er to dele.** (a) `unwatchpartial.test.js` bruger nu
+`assertTempHome()` fra `test/helpers/env.mjs` før *hvert* spawn — den ene ejer af
+reglen, som P1-58 byggede og som 17 filer allerede bruger; denne var en af dem der
+rullede sin egen `run()` uden den. (b) Den ukendte adresse hedder
+`http://aldrig-overvaaget.dk/` og ikke `k1.dk`, så testen måler den regel dens titel
+lover, og en ny linje kræver `2 URL(s) still monitored` — et tal kun en CLI der
+læste den rigtige state-fil kan skrive.
+
+**To nye låse, fordi P1-58's tre låse alle så på `HOME` og ikke på cwd.**
+(1) `tools/run-tests.mjs` får et fjerde sammenligningspunkt: **navnene i
+repo-roden før og efter kørslen**. Navne, ikke mtimes — suiten skriver lovligt
+gitignorede byggeartefakter, så en mtime-tjek ville skrige på dem. Et navn der var
+der *før* kørslen er ikke et fund, så en udviklers gamle u-trackede rester gør
+ikke gaten rød. (2) En statisk scanning af alle filer i `test/`: en
+`HOME:`/`USERPROFILE:`-værdi der ikke er en sti. Kun statisk afgørige værdier er med
+(`{`, tal, `null`, `true/false`); et kald som `mkdtempSync(…)` returnerer en streng
+og røres ikke — en scanner der ikke kan skelne måtte være en typechecker. Begge låse
+er målet; (1) låser konsekvensen for *alle* filer, (2) låser årsagen også for en test
+der rydder op efter sig.
+
+**→ 867/867** (866 + 1); audit 0/0; `matrix --check` tavs; `node --check` over alle
+kilder grøn; `git diff --check` grøn. **Gaten for dette repo** (skrevet ned her, da
+den aldrig har været samlet ét sted): `npm test` (= `node tools/run-tests.mjs`,
+som sætter den kasserede HOME og læser `NODE_OPTIONS`), `npm run audit` (0/0),
+`npm run matrix -- --check` (tavst), `node --check` over alle kilder i `src/` og
+`tools/`, og `git diff --check`. Der er **intet** `npm run lint` i dette repo, og
+det er ikke en mangel: de 34 filer læses af scannerne ovenfor. Der er heller ingen
+`desktop/` her — den betalte tray-app ligger i det private `mahope/deskuptime-desktop`,
+så `cargo check`/`cargo test` hører til det andet repo (jf. missionsafsnittet).
+
+**⚠️ Én mutation døde ikke, og det står her fordi næste iteration ikke må tro
+andet.** M1 (objekt-HOME'en tilbage i `unwatchpartial.test.js`) døde med **2 røde** —
+scanneren **og** testens egen `assertTempHome`. M2 (bytte rækkefølgen i `codeOnly`,
+så kommentarer læses før citater) gav **grønt**. Målingen er sikker — mutationen
+blev skrevet til en fil uden for repoet, rapporterede `M2 applied`, og reparationen
+blev md5-verificeret mod baseline — så **selvlåsten i scanneren dækker ikke den
+ombygning**. Jeg rettede i stedet kommentaren ved den tredje fixture, så den siger
+hvad den faktisk viser, og skrev begrænsningen ned her. Næste iteration bør lave
+scanneren til en tilstandsmaskine (som `floatingspawn.test.js` gør) i stedet for en
+regex, hvis den skal tåle at blive ombygget.
+
+**Ingen deploy-note:** CLI-repo uden live-deploytarget, og ingen side blev ændret
+(`deskuptime.com` ligger i et andet repo, P0-12 `BLOCKED`).
 
 ### P1-114 — FÆRDIG 2026-09-29 (`ceo/unwatch-partial-exit`) — `unwatch` sagde exit 0 om et kald, hvor en adresse ikke var overvåget
 
@@ -9064,6 +9243,19 @@ for selv. Ingen gemt nøgle er omskrevet, ingen eksisterende adgangsd tilstand
 
 - **Release-note P1-47:** `deskuptime` sendte **en content-alarm pr. pass, for evigt**, på enhver side der renderer en værdi pr. forespørgsel. Før blev et CSRF-token, en cache-buster, et "sidst opdateret"-tidspunkt eller en live-tæller til **én alarm pr. 30 sekunder** — 2 880 om dagen pr. side — fordi et content-ændringsvarsel er bygget på en hash af sidens bytes. Du fik en POST i din kanal og en notification på din Mac om noget, der ikke var ændret. Det er ikke larmet i sig selv, der gør ondt: en kanal og et notifikationscenter, der gruer ulv hele dagen, bliver **dæmpet**, og dæmpningen er netop det, der så skjuler den rigtige `is DOWN`. Nu sendes **højst én content-alarm pr. time pr. side**: den første ændring efter en stille time kommer stadig med det samme, så en defaceret eller redesignet side stadig meldes, og **intet kasseres** — de ændringer der holdes tilbage tælles, og den næste alarm siger hvor mange den står for (`3 earlier changes since the last alert, not sent`). **Et nedbrud, en SSL-advarsel og en omdirigering er aldrig tynget** — det er pr. site, så en bureaukunde med 12 sider hører stadig om alle 12. **`up`/`down`/`ssl_*`-hændelser, exit-koder og alle webhook-felter er uændrede**, så en eksisterende adapter er uberørt; kun matrix-claimet og `docs/pro-alerts.md` §2 er opdateret, så den betalte kanal ikke lover mere end den sender.
 
+ 24. **⚠️ Der lå en mappe `[object Object]` i repo-roden, og den kom fra gaten
+     selv.** P1-115 fandt den ved at kigge på `ls` efter en kørsel, ikke på
+     nogen kunde. Den er væk nu, og to låse sørger for at den ikke kommer
+     igen — men det er din til at vide, at den har ligget der siden P1-114's
+     lås blev skrevet i gårs, og at **gaten aldrig har været grøn på en ren
+     arbejdstræ**. Den låste test, der skabte den, påstod en regel den aldrig
+     målte, fordi CLI'en læste en state-fil i en mappe med `[object Object]`
+     som navn. **Ingen kode i `src/` er ændret, intet state-fil er berørt, og
+     ingen kunde har set det** — det er en testfejl, ikke et produktfejl.
+     Det er den **første** måling i 130 iterationer, der så efter *bivirkninger
+     af gaten* frem for efter brugerflader. Se `❓ 16`'s egen anvisning for den
+     metode, der førte hertil.
+
 ## ❓ Til Mads
 
 23. **Skal der være et flydende `v0`-tag, så opskriften kan pege på `@v0` igen?**
@@ -9309,6 +9501,11 @@ for selv. Ingen gemt nøgle er omskrevet, ingen eksisterende adgangsd tilstand
 - **Iteration 65 (P1-49, målt + fix):** ❓ 1–3 ubesvarede, så målingen gik på den sidste del af P1-47's egen afvejning, som aldrig var målt: `down`/`up` er bevidst aldrig tynget. Målt først med rigtig `runPass` + rigtig `sendWebhook` mod en lokal side der skiftede 200/500 på et ur, 40 pass: **28 POSTs**, 2 016/døgn pr. site. Efter: **4**. Reglen er bevidst *ikke* P1-47s, fordi en ren tidsdæmpning af `down` kan bruge vinduet i stilhed på et rigtigt nedbrud; tærsklen (4 skift i vinduet) er derfor det bærende, og den er målt med to tests der begge siger at nedbrud **ikke** holdes. `readTransitionAlert()` i `src/status.js` er den ene ejer og beskrær selv tidslisten, fordi den strukturelle lås `four pass states are decided in one place` døde min første version, der alderede et tidspunkt i `watch.js`. 10 nye tests i `test/flap.test.js` (lagt til i `npm test`) → **446/446** (436 + 10); audit 0/0; `node --check`, `matrix --check`, `git diff --check` grønne på Node 26.7.0. Matrix-påstanden `Webhook alerts on every event` blev falsk og siger nu at en flappende site holdes på 1/time pr. art efter 4 skift. **Ingen mutationstest** — over tidsbudgeten. `ceo/flap-alerts`, `fe9e7db`, mergeet til `main` og pushet 2026-09-27. **Næste:** ❓ 1–3 og ❓ 14, ellers en målt opgave.
 
 ## Deploy-/release-noter
+
+- **Release-note P1-115:** Ingen — rettelsen rører ingen kode i `src/`, ingen
+  exit-kode, ingen matrix-række, intet JSON-felt og ingen kommando. Den fjerner
+  en mappe `[object Object]` fra dit arbejdstræ og gør to låse, så den ikke
+  kommer igen. **Det eneste du kan se, er at din mappe er ren.**
 
 - **Release-note P1-114:** Hvis du rydder gamle kunder ud af overvågningen — eller
   bare afmelder flere sites på én gang — kunne et kald med én skrivefejl i
