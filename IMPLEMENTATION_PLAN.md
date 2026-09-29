@@ -1,5 +1,80 @@
-> **Seneste:** iteration 128 (P1-113, færdig) — historien står i køens afsnit
-> `P1-113 — FÆRDIG 2026-09-29` lige under `## Prioriteret kø`.
+> **Seneste:** iteration 129 (P1-114, færdig) — historien står i køens afsnit
+> `P1-114 — FÆRDIG 2026-09-29` lige under `## Prioriteret kø`.
+
+## Status fra denne iteration (129, P1-114 — `unwatch` sagde exit 0 om et kald, hvor en adresse ikke var overvåget)
+
+**Målt først, nul kode ændret.** Køen var tømt, så målingen gik på ❓ 16's egen
+ansvisning — *hvilke byggede veje modsiger det de siger?* — men på **exit-koderne**
+denne gang. Rigtig CLI, rigtig state-fil, egen HOME, tre af de tre gratis-pladser i
+brug, bureauet afmelder tre kunder og skriver den tredje adresse med en skrivefejl:
+
+```
+$ deskuptime unwatch http://k1.dk/ http://k2.dk/ http://k3.dk/.typo
+  ✅ No longer monitoring: http://k1.dk/
+  ✅ No longer monitoring: http://k2.dk/
+     1 URL(s) still monitored. Its uptime history is kept (35 days) …
+  ❌ Error: not monitored: http://k3.dk/.typo
+
+  exit-kode ...................... 0   (0 = alt gik)
+  pladser faktisk frigjort ....... 2 af 3
+```
+
+**Og de to andre kommandoer med flere URL'er havde allerede reglen.** Samme måling,
+samme spørgsmål, kun den tredje kommando:
+
+```
+check   (1 op, 1 død) ............. exit 2
+headers (1 op, 1 død) ............. exit 2
+unwatch (1 fjernet, 1 ukendt) ..... exit 0   <-- den afvigende
+```
+
+`src/cli.js:885` var `removed.length > 0 ? 0 : 1`. Den spurgte *kom der noget
+fjernet* i stedet for *blev alle fjernet*, så **den mindst alvorlige udgang bestemte
+koden** — præcis den fejl P1-113 rettede i `headers`, hvor den sidste URL's domme
+havde stået for alle. Det er det **sjette** skikkelse af én sygdom, målt fem gange
+før: bygget kode ingen kunde kan se (P1-91), et flag ingen flade nævner (P1-108), en
+ref der ikke findes (P1-107), en tabelrække der står i stedet for en demonstration
+(P1-111), en tabelrække koden modstår (P1-113) — og nu en exit-kode der modsiger
+den fejl den står lige over sig.
+
+**Hvad det koster kunden.** `unwatch` er den eneste vej ud af en brugt plads. Et
+bureau-script der afmelder kunder og tæller frie pladser på exit-koden fik 3 for 2,
+og den næste `watch` blev afvist af gratisvæggen med en klage over *overvågning* —
+altså over den kommando de lige kørte korrekt. De to gratis-lister siger ellers hvor
+tæt brugeren er på væggen (P1-109); det er her, hvor brugeren ikke får at vide at de
+regner forkert.
+
+**Rettelsen er én linje:** exit 0 kun når **alle** de bedte adresser holdt op at være
+overvåget; går ét af dem ikke, bliver koden **2** — den `check` og `headers` allerede
+bruger, fordi kommandoen kørte, gjorde sit arbejde for den del den kunne, og noget i
+kaldet fejlede. Exit 1 er uændret (intet fjernet) og er låst her fordi den er den anden
+halvdel af samme sandhed. De to rigtige adresser fjernes stadig, så et delvist kald
+**ikke** fortryder sit eget arbejde. README's status policy fik reglen skrevet ned, fordi
+den var publiceret for de to andre og manglede for den tredje.
+
+**Låsen er adfærdsmålt, fordi en assertion på kildekoden kunne have bevist at den var
+enig med sig selv.** `test/unwatchpartial.test.js` (5 tests) kører rigtig CLI mod
+rigtig state-fil og læser rigtige exit-koder: delvist fejlet kald, intet fjernet, alt
+fjernet, ét site hver vej — og som sidste test **to** delvist fejlede oprydninger med
+en `watch --status` bagefter, der skal kunne tælle de frigjorte pladser rigtigt.
+
+⚠️ **Den gamle låst holdt den gamle kode, og det var korrekt da den blev skrevet.**
+`test/unwatch.test.js:90` krævede exit 0 og måtte rettes — begrundelsen står i testen.
+Da den blev skrevet, var `unwatch` den eneste kommando med flere URL'er at sammenligne
+med, så den låste det den daværende kode gjorde, ikke en regel der gjaldt. Målingen i
+denne iteration gav den to andre at sammenligne med, og de svarer 2.
+
+**Tre mutationer målt, alle tre døde.** M1 (tilbage til den gamle kode) 3 røde · M2
+(`missing` ignoreres helt) 3 røde · M3 (exit 1 → 2) præcis de tre tests der låser exit 1.
+⚠️ Som i P1-112 målt på md5 og repareret fra en `cp` uden for repoet; de tre
+reparationer blev hver efterfulgt af et md5-tjek mod baseline.
+
+**→ 866/866** (861 + 5); audit 0/0; `matrix --check` tavs; `node --check` over alle
+kilder grøn; `git diff --check` grøn. Baseline uændret: npm 16 downloads/uge, ★0,
+Plausible `/` 3 besøgende/28 d.
+
+**Ingen deploy-note:** CLI-repo uden live-deploytarget, og ingen side blev ændret
+(`deskuptime.com` ligger i et andet repo, P0-12 `BLOCKED`).
 
 ## Status fra denne iteration (128, P1-113 — matrixrækken lovede `headers` alle URL'er, og kommandoen sagde `Unexpected argument`)
 
@@ -5325,11 +5400,91 @@ Den aktuelle gate-definition er registreret her:
 
 ## Prioriteret kø
 
-> **Køen er tom for målte kandidater** (iteration 128). Næste iteration skal
+> **Køen er tom igen for målte kandidater** (iteration 129). Næste iteration skal
 > **måle først** og finde sin egen opgave. Se `❓ Til Mads` for de konkrete
 > kandidater. ❓ 21 er nu besvaret i kode (P1-105) og lukket, ❓ 16 ligeledes
 > (P1-109). Målingen i iteration 128 fandt **ikke** flere løfter i matrixen:
-> de otte øvrige rækker er hver især målt i en tidligere iteration.
+> de otte øvrige rækker er hver især målt i en tidligere iteration. Målingen i
+> iteration 129 gik et andet sted hen — **exit-koderne for de kommandoer der tager
+> flere URL'er** — efter at ❓ 16's anvisning blev brugt på løfterne to gange.
+> Den er nu brugt på *modsigelser* i det samme: `check`, `headers` og `unwatch`
+> skal give samme svar på "ét af mine URL'er fejlede", og gør de (P1-114).
+
+### P1-114 — FÆRDIG 2026-09-29 (`ceo/unwatch-partial-exit`) — `unwatch` sagde exit 0 om et kald, hvor en adresse ikke var overvåget
+
+**Målt først, nul kode ændret.** Køen var tømt, så målingen gik på ❓ 16's egen
+ansvisning — *hvilke byggede veje modsiger det de siger?* — men på **exit-koderne**
+denne gang, ikke på matrixen. Rigtig CLI, rigtig state-fil, egen HOME, tre af de tre
+gratis-pladser i brug, bureauet afmelder tre kunder og skriver den tredje adresse med
+en skrivefejl:
+
+```
+$ deskuptime unwatch http://k1.dk/ http://k2.dk/ http://k3.dk/.typo
+  ✅ No longer monitoring: http://k1.dk/
+  ✅ No longer monitoring: http://k2.dk/
+     1 URL(s) still monitored. Its uptime history is kept (35 days) …
+  ❌ Error: not monitored: http://k3.dk/.typo
+
+  exit-kode ...................... 0   (0 = alt gik)
+  pladser faktisk frigjort ....... 2 af 3
+```
+
+**Og de to andre kommandoer med flere URL'er havde allerede reglen.** Samme måling,
+samme spørgsmål, kun den tredje kommando:
+
+```
+check   (1 op, 1 død) ............. exit 2
+headers (1 op, 1 død) ............. exit 2
+unwatch (1 fjernet, 1 ukendt) ..... exit 0   <-- den afvigende
+```
+
+`src/cli.js:885` var `removed.length > 0 ? 0 : 1`. Den spurgte *kom der noget
+fjernet* i stedet for *blev alle fjernet*, så **den mindst alvorlige udgang bestemte
+koden** — præcis den fejl P1-113 rettede i `headers`, hvor den sidste URL's domme
+havde stået for alle. Det er det **sjette** skikkelse af én sygdom, målt fem gange
+før: bygget kode ingen kunde kan se (P1-91), et flag ingen flade nævner (P1-108), en
+ref der ikke findes (P1-107), en tabelrække der står i stedet for en demonstration
+(P1-111), en tabelrække koden modstår (P1-113) — og nu en exit-kode der modsiger
+den fejl den står lige over sig.
+
+**Hvad det koster kunden.** `unwatch` er den eneste vej ud af en brugt plads. Et
+bureau-script der afmelder kunder og tæller frie pladser på exit-koden fik 3 for 2,
+og den næste `watch` blev afvist af gratisvæggen med en klage over *overvågning* —
+altså over den kommando de lige kørte korrekt. De to gratis-lister siger ellers hvor
+tæt brugeren er på væggen (P1-109); det er her, hvor brugeren ikke får at vide at de
+regner forkert.
+
+**Rettelsen er én linje:** exit 0 kun når **alle** de bedte adresser holdt op at være
+overvåget; går ét af dem ikke, bliver koden **2** — den `check` og `headers` allerede
+bruger, fordi kommandoen kørte, gjorde sit arbejde for den del den kunne, og noget i
+kaldet fejlede. Exit 1 er uændret (intet fjernet) og er låst her fordi den er den anden
+halvdel af samme sandhed. De to rigtige adresser fjernes stadig, så et delvist kald
+**ikke** fortryder sit eget arbejde. README's status policy fik reglen skrevet ned, fordi
+den var publiceret for de to andre og manglede for den tredje.
+
+**Låsen er adfærdsmålt, fordi en assertion på kildekoden kunne have bevist at den var
+enig med sig selv.** `test/unwatchpartial.test.js` (5 tests) kører rigtig CLI mod
+rigtig state-fil og læser rigtige exit-koder: delvist fejlet kald, intet fjernet, alt
+fjernet, ét site hver vej — og som sidste test **to** delvist fejlede oprydninger med
+en `watch --status` bagefter, der skal kunne tælle de frigjorte pladser rigtigt.
+
+⚠️ **Den gamle låst holdt den gamle kode, og det var korrekt da den blev skrevet.**
+`test/unwatch.test.js:90` krævede exit 0 og måtte rettes. Begrundelsen står i testen:
+da den blev skrevet, var `unwatch` den eneste kommando med flere URL'er at sammenligne
+med, så den låste det den daværende kode gjorde — ikke en regel der gjaldt. Målingen i
+denne iteration gav den to andre at sammenligne med, og de svarer 2.
+
+**Tre mutationer målt, alle tre døde.** M1 (tilbage til den gamle kode) 3 røde · M2
+(`missing` ignoreres helt) 3 røde · M3 (exit 1 → 2) præcis de tre tests der låser exit 1.
+⚠️ Som i P1-112 målt på md5 og repareret fra en `cp` uden for repoet; de tre
+reparationer blev hver efterfulgt af et md5-tjek mod baseline.
+
+**→ 866/866** (861 + 5); audit 0/0; `matrix --check` tavs; `node --check` over alle
+kilder grøn; `git diff --check` grøn. Baseline uændret: npm 16 downloads/uge, ★0,
+Plausible `/` 3 besøgende/28 d.
+
+**Ingen deploy-note:** CLI-repo uden live-deploytarget, og ingen side blev ændret
+(`deskuptime.com` ligger i et andet repo, P0-12 `BLOCKED`).
 
 ### P1-113 — FÆRDIG 2026-09-29 (`ceo/headers-many`) — matrixrækken lovede `headers` alle URL'er, og kommandoen sagde `Unexpected argument`
 
@@ -9154,6 +9309,23 @@ for selv. Ingen gemt nøgle er omskrevet, ingen eksisterende adgangsd tilstand
 - **Iteration 65 (P1-49, målt + fix):** ❓ 1–3 ubesvarede, så målingen gik på den sidste del af P1-47's egen afvejning, som aldrig var målt: `down`/`up` er bevidst aldrig tynget. Målt først med rigtig `runPass` + rigtig `sendWebhook` mod en lokal side der skiftede 200/500 på et ur, 40 pass: **28 POSTs**, 2 016/døgn pr. site. Efter: **4**. Reglen er bevidst *ikke* P1-47s, fordi en ren tidsdæmpning af `down` kan bruge vinduet i stilhed på et rigtigt nedbrud; tærsklen (4 skift i vinduet) er derfor det bærende, og den er målt med to tests der begge siger at nedbrud **ikke** holdes. `readTransitionAlert()` i `src/status.js` er den ene ejer og beskrær selv tidslisten, fordi den strukturelle lås `four pass states are decided in one place` døde min første version, der alderede et tidspunkt i `watch.js`. 10 nye tests i `test/flap.test.js` (lagt til i `npm test`) → **446/446** (436 + 10); audit 0/0; `node --check`, `matrix --check`, `git diff --check` grønne på Node 26.7.0. Matrix-påstanden `Webhook alerts on every event` blev falsk og siger nu at en flappende site holdes på 1/time pr. art efter 4 skift. **Ingen mutationstest** — over tidsbudgeten. `ceo/flap-alerts`, `fe9e7db`, mergeet til `main` og pushet 2026-09-27. **Næste:** ❓ 1–3 og ❓ 14, ellers en målt opgave.
 
 ## Deploy-/release-noter
+
+- **Release-note P1-114:** Hvis du rydder gamle kunder ud af overvågningen — eller
+  bare afmelder flere sites på én gang — kunne et kald med én skrivefejl i
+  **én** adresse melde alt OK. Ikke "alt gik", men exit 0, som om alle var væk:
+  kommandoen spurgte *kom der noget fjernet* i stedet for *blev alle fjernet*, så
+  to rigtige afmelinger og én adresse der aldrig havde været overvåget gav samme
+  grønne svar som et rent kald. Det er den vej, du bruger til at få en brugt
+  gratis-plads tilbage, så et bureau-script der tæller frie pladser på exit-koden
+  fik 3 for 2 — og den næste nye kunde blev så afvist af 3-URL-væggen med en
+  klage om *overvågning*, altså om den kommando du lige kørte korrekt. Nu er
+  **exit 0 kun for et kald hvor alle de angivne adresser holdt op at være
+  overvåget**, exit 2 hvis ét af dem ikke var det (samme kode som `check` og
+  `headers` bruger, når én side ikke svarer), exit 1 hvis intet blev fjernet.
+  De kunder der *blev* afmeldt, er stadig afmeldt — et delvist kald fortryder
+  ikke sit eget arbejde, så du kan lade en fejl køre videre og fange den på
+  exit-koden. Og reglen står nu i README's status policy, som allerede havde den
+  for de to andre kommandoer.
 
 - **Release-note P1-113:** Har du flere klientdomæner, skulle `deskuptime headers`
   tage dem alle på én gang — det stod i matrixen, i `--help` og på npm-siden, siden

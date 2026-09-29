@@ -86,6 +86,12 @@ rule and the same `2` on a site it could not scan, whichever URL it was in the l
 the object `jq '.security'` reads; with several it is an array of those objects, in the
 order you listed them.
 
+`unwatch` takes any number of URLs too, and it follows the same exit-code rule: `0`
+when every address you listed stopped being monitored, `2` when at least one of them
+was not monitored, and `1` when none of them were. The addresses it did remove are
+removed either way — a partial run never undoes its own work — so a script that counts
+freed free-tier slots can trust the code it gets back.
+
 `--timeout <ms>` is a budget for the **whole** check — the reachability request, the
 TLS handshake and the page read share it, so `--timeout 500` cannot take 30 seconds.
 Each leg still has its own maximum (15 s / 10 s / 20 s by default), so a larger budget

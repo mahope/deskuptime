@@ -880,9 +880,20 @@ if (command === 'unwatch') {
     if (result.removed.length > 0) {
       console.log(`   ${result.remaining} URL(s) still monitored. Its uptime history is kept (${HISTORY_DAYS} days) — monitoring it again starts the counters from zero.`);
     }
-    // Nothing removed means nothing changed, so the caller gets a failure code
-    // instead of a green run that removed nothing.
-    process.exitCode = result.removed.length > 0 ? 0 : 1;
+    // Exit 0 only when *every* address the caller asked about stopped being
+    // monitored. Measured 2026-09-29 (P1-114): asking for three sites where one
+    // was never monitored freed two of three free-tier slots and still exited 0,
+    // because this line asked "did anything get removed" instead of "were they
+    // all removed" — so the least serious outcome decided the code. An agency
+    // script that counts freed slots on the exit code booked three for two, and
+    // the next `watch` was refused by the free-tier wall with a complaint about
+    // monitoring rather than about the call it had just made.
+    //
+    // 2 is the code `check` and `headers` already use for the same situation
+    // ("some of these URLs are not OK"): the command ran, it did the work it
+    // could, and something in the call failed. Exit 1 is unchanged and means
+    // nothing at all was removed, which is the other half of the same truth.
+    process.exitCode = result.removed.length === 0 ? 1 : result.missing.length > 0 ? 2 : 0;
   }
 }
 

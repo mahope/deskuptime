@@ -87,7 +87,15 @@ test('en URL der ikke overvåges fjerner intet og giver exit 1', async (t) => {
 test('blandet kald fjerner de overvågede og siger hvilke der ikke var', async (t) => {
   const home = withState(t, { urls: { 'https://a.test/': entry(), 'https://b.test/': entry() } });
   const result = await run(['unwatch', 'https://a.test/', 'https://b.test/', 'https://c.test/'], { env: home });
-  assert.equal(result.code, 0);
+  // P1-114 rettede denne kode fra 0 til 2. Låsen oprindeligt her *krævede* 0, og
+  // den havde ret til det: da den blev skrevet, var der ingen anden kommando med
+  // flere URL'er at sammenligne med. Målingen i P1-114 viste bagefter, at
+  // `check` og `headers` begge svarer 2 på "en af mine URL'er fejlede", så 0 her
+  // gjorde `unwatch` til den eneste af de tre, der lod et fejlagtigt kald se
+  // grønt ud — og exit-koden er præcis den, et bureau-script tæller frie
+  // gratis-pladser på. Alt andet i testen er uændret: de to rigtige fjernes,
+  // den tredje navngives, og state er tom bagefter.
+  assert.equal(result.code, 2);
   assert.match(result.stdout, /No longer monitoring: https:\/\/a\.test\//);
   assert.match(result.stdout, /No longer monitoring: https:\/\/b\.test\//);
   assert.match(result.stderr, /not monitored: https:\/\/c\.test\//);
