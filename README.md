@@ -111,6 +111,49 @@ is [`docs/pro-alerts.md`](docs/pro-alerts.md) §1, which also specifies the webh
 payload and the offline behaviour. `deskuptime --help` and the npm page are generated
 from the same source as this table, so they cannot drift apart.
 
+## Client report (Pro)
+
+`deskuptime report` turns the passes `watch` already made into a document you can send
+to a customer. It reads state on this machine only — no account, no upload — and it
+redacts usernames and passwords out of the URLs it prints, so the file is safe to
+forward.
+
+```bash
+deskuptime report --title "Acme — uptime September" > acme-september.md
+deskuptime report --days 7 --title "Acme — this week" > acme-week.md
+deskuptime report --json | jq '.summary.up'    # same numbers, for your own tooling
+```
+
+A real run, pasted as it came:
+
+```
+# Acme — uptime September
+
+Generated 2026-09-29 02:09 UTC by DeskUptime Pro (DeskUptime CLI).
+
+| Site | Status | Uptime (all) | Uptime (window) | Response | SSL | Content | Last check |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| https://shop.kunde.dk/ | DOWN (503) | 99.75% (1204 checks, 3 failed) | 95% (30 recorded d, 1200 checks, 60 failed) | 890 ms | — | — | 2026-09-29 02:09 UTC |
+| https://kunde.dk/ | UP (200) | 99.92% (1204 checks, 1 failed) | 100% (30 recorded d, 1200 checks) | 142 ms | — | stable · 18402 bytes | 2026-09-29 02:09 UTC |
+
+**2 site(s) · 1 up · 1 down · 2408 checks · 4 failed**
+```
+
+<sub>The uptime columns are the share of passes that answered HTTP 200–399. A site that
+was monitored for only part of the window is named below the table with both counts, so
+the number is never read as covering days nobody watched — and a cell that is a `—`
+names the missing thing rather than sitting there looking like a measurement. Sites
+with something to act on — a certificate near its deadline, one replaced or answered
+by a new authority, a page that changed and was then left alone — are named under the
+table, because the uptime columns do not cover them.</sub>
+
+The window is 30 days by default (`--days`), counted from a separate daily history file,
+so a site added last week shows `7 recorded d` rather than a 30-day number nobody
+watched for. A pass is what fills it: the report is built from passes `watch` has
+already made, so a site that was just added has one day of history today and one more
+each day after that. The full format, the JSON fields and what is deliberately left
+out are in [`docs/agency-report.md`](docs/agency-report.md).
+
 ## Pro license
 
 A one-time $19 purchase unlocks unlimited URLs, webhook alerts and the desktop app on

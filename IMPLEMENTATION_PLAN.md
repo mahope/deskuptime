@@ -1,5 +1,72 @@
-> **Seneste:** iteration 125 (P1-110, færdig) — historien står i køens afsnit
-> `P1-110 — FÆRDIG 2026-09-29` lige under `## Prioriteret kø`.
+> **Seneste:** iteration 126 (P1-111, færdig) — historien står i køens afsnit
+> `P1-111 — FÆRDIG 2026-09-29` lige under `## Prioriteret kø`.
+
+## Status fra denne iteration (126, P1-111 — den betalte rapport var det eneste produkt ingen kundeflade viste)
+
+**Målt først, nul kode ændret.** Køen var tømt, så målingen gik på ❓ 16's egen
+anvisning: *hvilke andre byggede veje står i ingen kundeflade?* — spredt over
+hele CLI'et, ikke kun Pro. Målt på de rigtige filer, intet stubbet:
+
+```
+$ grep -c "deskuptime report" README.md                  → 0
+$ grep -n "report" README.md
+  104:| Shareable status page / customer report (`report`, Markdown + JSON) | — | ✅ | Pro only |
+$ grep -rn "agency-report" README.md docs/pro-alerts.md → (intet)
+$ deskuptime --help | grep -c "deskuptime report"        → 3
+```
+
+**Den betalte rapport var det eneste produkt i CLI'et, ingen viste.** Hver anden
+kommando har en kørende linje i README's Quick start. `report` — den ene grund
+til, at et bureau betaler de 19 dollar — fandtes i hele README som *én genereret
+tabelrække*, der siger "feature findes" og intet om, hvad den producerer.
+`docs/agency-report.md`, 415 linjer spec, var linket fra nul flader. Og npm-siden
+er genereret fra samme kilde som `--help`, så 0.2.8 blev publiceret uden at
+en køber nogensinde har set en linje af det dokument, de betaler for.
+
+Det er den fjerde måling af samme sygdom i fire skikkelser: en konstant uden
+forbruger (P1-91), et flag uden dokumentation (P1-108), en ref der ikke findes
+(P1-107), og nu en tabelrække der står i stedet for en demonstration. Fælles for
+alle fire er at **bygget kode, ingen kunde kan se, ikke er en vare** — kun et
+kontraktlås, der bekræfter strengen.
+
+**Rettelsen er en indsat rigtig kørsel, ikke flere prosa.** Ny `## Client report
+(Pro)` med tre kopierbare kommandoer, den fulde rapport indsat som den kom ud,
+og en kort forklaring af hvad vinduet er og at det fyldes af passes — altså
+noget læseren kan tjekke imod.
+
+**Låsen genererer sit eget bevis, fordi en håndskreven assertion intet kan.**
+`test/reportshowcase.test.js` (6 tests) kører den rigtige `report` mod en rigtig
+state-fil og 30 døgn rigtig historie og kræver, at README indeholder den output
+den lige fik. Første test kræver desuden at *fixturen* er den tilstand den er
+kaldt — P1-79's `expect`-regel: en showcase målt på en tilstand koden ikke kan
+læse er et billede af en fiktion, ikke af et produkt.
+
+**To mutationer overlevede låsens første sprog, og begge blev fundet fordi de
+blev målt frem for antaget:**
+- **M8:** `DeskUptime Pro (DeskUptime CLI)` er bygget fra `PRODUCT.proName`, så
+  min første mutation ramte en streng der ikke findes i `src/report.js` — den var
+  en no-op, ikke et overlevende fund. Den ægte mutation fjerner `Pro` i
+  `src/features.js` → 3 fejl. Uden den måling kunne et betalt dokument sendes
+  ud med det gratis produkts navn.
+- **M9:** `includes('docs/agency-report.md')` er opfyldt af href'en alene, så en
+  mutation der omdirigerede *linkteksten* til en anden fil gav 0 fejl. Nu
+  matches linket som Markdown, href **og** tekst — en læser følger ordene, ikke
+  målet.
+
+**→ 853/853** (847 + 6); audit 0/0; `matrix --check` tavs; `node --check` og
+`git diff --check` grønne. **Ni mutationer målt, alle ni døde** (3/3/3/3/3/3/5/5/3),
+og alle filer gendannet bit-for-bit bagefter — md5 verificeret, fordi to
+mutationer lævede i en tidligere kørsel i denne iteration.
+
+**Ingen deploy-note:** CLI-repo uden live-deploytarget, og ingen side blev
+ændret — `deskuptime.com` ligger i et andet repo (P0-12 `BLOCKED`). Rettelsen
+rammer kun GitHub/npm-fladerne og kræver ingen ny release, fordi npm-siden ikke
+renderer README-sektioner. Baseline uændret: npm 16 downloads/uge, ★0, Plausible
+`/` 3 besøgende/28 d.
+
+**⚠️ Ulæst fra iteration 125:** `test/tarball.test.js` slog gaten rød én gang
+med `test failed` uden årsag (fil-niveau, 1054 ms) og kunne ikke reproduceres i
+4 gatkørsler + 12 målrettede. Genopstod ikke i de to gaten her.
 
 ## Status fra denne iteration (125, P1-110 — ét state-fil, tre tal, to skærme)
 
@@ -5134,10 +5201,70 @@ Den aktuelle gate-definition er registreret her:
 
 ## Prioriteret kø
 
-> **Køen er tom for målte kandidater** (iteration 125). Næste iteration skal
+> **Køen er tom for målte kandidater** (iteration 126). Næste iteration skal
 > **måle først** og finde sin egen opgave. Se `❓ Til Mads` for de konkrete
 > kandidater. ❓ 21 er nu besvaret i kode (P1-105) og lukket, og ❓ 16 ligeledes
 > (P1-109).
+
+### P1-111 — FÆRDIG 2026-09-29 (`ceo/report-showcase`) — den betalte rapport var det eneste produkt ingen kundeflade viste
+
+**Målt først, nul kode ændret.** Køen var tømt, så målingen gik på ❓ 16's egen
+anvisning — *"hvilke andre byggede veje står i ingen kundeflade?"* — spredt over
+hele CLI'et, ikke kun Pro. Målt på de rigtige filer, intet stubbet:
+
+```
+$ grep -c "deskuptime report" README.md            → 0
+$ grep -n "report" README.md                        → 104: … customer report (`report`, …) | — | ✅ | Pro only |
+$ grep -rn "agency-report" README.md docs/pro-alerts.md   → (intet)
+$ deskuptime --help | grep -c "deskuptime report"   → 3
+```
+
+**Den betalte rapport var det eneste produkt i CLI'et, ingen viste.** Alt andet
+har en kørende kommando i README's Quick start; `report` — den ene grund til at
+et bureau betaler de 19 dollar — fandtes i hele README som *en genereret
+tabelrække*, der siger "feature findes" og intet om hvad den producerer.
+`docs/agency-report.md`, 415 linjer spec, var linket fra nul flader. Og npm-siden
+er genereret fra samme kilde som `--help`, så 0.2.8 blev publiceret uden at en
+køber nogensinde har set en linje af det dokument de betaler for.
+
+Samme sygdom som fire målinger allerede har fundet i fire skikkelser: en konstant
+uden forbruger (P1-91), et flag uden dokumentation (P1-108), en ref der ikke
+f findes (P1-107), en tabelrække der står i stedet for en demonstration.
+
+**Rettelsen er en indsat rigtig kørsel + en sektion.** Ny `## Client report (Pro)`
+med tre kopierbare kommandoer, den fulde rapport indsat som den kom ud, og en
+forklaring af hvad vinduet er og at det fyldes af passes. Ikke flere prosa —
+noget der kan *tjekkes imod*.
+
+**Låsen genererer sit eget bevis, fordi en håndskreven assertion intet kan.**
+`test/reportshowcase.test.js` (6 tests) kører den rigtige `report` mod en
+rigtig state-fil og 30 døgn rigtig historie og kræver at README indeholder den
+output, den lige fik. En kolonne der omdøbes, en tæller der ændres, en række der
+forsvinder — alt dør. Første test kræver at *fixturen* er den tilstand den er
+kaldt (P1-79's `expect`-regel: en showcase målt på en tilstand koden ikke kan
+læse er et billede af en fiktion).
+
+**To ting låsen måtte lære undervejs, begge målt:**
+- **M8 overlevede først.** `DeskUptime Pro (DeskUptime CLI)` er bygget fra
+  `PRODUCT.proName`, så min første mutation var en no-op. Den ægte mutation
+  fjerner `Pro` i `src/features.js` → 3 fejl. Havde jeg ladet den ligge, kunne
+  et betalt dokument sendes ud med det gratis produkts navn.
+- **M9 overlevede også.** `includes('docs/agency-report.md')` er opfyldt af
+  href'en alene, så en mutation der omdirigerede *linkteksten* til en anden
+  fil gav 0 fejl. Nu matches linket som Markdown, href *og* tekst — en læser
+  følger ordene, ikke målet.
+
+**→ 853/853** (847 + 6); audit 0/0; `matrix --check` tavs; `node --check` og
+`git diff --check` grønne. **Ni mutationer målt, alle ni døde** (3/3/3/3/3/3/5/5/3),
+og alle filer gendannet bit-for-bit bagefter (md5 verificeret — to mutationer
+lævede i en tidligere kørsel, og det er grunden til at baseline nu tages som
+checksum).
+
+**Ingen deploy-note:** CLI-repo uden live-deploytarget, og ingen side blev
+ændret — `deskuptime.com` ligger i et andet repo (P0-12 `BLOCKED`). Baseline
+uændret: npm 16 downloads/uge, ★0, Plausible `/` 3 besøgende/28 d. Bemærk at
+denne rettelse **kun** rammer GitHub/npm-fladerne; den kræver ingen ny release,
+fordi npm-siden ikke renderer README-sektioner.
 
 ### P1-110 — FÆRDIG 2026-09-29 (`ceo/list-size-owners`) — ét state-fil, tre tal, to skærme
 
