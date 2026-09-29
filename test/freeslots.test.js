@@ -152,7 +152,7 @@ test('en gemt nøgle der ikke er en adresse holder ingen plads', async (t) => {
   const { env } = homeWith(t, { urls: { ...urls([A, B]), 'kunde.dk': { checks: 1 } } });
   const { stdout } = await list(env);
 
-  assert.match(stdout, /📋 3 monitored URL\(s\)/, `tre rækker forventes: ${stdout}`);
+  assert.match(stdout, /📋 3 saved entries — 2 monitored sites/, `tre gemte nøgler forventes: ${stdout}`);
   assert.match(stdout, new RegExp(`Free tier: 2 of ${FREE.urlLimit} URL slots in use`),
     `en ubrugelig nøgle blev talt som en plads: ${stdout}`);
   assert.ok(!/all 3 URL slots/.test(stdout),

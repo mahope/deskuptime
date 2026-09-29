@@ -1033,7 +1033,7 @@ export function printStatus(options = {}) {
   // user runs to see whether their monitoring works (P1-45).
   const rows = entries.map(([url, entry]) => ({ url: withoutCredentials(url), entry, ...readEntry(entry, { now, url }) }));
 
-  console.log(`📋 ${rows.length} monitored URL(s):\n`);
+  console.log(`📋 ${monitoredSizeNote(state) ?? `${rows.length} monitored URL(s)`}:\n`);
   for (const row of rows) {
     const code = row.statusCode === null ? '—' : row.statusCode;
     const ssl = row.sslNote ? `, ${row.sslNote}` : '';
@@ -1180,6 +1180,46 @@ export function monitoredCount(state) {
     identities.add(urlIdentity(url));
   }
   return identities.size;
+}
+
+/**
+ * The size of a monitored list, or `null` when the two counts a list has agree.
+ *
+ * A list has two numbers and only one of them holds a slot. `monitoredCount()`
+ * above is the second, and it is the one `addMonitoredUrls()` and
+ * `freeSlotsNote()` ask — but both list *headers* printed the first, the raw
+ * number of saved keys, so the same state file was described three ways on two
+ * screens. Measured 2026-09-29 with the real CLI, one site saved in the two
+ * spellings a browser's address bar produces:
+ *
+ *   $ deskuptime watch --status
+ *   📋 2 monitored URL(s):
+ *     ✅ up  https://kunde.dk (—) @ …
+ *     ✅ up  https://kunde.dk/ (—) @ …
+ *   Free tier: 1 of 3 URL slots in use.
+ *
+ *   $ deskuptime status
+ *   Monitored URLs (2):
+ *
+ * Three numbers, one file, and the user has no way to know that the "1 of 3" is
+ * the one the limit is enforced with — the very confusion P1-109 removed from the
+ * slot line and that the slot line itself now makes visible on the screen above
+ * it. It also read as a full board at two rows, because the header is what a
+ * user looks at before adding a site.
+ *
+ * So the headers get the same owner as the wall, and this function is what says
+ * so *only* when the two disagree: `null` above the line means a caller prints
+ * its own wording unchanged, which is what keeps a normal file — one key per
+ * site — byte-for-byte what it was. The word "saved" is load-bearing: these keys
+ * are the two spellings of one site or a key that is not an address at all, and
+ * the user cannot tell which without being told they are looking at a file
+ * rather than at a quota.
+ */
+export function monitoredSizeNote(state) {
+  const entries = Object.keys(state?.urls ?? {}).length;
+  const sites = monitoredCount(state);
+  if (entries === sites) return null;
+  return `${entries} saved entries — ${sites} monitored site${sites === 1 ? '' : 's'}`;
 }
 
 function addMonitoredUrls(state, urls, pro) {

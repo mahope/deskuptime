@@ -13,7 +13,7 @@
  */
 
 import { checkUrls, summarize } from './engine.js';
-import { startWatch, runOnce, printStatus, printPass, loadState, readStateFile, saveState, freeLimitMessage, isPro, unwatchUrls, getStateFile, stateWriteErrorMessage, stateReadErrorMessage } from './watch.js';
+import { startWatch, runOnce, printStatus, printPass, loadState, readStateFile, saveState, freeLimitMessage, isPro, unwatchUrls, getStateFile, monitoredSizeNote, stateWriteErrorMessage, stateReadErrorMessage } from './watch.js';
 import { buildReport, renderReportJson, renderReportMarkdown } from './report.js';
 import { readFileSync } from 'fs';
 import { join, dirname } from 'path';
@@ -881,7 +881,13 @@ if (command === 'status') {
     console.log('  The key is still stored. Re-check it with: deskuptime activate <license-key>');
     console.log(`  If you have not bought yet: ${BUY_URL}`);
   }
-  console.log(`Monitored URLs (${urls.length}):`);
+  // The same owner `watch --status` and the free-tier wall ask, so one state
+  // file cannot be described as three sites on one screen and two on the next.
+  // `null` — one key per site, the normal case — leaves the line exactly as it
+  // was; a file that holds the same site twice, or a key that is not an address,
+  // says what it is holding instead of printing a count the limit never uses.
+  const sizeNote = monitoredSizeNote(state);
+  console.log(sizeNote ? `Monitored URLs (${sizeNote}):` : `Monitored URLs (${urls.length}):`);
   // Same reading as `watch --status` and the client report, so the two lists
   // cannot say different things about the same state file: a stale pass is
   // marked with its age, a certificate inside the warning window is marked, and

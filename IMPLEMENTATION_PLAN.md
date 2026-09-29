@@ -1,7 +1,74 @@
-> **Seneste:** iteration 124 (P1-109, færdig) — historien står i køens afsnit
-> `P1-109 — FÆRDIG 2026-09-29` lige under `## Prioriteret kø`.
+> **Seneste:** iteration 125 (P1-110, færdig) — historien står i køens afsnit
+> `P1-110 — FÆRDIG 2026-09-29` lige under `## Prioriteret kø`.
 
-## Status fra denne iteration (124, P1-109 — den daglige liste vidste ikke, at `3` var en grænse)
+## Status fra denne iteration (125, P1-110 — ét state-fil, tre tal, to skærme)
+
+**Målt først, nul kode ændret.** Køen var tømt, så målingen gik på den
+modsætning P1-109 selv efterlod: den rettede *én* linje med den rigtige tæller
+(`Free tier: 1 of 3 URL slots in use.`) og lod de to liste-overskrifter stå med
+den forkerte. Rigtig CLI, rigtig state-fil, rigtig temp-HOME — ét site gemt i de
+to skrivemåder en browser-adresselinje producerer:
+
+```
+$ deskuptime watch --status
+📋 2 monitored URL(s):                                       ← antal gemte nøgler
+  ✅ up  https://kunde.dk (—) @ 2026-09-29T00:00:00.000Z
+  ✅ up  https://kunde.dk/ (—) @ 2026-09-29T00:00:00.000Z
+Free tier: 1 of 3 URL slots in use.                          ← antal sites
+
+$ deskuptime status
+Monitored URLs (2):                                          ← antal gemte nøgler
+```
+
+**Tre tal, én fil, og brugeren kan ikke regne dem ud.** Overskriften siger `2`
+og står lige over en linje der siger `1 af 3` — og en kunde der læser
+overskriften, tror der er brugt to af tre pladser, mens der er brugt én. Det er
+præcis den sygdom P1-104 og P1-109 fjernede fra to andre flader: **et tal der er
+en grænse, trykt som et rent antal.** P1-109's rettelse gjorde den bare mere
+synlig, fordi den satte den rigtige tæller lige under den forkerte.
+
+**Målingen fandt også den anden slagsfil, samme måling.** En nøgle uden adresse
+(`kunde.dk`, P1-40) er en række på listen, men holder ingen plads — så
+overskriften kunne sige `3 monitored URL(s)` over `2 af 3`.
+
+**Rettelsen er én ejer, `monitoredSizeNote()` i `src/watch.js`,** lige ved siden
+af `monitoredCount()` som væggen håndhæver med. Den returnerer `null` når de to
+tal er enige — så en normal fil (én nøgle pr. site) skriver **tegn for tegn**
+som før, målt — og kun når de er uenige navnginer den begge og siger hvilken der
+er hvilken. Begge lister bruger den; `status` importerer den fra `watch.js`, som
+den allerede gjorde til otte andre ting.
+
+```
+📋 3 saved entries — 1 monitored site:        Monitored URLs (2 saved entries — 1 monitored site):
+```
+
+**To nye tests, én eksisterende rettet.** Fire tests i `test/listsize.test.js`
+kører rigtig CLI mod rigtig state-fil; den stærkeste læser **aldrig tallene ud
+af output for at vide hvad de burde være** — den spørger `monitoredCount()` og
+kræver at alle tre flader (overskrift, slotlinje, `status`) printer *dets* tal,
+for hver skrivemåde. `test/freeslots.test.js:155` krævede `📋 3 monitored URL(s)`
+for en fil hvor én nøgle ikke er en adresse — altså låste den den falske halvdel,
+lige som P1-104's `statusline.test.js` gjorde det dengang; den kræver nu det
+opførte tal. → **847/847** (843 + 4); audit 0/0; `matrix --check` tavs;
+`node --check` og `git diff --check` grønne. **Tre mutationer målt, alle tre
+døde** (3/3/3 fejl): noten gjort altid til `null`, `entries` brugt som
+site-antal, og `status` tilbage til sin egen tæller.
+
+**Ingen deploy-note:** CLI-repo uden live-deploytarget, og ingen side blev
+ændret — `deskuptime.com` ligger i et andet repo (P0-12 `BLOCKED`). Baseline
+uændret: npm 16 downloads/uge, ★0, Plausible `/` 3 besøgende/28 d.
+
+**⚠️ Fund undervejs, ulæst:** gaten var **rød** da iterationen startede —
+`test/tarball.test.js` døde på **fil-niveau** efter 1054 ms med beskeden
+`test failed` og ingen årsag, fordi opbygningen ligger i modulens topniveau
+(første `await run('bash', ['tools/make_tarball.sh'])`) og ikke i et `test()`.
+Fire efterfølgende gatkørsler + 12 målrettede kørsler af den fil gav ingen
+gentagelse, så årsagen er ikke fundet. Det er den **eneste** testfil i repoet med
+den form. Ikke rettet her: en iteration der jager en engangsfejl uden reproduktion
+brænder budget på intet. Kandidater til næste måling: selve kørslen dør efter
+1 s, altså tidligere end nogen subprocess kan time ud.
+
+## Status fra tidligere iteration (124, P1-109 — den daglige liste vidste ikke, at `3` var en grænse)
 
 **Målt først, nul kode ændret.** Køen var tømt, så målingen gik på det åbne
 spørgsmål ❓ 16 stillede — og på den del af det, der *krævede* en måling:
@@ -5067,10 +5134,45 @@ Den aktuelle gate-definition er registreret her:
 
 ## Prioriteret kø
 
-> **Køen er tom for målte kandidater** (iteration 124). Næste iteration skal
+> **Køen er tom for målte kandidater** (iteration 125). Næste iteration skal
 > **måle først** og finde sin egen opgave. Se `❓ Til Mads` for de konkrete
 > kandidater. ❓ 21 er nu besvaret i kode (P1-105) og lukket, og ❓ 16 ligeledes
 > (P1-109).
+
+### P1-110 — FÆRDIG 2026-09-29 (`ceo/list-size-owners`) — ét state-fil, tre tal, to skærme
+
+**Målt først, nul kode ændret.** Se afsnittet øverst. Kort fortalt: P1-109 lagde
+gratis-kvoten på den daglige liste med den rigtige tæller
+(`monitoredCount()`, den `addMonitoredUrls()` håndhæver med), men lod begge
+liste-overskrifter stå med antallet gemte nøgler. Målt med rigtig CLI mod en
+fil hvor ét site lå gemt to gange: `📋 2 monitored URL(s)` stod lige over
+`Free tier: 1 of 3 URL slots in use.`, og `deskuptime status` sagde
+`Monitored URLs (2)`. Tre tal om én fil, ingen af dem forklaret, og den
+overskrift en bruger læser først sagde to tredjedele fuldt mens én tredjedel var
+brugt.
+
+**Rettelse:** én ejer, `monitoredSizeNote()` i `src/watch.js` lige ved siden af
+`monitoredCount()`. `null` når de to tal er enige — så den normale fil er
+tegn-for-tegn uændret, målt — og ellers navnginer den begge tal
+(`3 saved entries — 1 monitored site:`). Begge lister bruger den. →
+**847/847** (843 + 4); audit 0/0; `matrix --check` tavs. **Tre mutationer målt,
+alle tre døde** (3/3/3).
+
+**Ny låsform, der kan bruges andre steder:** en test der aldrig læser tallene ud
+af output for at vide hvad de burde være. Den spørger ejeren (`monitoredCount()`)
+og kræver at hver flade printer *dets* tal for hver skrivemåde — så en rettelse
+der hårdkoder et tal i stedet for at bruge ejeren dør, og det samme gælder en
+fremtidig fil der tæller på en tredje måde.
+
+**Én eksisterende test rettet, fordi den låste den falske halvdel:**
+`test/freeslots.test.js:155` krævede `📋 3 monitored URL(s)` for en fil hvor én
+af de tre nøgler ikke var en adresse — altså krævede den, at overskriften
+løj om noget den ikke kan vide. Samme form som P1-104's rettelse af
+`statusline.test.js`.
+
+**Åbent fund, ulæst:** `test/tarball.test.js` slog gaten rød én gang i denne
+iterations start (fil-niveau, `test failed`, ingen årsag, 1054 ms) og kunne ikke
+reproduceres i 4 gatkørsler + 12 målrettede kørsler. Se afsnittet øverst.
 
 ### P1-109 — FÆRDIG 2026-09-29 (`ceo/free-slots`) — den daglige liste vidste ikke, at `3` var en grænse
 
